@@ -2,7 +2,7 @@
 
 client_id = "c19c401d15d011936f4c7db6715514b3"
 name = "dutch-rusk-catalog-manager"
-application_url = "https://example.com"
+application_url = "https://dutch-rusk-catalog-manager.onrender.com"
 embedded = true
 
 [build]
@@ -25,7 +25,7 @@ api_version = "2026-04"
 scopes = "write_metaobject_definitions,write_metaobjects,write_products"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://dutch-rusk-catalog-manager.onrender.com/api/auth/callback" ]
 
 [product.metafields.app.demo_info]
 type = "single_line_text_field"
