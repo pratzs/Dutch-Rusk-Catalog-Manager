@@ -116,7 +116,7 @@ export default function CatalogRules() {
           {variantTypes.map((type) => (
             <s-checkbox
               key={type}
-              label={`Hide all "${type}" variants (e.g. ${type}, ${type} (6 Outer), ${type} (12 Bag)...)`}
+              label={`Hide all "${type}" variants`}
               checked={selected.includes(type)}
               onInput={() => handleToggle(type)}
             />
