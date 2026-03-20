@@ -2,8 +2,7 @@ import { redirect } from "react-router";
 import { useLoaderData, useSubmit, useNavigate, useNavigation } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server";
-import { prisma } from "../db.server";
-
+import prisma from "../db.server";
 const VARIANT_TYPES = [
   { label: "Shipper", value: "Shipper" },
   { label: "Outer", value: "Outer" },
