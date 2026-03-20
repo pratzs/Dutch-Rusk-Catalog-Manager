@@ -1,5 +1,4 @@
-import { json } from "@remix-run/node";
-import { useLoaderData, useNavigate } from "@remix-run/react";
+import { useLoaderData, useNavigate } from "react-router";
 import {
   Page,
   Layout,
@@ -41,7 +40,7 @@ export async function loader({ request }) {
     rulesMap[r.catalogId] = r;
   });
 
-  return json({ catalogs, rulesMap });
+  return { catalogs, rulesMap };
 }
 
 export default function CatalogManager() {

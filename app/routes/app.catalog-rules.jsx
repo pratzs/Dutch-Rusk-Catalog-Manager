@@ -1,5 +1,5 @@
-import { json, redirect } from "@remix-run/node";
-import { useLoaderData, useSubmit, useNavigate, useNavigation } from "@remix-run/react";
+import { redirect } from "react-router";
+import { useLoaderData, useSubmit, useNavigate, useNavigation } from "react-router";
 import {
   Page,
   Layout,
@@ -39,11 +39,11 @@ export async function loader({ request }) {
     where: { catalogId },
   });
 
-  return json({
+return {
     catalogId,
     catalogName,
     hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],
-  });
+  };
 }
 
 export async function action({ request }) {
