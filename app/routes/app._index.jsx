@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router";
+import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -19,8 +19,8 @@ export const loader = async ({ request }) => {
 };
 
 export default function Index() {
-  const { totalRules, totalOverrides, recentRules } = require("react-router").useLoaderData();
-  const navigate = useNavigate();
+const { totalRules, totalOverrides, recentRules } = useLoaderData();
+const navigate = useNavigate();
 
   return (
     <s-page heading="Dutch Rusk Catalog Manager">
