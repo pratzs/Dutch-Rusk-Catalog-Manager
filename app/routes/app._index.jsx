@@ -125,7 +125,7 @@ export default function Index() {
 
       <s-section slot="aside" heading="Need help?">
         <s-paragraph>
-          Contact Tripster Developers for support with this app.
+          Contact your Digital Lead for support with this app.
         </s-paragraph>
       </s-section>
     </s-page>
