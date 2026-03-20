@@ -66,16 +66,28 @@ export default function CatalogManager() {
                           : "No rules set — all variants visible"}
                       </s-text>
                     </s-stack>
-                    <s-button
-                      variant="secondary"
-                      onClick={() =>
-                        navigate(
-                          `/app/catalog-rules?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`
-                        )
-                      }
-                    >
-                      Manage Rules
-                    </s-button>
+                    <s-stack direction="inline" gap="tight">
+                      <s-button
+                        variant="secondary"
+                        onClick={() =>
+                          navigate(
+                            `/app/catalog-rules?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`
+                          )
+                        }
+                      >
+                        Manage Rules
+                      </s-button>
+                      <s-button
+                        variant="secondary"
+                        onClick={() =>
+                          navigate(
+                            `/app/catalog-overrides?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`
+                          )
+                        }
+                      >
+                        Product Overrides
+                      </s-button>
+                    </s-stack>
                   </s-stack>
                 </s-box>
               );
