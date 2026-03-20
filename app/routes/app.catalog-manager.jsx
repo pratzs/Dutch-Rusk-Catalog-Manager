@@ -1,6 +1,7 @@
 import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
@@ -39,39 +40,48 @@ export default function CatalogManager() {
           Select a catalog to manage which variant types are hidden from its customers.
         </s-paragraph>
 
-        {catalogs.length === 0 ? (
-          <s-paragraph>
-            No catalogs found. Create B2B catalogs in your Shopify admin first.
-          </s-paragraph>
-        ) : (
-          <s-resource-list>
-            {catalogs.map((catalog) => {
+        <s-stack direction="block" gap="base">
+          {catalogs.length === 0 ? (
+            <s-paragraph>
+              No catalogs found. Create B2B catalogs in your Shopify admin first.
+            </s-paragraph>
+          ) : (
+            catalogs.map((catalog) => {
               const rule = rulesMap[catalog.id];
-              const hiddenCount = rule ? rule.hiddenVariantTypes.length : 0;
+              const hiddenTypes = rule ? rule.hiddenVariantTypes : [];
               return (
-                <s-resource-item
+                <s-box
                   key={catalog.id}
-                  heading={catalog.title}
-                  onClick={() =>
-                    navigate(
-                      `/app/catalog-rules?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`
-                    )
-                  }
+                  padding="base"
+                  borderWidth="base"
+                  borderRadius="base"
+                  background="subdued"
                 >
-                  <span slot="descriptor">
-                    Status: {catalog.status} |{" "}
-                    {hiddenCount > 0
-                      ? `${hiddenCount} variant type(s) hidden`
-                      : "No rules set"}
-                  </span>
-                  <s-button slot="action" variant="secondary">
-                    Manage Rules
-                  </s-button>
-                </s-resource-item>
+                  <s-stack direction="inline" gap="base" align="center">
+                    <s-stack direction="block" gap="extraTight" style={{ flex: 1 }}>
+                      <s-text fontWeight="bold">{catalog.title}</s-text>
+                      <s-text>
+                        {hiddenTypes.length > 0
+                          ? `Hiding: ${hiddenTypes.join(", ")}`
+                          : "No rules set — all variants visible"}
+                      </s-text>
+                    </s-stack>
+                    <s-button
+                      variant="secondary"
+                      onClick={() =>
+                        navigate(
+                          `/app/catalog-rules?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`
+                        )
+                      }
+                    >
+                      Manage Rules
+                    </s-button>
+                  </s-stack>
+                </s-box>
               );
-            })}
-          </s-resource-list>
-        )}
+            })
+          )}
+        </s-stack>
       </s-section>
     </s-page>
   );
