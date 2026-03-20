@@ -13,9 +13,8 @@ export async function loader({ request }) {
 
   if (!catalogId) return redirect("/app/catalog-manager");
 
-  // Fetch products from Shopify
-  const response = await admin.graphql(`
-    query searchProducts($query: String!) {
+  const response = await admin.graphql(
+    `query searchProducts($query: String!) {
       products(first: 20, query: $query) {
         nodes {
           id
@@ -28,13 +27,13 @@ export async function loader({ request }) {
           }
         }
       }
-    }
-  `, { variables: { query: search } });
+    }`,
+    { variables: { query: search } }
+  );
 
   const data = await response.json();
   const products = data.data.products.nodes;
 
-  // Get existing overrides for this catalog
   const overrides = await prisma.productOverride.findMany({
     where: { catalogId },
   });
@@ -43,20 +42,12 @@ export async function loader({ request }) {
     overridesMap[o.productId] = o.hiddenVariantIds;
   });
 
-  // Get bulk rule for this catalog
   const rule = await prisma.catalogRule.findUnique({
     where: { catalogId },
   });
   const hiddenVariantTypes = rule ? rule.hiddenVariantTypes : [];
 
-  return {
-    catalogId,
-    catalogName,
-    products,
-    overridesMap,
-    hiddenVariantTypes,
-    search,
-  };
+  return { catalogId, catalogName, products, overridesMap, hiddenVariantTypes, search };
 }
 
 export async function action({ request }) {
@@ -82,27 +73,19 @@ export async function action({ request }) {
     });
   }
 
-  const url = new URL(request.url);
   return redirect(
     `/app/catalog-overrides?catalogId=${encodeURIComponent(catalogId)}&catalogName=${encodeURIComponent(catalogName)}`
   );
 }
 
 export default function CatalogOverrides() {
-  const {
-    catalogId,
-    catalogName,
-    products,
-    overridesMap,
-    hiddenVariantTypes,
-    search,
-  } = useLoaderData();
-
+  const { catalogId, catalogName, products, overridesMap, hiddenVariantTypes, search } = useLoaderData();
   const navigate = useNavigate();
   const submit = useSubmit();
   const navigation = useNavigation();
   const [expandedProduct, setExpandedProduct] = useState(null);
   const [pendingHidden, setPendingHidden] = useState({});
+  const isSaving = navigation.state === "submitting";
 
   const handleExpand = (productId) => {
     setExpandedProduct(expandedProduct === productId ? null : productId);
@@ -124,7 +107,7 @@ export default function CatalogOverrides() {
     });
   };
 
-  const handleSave = (productId, catalogId, catalogName) => {
+  const handleSave = (productId) => {
     const formData = new FormData();
     formData.append("intent", "save");
     formData.append("catalogId", catalogId);
@@ -137,7 +120,7 @@ export default function CatalogOverrides() {
     setExpandedProduct(null);
   };
 
-  const handleDelete = (productId, catalogId, catalogName) => {
+  const handleDelete = (productId) => {
     const formData = new FormData();
     formData.append("intent", "delete");
     formData.append("catalogId", catalogId);
@@ -153,8 +136,6 @@ export default function CatalogOverrides() {
       );
     }
   };
-
-  const isSaving = navigation.state === "submitting";
 
   return (
     <s-page
@@ -181,4 +162,89 @@ export default function CatalogOverrides() {
           {products.map((product) => {
             const hasOverride = !!overridesMap[product.id];
             const isExpanded = expandedProduct === product.id;
-            co
+            const currentHidden = pendingHidden[product.id] || overridesMap[product.id] || [];
+
+            return (
+              <s-box
+                key={product.id}
+                padding="base"
+                borderWidth="base"
+                borderRadius="base"
+                background={hasOverride ? "highlight" : "subdued"}
+              >
+                <s-stack direction="inline" gap="base" align="center">
+                  <s-stack direction="block" gap="extraTight" style={{ flex: 1 }}>
+                    <s-text fontWeight="bold">{product.title}</s-text>
+                    <s-text>
+                      {hasOverride
+                        ? `Override active — ${overridesMap[product.id].length} variant(s) hidden`
+                        : "No override — bulk rules apply"}
+                    </s-text>
+                  </s-stack>
+                  <s-stack direction="inline" gap="tight">
+                    <s-button
+                      variant="secondary"
+                      onClick={() => handleExpand(product.id)}
+                    >
+                      {isExpanded ? "Cancel" : "Set Override"}
+                    </s-button>
+                    {hasOverride && (
+                      <s-button
+                        variant="secondary"
+                        tone="critical"
+                        onClick={() => handleDelete(product.id)}
+                      >
+                        Remove Override
+                      </s-button>
+                    )}
+                  </s-stack>
+                </s-stack>
+
+                {isExpanded && (
+                  <s-box padding="base" style={{ marginTop: "12px" }}>
+                    <s-paragraph>
+                      Tick the variants to HIDE for this product only:
+                    </s-paragraph>
+                    <s-stack direction="block" gap="tight" style={{ marginTop: "8px" }}>
+                      {product.variants.nodes.map((variant) => (
+                        <s-checkbox
+                          key={variant.id}
+                          label={variant.title}
+                          checked={currentHidden.includes(variant.id)}
+                          onInput={() => handleVariantToggle(product.id, variant.id)}
+                        />
+                      ))}
+                    </s-stack>
+                    <div style={{ marginTop: "12px", display: "flex", justifyContent: "flex-end" }}>
+                      <s-button
+                        variant="primary"
+                        onClick={() => handleSave(product.id)}
+                        disabled={isSaving}
+                      >
+                        {isSaving ? "Saving..." : "Save Override"}
+                      </s-button>
+                    </div>
+                  </s-box>
+                )}
+              </s-box>
+            );
+          })}
+        </s-stack>
+      </s-section>
+
+      <s-section slot="aside" heading="How overrides work">
+        <s-paragraph>
+          Overrides take priority over bulk rules for specific products.
+        </s-paragraph>
+        <s-paragraph>
+          Example: Bulk rule hides all Shippers from Night N Day — but for
+          one specific product you want to show the Shipper. Set an override
+          on that product to control exactly which variants show.
+        </s-paragraph>
+        <s-paragraph>
+          To go back to bulk rules, click "Remove Override".
+        </s-paragraph>
+      </s-section>
+    </s-page>
+  );
+}

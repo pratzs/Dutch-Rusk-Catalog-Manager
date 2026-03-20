@@ -3,32 +3,62 @@ import { useLoaderData, useSubmit, useNavigate, useNavigation } from "react-rout
 import { useState } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-const VARIANT_TYPES = [
-  { label: "Shipper", value: "Shipper" },
-  { label: "Outer", value: "Outer" },
-  { label: "Bag", value: "Bag" },
-  { label: "Each", value: "Each" },
-  { label: "Packet", value: "Packet" },
-  { label: "Block", value: "Block" },
-  { label: "Tray", value: "Tray" },
-];
+
+// Extract the "type" prefix from a variant title
+// e.g. "Shipper (12 Outer)" → "Shipper"
+// e.g. "Outer (12 Block)" → "Outer"
+function extractVariantType(title) {
+  if (!title) return null;
+  const match = title.match(/^([A-Za-z]+)/);
+  return match ? match[1] : title;
+}
+
+async function fetchAllVariantTypes(admin) {
+  let allTypes = new Set();
+  let hasNextPage = true;
+  let cursor = null;
+
+  while (hasNextPage) {
+    const query = cursor
+      ? `query { products(first: 250, after: "${cursor}") { pageInfo { hasNextPage endCursor } nodes { variants(first: 50) { nodes { title } } } } }`
+      : `query { products(first: 250) { pageInfo { hasNextPage endCursor } nodes { variants(first: 50) { nodes { title } } } } }`;
+
+    const response = await admin.graphql(query);
+    const data = await response.json();
+    const products = data.data.products.nodes;
+
+    products.forEach((product) => {
+      product.variants.nodes.forEach((variant) => {
+        const type = extractVariantType(variant.title);
+        if (type) allTypes.add(type);
+      });
+    });
+
+    hasNextPage = data.data.products.pageInfo.hasNextPage;
+    cursor = data.data.products.pageInfo.endCursor;
+  }
+
+  return Array.from(allTypes).sort();
+}
 
 export async function loader({ request }) {
-  await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
   const catalogId = url.searchParams.get("catalogId");
   const catalogName = url.searchParams.get("catalogName");
 
   if (!catalogId) return redirect("/app/catalog-manager");
 
-  const rule = await prisma.catalogRule.findUnique({
-    where: { catalogId },
-  });
+  const [rule, variantTypes] = await Promise.all([
+    prisma.catalogRule.findUnique({ where: { catalogId } }),
+    fetchAllVariantTypes(admin),
+  ]);
 
   return {
     catalogId,
     catalogName,
     hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],
+    variantTypes,
   };
 }
 
@@ -49,7 +79,7 @@ export async function action({ request }) {
 }
 
 export default function CatalogRules() {
-  const { catalogId, catalogName, hiddenVariantTypes } = useLoaderData();
+  const { catalogId, catalogName, hiddenVariantTypes, variantTypes } = useLoaderData();
   const [selected, setSelected] = useState(hiddenVariantTypes);
   const submit = useSubmit();
   const navigate = useNavigate();
@@ -77,19 +107,21 @@ export default function CatalogRules() {
     >
       <s-section heading="Hide Variant Types">
         <s-paragraph>
-          Tick the variant types to hide from customers in this catalog.
-          For example, ticking "Shipper" will hide all Shipper variants
-          (Shipper 6 Outer, Shipper 12 Outer, etc.)
+          These variant types are pulled live from your store. Tick the ones
+          to hide from customers in this catalog. For example, ticking "Shipper"
+          will hide ALL Shipper variants (Shipper 6 Outer, Shipper 12 Outer, etc.)
         </s-paragraph>
 
-        {VARIANT_TYPES.map((vt) => (
-          <s-checkbox
-            key={vt.value}
-            label={`Hide all "${vt.label}" variants`}
-            checked={selected.includes(vt.value)}
-            onInput={() => handleToggle(vt.value)}
-          />
-        ))}
+        <s-stack direction="block" gap="tight" style={{ marginTop: "12px" }}>
+          {variantTypes.map((type) => (
+            <s-checkbox
+              key={type}
+              label={`Hide all "${type}" variants (e.g. ${type}, ${type} (6 Outer), ${type} (12 Bag)...)`}
+              checked={selected.includes(type)}
+              onInput={() => handleToggle(type)}
+            />
+          ))}
+        </s-stack>
 
         <div style={{ marginTop: "16px", display: "flex", gap: "8px", justifyContent: "flex-end" }}>
           <s-button
@@ -110,13 +142,16 @@ export default function CatalogRules() {
 
       <s-section slot="aside" heading="How this works">
         <s-paragraph>
-          Rules apply to ALL products in this catalog. When a B2B customer
-          logs in and is assigned to this catalog, the hidden variant types
-          will not appear on any product page.
+          Rules match by prefix. Ticking "Shipper" hides every variant
+          whose title starts with "Shipper" — covering all sizes automatically.
         </s-paragraph>
         <s-paragraph>
-          Shipper variants include all sizes — Shipper 6 Outer,
-          Shipper 12 Outer, Shipper 32 Outer, etc.
+          This list updates automatically whenever new variant types are
+          added to your store via Ostendo.
+        </s-paragraph>
+        <s-paragraph>
+          Currently hiding {selected.length} of {variantTypes.length} variant types
+          for {catalogName}.
         </s-paragraph>
       </s-section>
     </s-page>
