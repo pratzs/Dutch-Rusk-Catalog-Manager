@@ -4,9 +4,6 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
-// Extract the "type" prefix from a variant title
-// e.g. "Shipper (12 Outer)" → "Shipper"
-// e.g. "Outer (12 Block)" → "Outer"
 function extractVariantType(title) {
   if (!title) return null;
   const match = title.match(/^([A-Za-z]+)/);
@@ -44,18 +41,21 @@ async function fetchAllVariantTypes(admin) {
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
-  const catalogId = url.searchParams.get("catalogId");
+  let catalogId = url.searchParams.get("catalogId");
   const catalogName = url.searchParams.get("catalogName");
 
   if (!catalogId) return redirect("/app/catalog-manager");
 
+  // NORMALIZE: Ensure we look up the numeric ID only
+  const cleanCatalogId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
+
   const [rule, variantTypes] = await Promise.all([
-    prisma.catalogRule.findUnique({ where: { catalogId } }),
+    prisma.catalogRule.findUnique({ where: { catalogId: cleanCatalogId } }),
     fetchAllVariantTypes(admin),
   ]);
 
   return {
-    catalogId,
+    catalogId, // We keep the original for the form
     catalogName,
     hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],
     variantTypes,
@@ -65,14 +65,17 @@ export async function loader({ request }) {
 export async function action({ request }) {
   await authenticate.admin(request);
   const formData = await request.formData();
-  const catalogId = formData.get("catalogId");
+  let catalogId = formData.get("catalogId");
   const catalogName = formData.get("catalogName");
   const hiddenVariantTypes = formData.getAll("hiddenVariantTypes");
 
+  // NORMALIZE: Ensure we save the numeric ID only
+  const cleanCatalogId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
+
   await prisma.catalogRule.upsert({
-    where: { catalogId },
+    where: { catalogId: cleanCatalogId },
     update: { hiddenVariantTypes, catalogName },
-    create: { catalogId, catalogName, hiddenVariantTypes },
+    create: { catalogId: cleanCatalogId, catalogName, hiddenVariantTypes },
   });
 
   return redirect("/app/catalog-manager");
@@ -108,8 +111,7 @@ export default function CatalogRules() {
       <s-section heading="Hide Variant Types">
         <s-paragraph>
           These variant types are pulled live from your store. Tick the ones
-          to hide from customers in this catalog. For example, ticking "Shipper"
-          will hide ALL Shipper variants (Shipper 6 Outer, Shipper 12 Outer, etc.)
+          to hide from customers in this catalog.
         </s-paragraph>
 
         <s-stack direction="block" gap="tight" style={{ marginTop: "12px" }}>
@@ -138,21 +140,6 @@ export default function CatalogRules() {
             {isSaving ? "Saving..." : "Save Rules"}
           </s-button>
         </div>
-      </s-section>
-
-      <s-section slot="aside" heading="How this works">
-        <s-paragraph>
-          Rules match by prefix. Ticking "Shipper" hides every variant
-          whose title starts with "Shipper" — covering all sizes automatically.
-        </s-paragraph>
-        <s-paragraph>
-          This list updates automatically whenever new variant types are
-          added to your store via Ostendo.
-        </s-paragraph>
-        <s-paragraph>
-          Currently hiding {selected.length} of {variantTypes.length} variant types
-          for {catalogName}.
-        </s-paragraph>
       </s-section>
     </s-page>
   );

@@ -1,3 +1,4 @@
+// app/routes/api.catalog-rules.jsx
 import prisma from "../db.server";
 
 export async function loader({ request }) {
@@ -18,20 +19,15 @@ export async function loader({ request }) {
   let catalogId = url.searchParams.get("catalogId");
   let productId = url.searchParams.get("productId");
 
-  // CRITICAL: Normalize IDs - extract ONLY the numbers
-  // This handles both AppCatalog and CompanyLocationCatalog
-  if (catalogId && catalogId.includes("/")) {
-    catalogId = catalogId.split("/").pop();
-  }
-  if (productId && productId.includes("/")) {
-    productId = productId.split("/").pop();
-  }
+  // NORMALIZE: Extract only the numeric ID from ANY GID format
+  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
+  if (productId && productId.includes("/")) productId = productId.split("/").pop();
 
   const responseHeaders = {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Cache-Control": "no-store", 
   };
 
   if (!catalogId) {
@@ -58,9 +54,6 @@ export async function loader({ request }) {
       hiddenVariantIds: override ? override.hiddenVariantIds : [],
       hasOverride: !!override,
     }),
-    {
-      status: 200,
-      headers: responseHeaders,
-    }
+    { status: 200, headers: responseHeaders }
   );
 }
