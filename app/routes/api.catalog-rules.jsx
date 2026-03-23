@@ -10,7 +10,6 @@ export async function loader({ request }) {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Max-Age": "86400",
       },
     });
   }
@@ -19,15 +18,19 @@ export async function loader({ request }) {
   let catalogId = url.searchParams.get("catalogId");
   let productId = url.searchParams.get("productId");
 
-  // NORMALIZE: Clean both IDs to ensure they match numeric DB records
-  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
-  if (productId && productId.includes("/")) productId = productId.split("/").pop();
+  // CRITICAL FIX: Clean the IDs to match what's in your Prisma DB
+  if (catalogId && catalogId.includes("/")) {
+    catalogId = catalogId.split("/").pop(); // Turns gid://.../147677315385 into 147677315385
+  }
+  if (productId && productId.includes("/")) {
+    productId = productId.split("/").pop();
+  }
 
   const responseHeaders = {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "public, max-age=60",
+    "Cache-Control": "public, max-age=0, no-cache", // Disable cache for testing
   };
 
   if (!catalogId) {
