@@ -19,7 +19,7 @@ export async function loader({ request }) {
   let catalogId = url.searchParams.get("catalogId");
   let productId = url.searchParams.get("productId");
 
-  // CLEAN BOTH IDs HERE:
+  // NORMALIZE: Clean both IDs to ensure they match numeric DB records
   if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
   if (productId && productId.includes("/")) productId = productId.split("/").pop();
 
