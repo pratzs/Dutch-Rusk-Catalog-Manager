@@ -1,0 +1,13 @@
+{% if customer and customer.b2b? %}
+  {% assign catalog_id = customer.current_location.catalog_id %}
+  {% if catalog_id %}
+    <div
+      data-catalog-id="{{ catalog_id | escape }}"
+      {% if product %}
+        data-product-id="{{ product.id | prepend: 'gid://shopify/Product/' | escape }}"
+      {% endif %}
+      style="display:none;"
+    ></div>
+    <script src="{{ 'catalog-variant-hider.js' | asset_url }}" defer></script>
+  {% endif %}
+{% endif %}
