@@ -1,45 +1,34 @@
 import prisma from "../db.server";
 
 export async function loader({ request }) {
-  const origin = request.headers.get("Origin") || "*";
+  const url = new URL(request.url);
+  let catalogId = url.searchParams.get("catalogId");
+  let productId = url.searchParams.get("productId");
 
-  // 1. Handle Preflight OPTIONS requests for CORS
+  // Handle Preflight OPTIONS
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
-        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Max-Age": "86400",
       },
     });
   }
 
-  const url = new URL(request.url);
-  const catalogId = url.searchParams.get("catalogId");
-  let productId = url.searchParams.get("productId");
-
-  // 2. Clean Product ID (Strip GID prefix if present)
-  if (productId && productId.includes("gid://")) {
-    productId = productId.split("/").pop();
-  }
-
-  const responseHeaders = {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "public, max-age=60",
-  };
+  // NORMALIZE IDs: Strip 'gid://shopify/AppCatalog/' or 'gid://shopify/Product/'
+  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
+  if (productId && productId.includes("/")) productId = productId.split("/").pop();
 
   if (!catalogId) {
     return new Response(JSON.stringify({ error: "Missing catalogId" }), {
       status: 400,
-      headers: responseHeaders,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
     });
   }
 
-  // 3. Fetch Data from Prisma
+  // Search using the cleaned numeric ID
   const rule = await prisma.catalogRule.findUnique({
     where: { catalogId },
   });
@@ -59,7 +48,11 @@ export async function loader({ request }) {
     }),
     {
       status: 200,
-      headers: responseHeaders,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "public, max-age=60",
+      },
     }
   );
 }
