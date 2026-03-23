@@ -1,4 +1,3 @@
-import { json } from "@remix-run/node";
 import prisma from "../db.server";
 
 export async function loader({ request }) {
@@ -16,12 +15,10 @@ export async function loader({ request }) {
     });
   }
 
-  // Get bulk rule for this catalog
   const rule = await prisma.catalogRule.findUnique({
     where: { catalogId },
   });
 
-  // Get product override if productId provided
   let override = null;
   if (productId) {
     override = await prisma.productOverride.findUnique({
