@@ -3,6 +3,7 @@ import prisma from "../db.server";
 export async function loader({ request }) {
   const origin = request.headers.get("Origin") || "*";
 
+  // 1. Handle Preflight OPTIONS requests for CORS
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -16,12 +17,13 @@ export async function loader({ request }) {
   }
 
   const url = new URL(request.url);
-  let catalogId = url.searchParams.get("catalogId");
+  const catalogId = url.searchParams.get("catalogId");
   let productId = url.searchParams.get("productId");
 
-  // CLEAN BOTH IDs HERE:
-  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
-  if (productId && productId.includes("/")) productId = productId.split("/").pop();
+  // 2. Clean Product ID (Strip GID prefix if present)
+  if (productId && productId.includes("gid://")) {
+    productId = productId.split("/").pop();
+  }
 
   const responseHeaders = {
     "Content-Type": "application/json",
@@ -37,6 +39,7 @@ export async function loader({ request }) {
     });
   }
 
+  // 3. Fetch Data from Prisma
   const rule = await prisma.catalogRule.findUnique({
     where: { catalogId },
   });
