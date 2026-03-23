@@ -3,7 +3,6 @@ import prisma from "../db.server";
 export async function loader({ request }) {
   const origin = request.headers.get("Origin") || "*";
 
-  // 1. Handle Preflight OPTIONS for CORS
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -19,7 +18,7 @@ export async function loader({ request }) {
   let catalogId = url.searchParams.get("catalogId");
   let productId = url.searchParams.get("productId");
 
-  // 2. NORMALIZE IDs: Turn "gid://.../147677315385" into "147677315385"
+  // CRITICAL FIX: Strip all Shopify GID prefixes to get just the numeric ID
   if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
   if (productId && productId.includes("/")) productId = productId.split("/").pop();
 
@@ -27,7 +26,7 @@ export async function loader({ request }) {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "no-store", // Force fresh data while debugging
+    "Cache-Control": "no-store",
   };
 
   if (!catalogId) {
@@ -37,7 +36,6 @@ export async function loader({ request }) {
     });
   }
 
-  // 3. Database Lookup
   const rule = await prisma.catalogRule.findUnique({
     where: { catalogId },
   });
