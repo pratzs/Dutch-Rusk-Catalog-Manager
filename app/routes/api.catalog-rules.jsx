@@ -18,15 +18,20 @@ export async function loader({ request }) {
   let catalogId = url.searchParams.get("catalogId");
   let productId = url.searchParams.get("productId");
 
-  // CRITICAL FIX: Strip all Shopify GID prefixes to get just the numeric ID
-  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
-  if (productId && productId.includes("/")) productId = productId.split("/").pop();
+  // CRITICAL: Normalize IDs - extract ONLY the numbers
+  // This handles both AppCatalog and CompanyLocationCatalog
+  if (catalogId && catalogId.includes("/")) {
+    catalogId = catalogId.split("/").pop();
+  }
+  if (productId && productId.includes("/")) {
+    productId = productId.split("/").pop();
+  }
 
   const responseHeaders = {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "no-store",
+    "Cache-Control": "no-store, no-cache, must-revalidate",
   };
 
   if (!catalogId) {
