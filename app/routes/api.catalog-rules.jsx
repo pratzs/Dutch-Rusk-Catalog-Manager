@@ -3,6 +3,7 @@ import prisma from "../db.server";
 export async function loader({ request }) {
   const origin = request.headers.get("Origin") || "*";
 
+  // 1. Handle Preflight OPTIONS for CORS
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -18,19 +19,15 @@ export async function loader({ request }) {
   let catalogId = url.searchParams.get("catalogId");
   let productId = url.searchParams.get("productId");
 
-  // CRITICAL FIX: Clean the IDs to match what's in your Prisma DB
-  if (catalogId && catalogId.includes("/")) {
-    catalogId = catalogId.split("/").pop(); // Turns gid://.../147677315385 into 147677315385
-  }
-  if (productId && productId.includes("/")) {
-    productId = productId.split("/").pop();
-  }
+  // 2. NORMALIZE IDs: Turn "gid://.../147677315385" into "147677315385"
+  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
+  if (productId && productId.includes("/")) productId = productId.split("/").pop();
 
   const responseHeaders = {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "public, max-age=0, no-cache", // Disable cache for testing
+    "Cache-Control": "no-store", // Force fresh data while debugging
   };
 
   if (!catalogId) {
@@ -40,6 +37,7 @@ export async function loader({ request }) {
     });
   }
 
+  // 3. Database Lookup
   const rule = await prisma.catalogRule.findUnique({
     where: { catalogId },
   });
