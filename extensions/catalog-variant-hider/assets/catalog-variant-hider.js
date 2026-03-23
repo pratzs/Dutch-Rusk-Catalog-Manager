@@ -1,27 +1,60 @@
-function hideOnProductPage(rules, allVariants) {
-    const hiddenIds = buildHiddenVariantIds(rules, allVariants);
-    if (hiddenIds.size === 0) return;
+// High-priority execution
+console.log("🚀 [CatalogVariantHider] Script file reached browser.");
 
-    const apply = () => {
-      // 1. Target Ignite's Radio Inputs
-      document.querySelectorAll("input[type='radio'], input[type='checkbox']").forEach(input => {
-        if (hiddenIds.has(String(input.value))) {
-          const wrapper = input.closest(".swatch-element, .variant-option, li, label, .variant-input") || input.parentElement;
-          if (wrapper) wrapper.style.display = "none";
-        }
-      });
+try {
+  (function () {
+    const APP_URL = "https://dutch-rusk-catalog-manager.onrender.com";
 
-      // 2. Target Text Labels (Fallback for complex web components)
-      document.querySelectorAll(".variant-picker__option-value, [data-option-value], label").forEach(el => {
-        const text = el.textContent.trim();
-        if (rules.hiddenVariantTypes?.some(type => text.startsWith(type))) {
-          const wrapper = el.closest(".swatch-element, li, .variant-input") || el;
-          wrapper.style.display = "none";
-        }
-      });
-    };
+    async function init() {
+      console.log("🔍 [CatalogVariantHider] Running init...");
+      
+      const el = document.getElementById('catalog-variant-hider-data') || document.querySelector("[data-catalog-id]");
+      
+      if (!el) {
+        console.warn("⚠️ [CatalogVariantHider] Element not found. Customer might not be B2B.");
+        return;
+      }
 
-    apply();
-    setTimeout(apply, 600); // Wait for Ignite's JS to finish
-    new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
-  }
+      const { catalogId, productId } = el.dataset;
+      console.log(`📡 [CatalogVariantHider] Fetching for Catalog: ${catalogId}`);
+
+      const res = await fetch(`${APP_URL}/api/catalog-rules?catalogId=${catalogId}&productId=${productId || ''}`);
+      const rules = await res.json();
+      
+      console.log("✅ [CatalogVariantHider] Rules:", rules);
+
+      if (rules.hiddenVariantTypes?.length > 0 || rules.hiddenVariantIds?.length > 0) {
+        applyHiding(rules);
+      }
+    }
+
+    function applyHiding(rules) {
+      const apply = () => {
+        console.log("🚫 [CatalogVariantHider] Hiding elements...");
+        // Target Ignite selectors
+        document.querySelectorAll("input, label, .variant-picker__option-value, option").forEach(el => {
+          const val = el.value || el.textContent.trim();
+          const isTypeMatch = rules.hiddenVariantTypes?.some(type => val.startsWith(type));
+          const isIdMatch = rules.hiddenVariantIds?.includes(val);
+
+          if (isTypeMatch || isIdMatch) {
+            const wrapper = el.closest(".swatch-element, .variant-option, li, label, .variant-input") || el;
+            wrapper.style.display = "none";
+          }
+        });
+      };
+      apply();
+      // Watch for theme changes
+      new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
+    }
+
+    // Force run
+    if (document.readyState === "complete" || document.readyState === "interactive") {
+      init();
+    } else {
+      document.addEventListener("DOMContentLoaded", init);
+    }
+  })();
+} catch (e) {
+  console.error("❌ [CatalogVariantHider] Critical Script Error:", e);
+}
