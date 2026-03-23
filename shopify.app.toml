@@ -17,7 +17,7 @@ api_version = "2026-04"
   uri = "/webhooks/app/scopes_update"
 
 [access_scopes]
-scopes = "write_metaobject_definitions,write_metaobjects,write_products,read_products,read_catalogs,write_catalogs"
+scopes = "write_metaobject_definitions,write_metaobjects,write_products,read_products"
 
 [auth]
 redirect_urls = [ "https://dutch-rusk-catalog-manager.onrender.com/api/auth/callback" ]

@@ -1,140 +1,257 @@
 (function () {
-  // Only run for B2B customers
-  const customerId = window.__st?.cid;
-  const shop = window.Shopify?.shop;
-
-  if (!shop) return;
-
-  // Get catalog ID from customer metafield or page context
-  // Shopify B2B exposes company info via liquid which we inject via snippet
-  const catalogId = document.querySelector('[data-catalog-id]')?.dataset?.catalogId;
-  const productId = document.querySelector('[data-product-id]')?.dataset?.productId;
-
-  if (!catalogId) return;
-
   const APP_URL = "https://dutch-rusk-catalog-manager.onrender.com";
 
-  async function fetchRules() {
+  // Get catalog ID injected by our Liquid snippet
+  function getCatalogData() {
+    const el = document.querySelector("[data-catalog-id]");
+    if (!el) return null;
+    return {
+      catalogId: el.dataset.catalogId,
+      productId: el.dataset.productId || null,
+    };
+  }
+
+  // Fetch rules from our app
+  async function fetchRules(catalogId, productId) {
     try {
       const params = new URLSearchParams({ catalogId });
       if (productId) params.append("productId", productId);
-
-      const res = await fetch(`${APP_URL}/api/catalog-rules?${params}`);
-      if (!res.ok) return;
+      const res = await fetch(`${APP_URL}/api/catalog-rules?${params}`, {
+        cache: "force-cache",
+      });
+      if (!res.ok) return null;
       return await res.json();
     } catch (e) {
-      console.error("[CatalogVariantHider] Error fetching rules:", e);
+      return null;
     }
   }
 
-  function hideVariants(rules) {
-    if (!rules) return;
+  // Get all variants from Shopify's global product JSON
+  function getProductVariants() {
+    // Try ShopifyAnalytics first
+    if (
+      window.ShopifyAnalytics &&
+      window.ShopifyAnalytics.meta &&
+      window.ShopifyAnalytics.meta.product
+    ) {
+      return window.ShopifyAnalytics.meta.product.variants || [];
+    }
+    // Try window.__st
+    if (window.__st && window.__st.variants) return window.__st.variants;
+    return [];
+  }
 
+  // Build set of variant IDs to hide
+  function buildHiddenVariantIds(rules, allVariants) {
+    if (!rules) return new Set();
     const { hiddenVariantTypes, hiddenVariantIds, hasOverride } = rules;
-
-    // Find all variant option selectors and buttons
-    const variantSelectors = document.querySelectorAll(
-      '[name="id"] option, .variant-selector option, select[name="id"] option'
-    );
-
-    // Also target swatch/button style selectors
-    const variantButtons = document.querySelectorAll(
-      '[data-variant-id], .variant-button, .swatch-element'
-    );
-
-    // Get all variants from Shopify's global object
-    const productVariants = window.ShopifyAnalytics?.meta?.product?.variants
-      || window.__product?.variants
-      || [];
+    const hidden = new Set();
 
     if (hasOverride && hiddenVariantIds && hiddenVariantIds.length > 0) {
-      // Use specific variant IDs from override
-      hideByVariantIds(hiddenVariantIds, productVariants);
+      // Override — use exact variant IDs
+      hiddenVariantIds.forEach((id) => {
+        // Strip GID prefix if present
+        const numericId = String(id).includes("gid://")
+          ? id.split("/").pop()
+          : String(id);
+        hidden.add(numericId);
+      });
     } else if (hiddenVariantTypes && hiddenVariantTypes.length > 0) {
-      // Use bulk rules - hide by variant type prefix
-      hideByVariantTypes(hiddenVariantTypes, productVariants);
+      // Bulk rule — match by variant title prefix
+      allVariants.forEach((v) => {
+        const title = v.title || v.option1 || "";
+        const matches = hiddenVariantTypes.some((type) =>
+          title.startsWith(type)
+        );
+        if (matches) hidden.add(String(v.id));
+      });
+    }
+
+    return hidden;
+  }
+
+  // ─── PRODUCT PAGE: Ignite theme uses variant-selects custom element ───────
+
+  function hideOnProductPage(hiddenIds) {
+    if (hiddenIds.size === 0) return;
+
+    // Wait for variant-selects to be defined and rendered
+    const apply = () => {
+      // Ignite renders variants as: input[type="radio"] or input[type="checkbox"]
+      // inside .variant-selects or variant-selects element
+      // Each input has a value matching the variant id
+      const variantSelects = document.querySelectorAll(
+        "variant-selects, .variant-selects, [data-section-type='product']"
+      );
+
+      // Hide radio/checkbox inputs and their labels
+      document
+        .querySelectorAll(
+          "input[type='radio'][name='id'], input[type='radio'][data-variant-id], input[type='radio'][value]"
+        )
+        .forEach((input) => {
+          const variantId = input.value || input.dataset.variantId;
+          if (hiddenIds.has(String(variantId))) {
+            const wrapper =
+              input.closest(".swatch-element, .variant-option, li, label") ||
+              input.parentElement;
+            if (wrapper) wrapper.style.display = "none";
+          }
+        });
+
+      // Hide button-style options (Ignite grid/button picker)
+      document
+        .querySelectorAll(
+          "[data-variant-id], .variant-picker__option-values button, .variant-picker__option-values label"
+        )
+        .forEach((el) => {
+          const variantId =
+            el.dataset.variantId || el.dataset.value || el.getAttribute("value");
+          if (variantId && hiddenIds.has(String(variantId))) {
+            const wrapper = el.closest("li, .variant-option, .swatch-element") || el;
+            wrapper.style.display = "none";
+          }
+        });
+
+      // Ignite specifically uses s-option-list or similar web components
+      // Hide by matching option text to variant title
+      // We need to get variant titles for the hidden IDs
+      const allVariants = getProductVariants();
+      const hiddenTitles = new Set(
+        allVariants
+          .filter((v) => hiddenIds.has(String(v.id)))
+          .map((v) => v.title)
+      );
+
+      // Option values shown as text buttons/boxes
+      document
+        .querySelectorAll(
+          ".variant-picker__option-value, .variant-option__value, [data-option-value]"
+        )
+        .forEach((el) => {
+          const text = (el.textContent || el.dataset.optionValue || "").trim();
+          if (hiddenTitles.has(text)) {
+            const wrapper = el.closest("li, .variant-option, label") || el;
+            wrapper.style.display = "none";
+          }
+        });
+
+      // Also disable hidden variants in the native select dropdown (fallback)
+      document
+        .querySelectorAll("select[name='id'] option, select#Variants option")
+        .forEach((option) => {
+          if (hiddenIds.has(String(option.value))) {
+            option.style.display = "none";
+            option.disabled = true;
+          }
+        });
+    };
+
+    // Run immediately and after a short delay for dynamic rendering
+    apply();
+    setTimeout(apply, 300);
+    setTimeout(apply, 800);
+
+    // Also observe DOM changes (Ignite loads variant pickers dynamically)
+    const observer = new MutationObserver(apply);
+    const productForm = document.querySelector(
+      "variant-selects, .product-form, [data-product-form], form[action='/cart/add']"
+    );
+    if (productForm) {
+      observer.observe(productForm, { childList: true, subtree: true });
     }
   }
 
-  function hideByVariantIds(hiddenIds, allVariants) {
-    hiddenIds.forEach((variantId) => {
-      // Extract numeric ID from GID if needed
-      const numericId = variantId.includes("gid://")
-        ? variantId.split("/").pop()
-        : variantId;
+  // ─── COLLECTION PAGE: Hide variant pills on product cards ─────────────────
 
-      // Hide select options
-      document
-        .querySelectorAll(`option[value="${numericId}"]`)
-        .forEach((el) => {
-          el.style.display = "none";
-          el.disabled = true;
-        });
+  async function hideOnCollectionPage(catalogId, rules) {
+    if (!rules) return;
+    const { hiddenVariantTypes } = rules;
+    if (!hiddenVariantTypes || hiddenVariantTypes.length === 0) return;
 
-      // Hide variant buttons/swatches
-      document
-        .querySelectorAll(
-          `[data-variant-id="${numericId}"], [data-value="${numericId}"]`
-        )
-        .forEach((el) => {
-          el.style.display = "none";
-        });
-    });
-  }
+    // For each product card, fetch its variants via Shopify's product JSON API
+    const productCards = document.querySelectorAll(
+      "[data-product-handle], .product-card[data-handle], .card-product[data-handle], article[data-product-handle]"
+    );
 
-  function hideByVariantTypes(hiddenTypes, allVariants) {
-    // Build list of variant IDs that match hidden types
-    const variantsToHide = allVariants.filter((v) => {
-      const title = v.title || v.option1 || "";
-      return hiddenTypes.some((type) => title.startsWith(type));
-    });
+    if (productCards.length === 0) return;
 
-    const idsToHide = variantsToHide.map((v) => String(v.id));
-    hideByVariantIds(idsToHide, []);
-
-    // Also hide by option text content for themes that use text
+    // Hide variant option buttons/swatches on collection cards
+    // Ignite shows variant options as clickable swatches or color options on cards
     document
       .querySelectorAll(
-        '[name="id"] option, select[name="id"] option, .variant-selector option'
-      )
-      .forEach((option) => {
-        const text = option.textContent.trim();
-        if (hiddenTypes.some((type) => text.startsWith(type))) {
-          option.style.display = "none";
-          option.disabled = true;
-        }
-      });
-
-    // Hide collection card variant pills/buttons by text
-    document
-      .querySelectorAll(
-        '.variant-button, .swatch-element label, [data-variant-option], .product-form__option'
+        ".card-swatch, .variant-swatch, [data-option-value], .product-card__swatch"
       )
       .forEach((el) => {
-        const text = el.textContent.trim();
-        if (hiddenTypes.some((type) => text.startsWith(type))) {
+        const text = (el.title || el.dataset.optionValue || el.textContent || "").trim();
+        const matches = hiddenVariantTypes.some((type) => text.startsWith(type));
+        if (matches) {
           el.style.display = "none";
-          el.closest("li, .swatch-element, [data-variant-item]")?.style &&
-            (el.closest(
-              "li, .swatch-element, [data-variant-item]"
-            ).style.display = "none");
         }
       });
+
+    // For quick add modals — also apply product page rules when they open
+    document.addEventListener("click", async (e) => {
+      const quickAddBtn = e.target.closest(
+        "[data-quick-add], .quick-add-button, [data-product-handle]"
+      );
+      if (!quickAddBtn) return;
+
+      const handle =
+        quickAddBtn.dataset.productHandle || quickAddBtn.dataset.handle;
+      if (!handle) return;
+
+      // Wait for quick add modal to render
+      setTimeout(async () => {
+        const productId = `gid://shopify/Product/${quickAddBtn.dataset.productId || ""}`;
+        const overrideRules = await fetchRules(catalogId, productId);
+        const variants = await fetchVariantsForProduct(handle);
+        const hiddenIds = buildHiddenVariantIds(overrideRules || rules, variants);
+        if (hiddenIds.size > 0) hideOnProductPage(hiddenIds);
+      }, 300);
+    });
   }
 
-  // Run on page load
-  fetchRules().then(hideVariants);
+  // Fetch variants for a product by handle using Shopify Ajax API
+  async function fetchVariantsForProduct(handle) {
+    try {
+      const res = await fetch(`/products/${handle}.js`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.variants || [];
+    } catch (e) {
+      return [];
+    }
+  }
 
-  // Re-run if variants change dynamically (for SPAs / theme JS)
-  const observer = new MutationObserver(() => {
-    fetchRules().then(hideVariants);
-  });
+  // ─── MAIN ─────────────────────────────────────────────────────────────────
 
-  const variantContainer = document.querySelector(
-    '.product-form, .product__selects, [data-product-form], form[action="/cart/add"]'
-  );
+  async function init() {
+    const catalogData = getCatalogData();
+    if (!catalogData) return; // Not a B2B customer or catalog ID not set
 
-  if (variantContainer) {
-    observer.observe(variantContainer, { childList: true, subtree: true });
+    const { catalogId, productId } = catalogData;
+    const rules = await fetchRules(catalogId, productId);
+    if (!rules) return;
+
+    const isProductPage = !!document.querySelector(
+      "variant-selects, .product-form, [data-section-type='product']"
+    );
+
+    if (isProductPage) {
+      const allVariants = getProductVariants();
+      const hiddenIds = buildHiddenVariantIds(rules, allVariants);
+      hideOnProductPage(hiddenIds);
+    } else {
+      // Collection / search / home page
+      await hideOnCollectionPage(catalogId, rules);
+    }
+  }
+
+  // Run on DOM ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
   }
 })();

@@ -1,13 +1,19 @@
+{% comment %}
+  Dutch Rusk Catalog Variant Hider
+  Only renders for logged-in B2B customers with a catalog assigned
+{% endcomment %}
 {% if customer and customer.b2b? %}
-  {% assign catalog_id = customer.current_location.catalog_id %}
-  {% if catalog_id %}
+  {%- assign catalog_id = customer.current_location.catalog.id -%}
+  {%- if catalog_id != blank -%}
     <div
+      id="catalog-variant-hider-data"
       data-catalog-id="{{ catalog_id | escape }}"
       {% if product %}
-        data-product-id="{{ product.id | prepend: 'gid://shopify/Product/' | escape }}"
+        data-product-id="{{ product.id | prepend: 'gid://shopify/Product/' }}"
       {% endif %}
       style="display:none;"
+      aria-hidden="true"
     ></div>
-    <script src="{{ 'catalog-variant-hider.js' | asset_url }}" defer></script>
-  {% endif %}
+    {{ 'catalog-variant-hider.js' | asset_url | script_tag }}
+  {%- endif -%}
 {% endif %}
