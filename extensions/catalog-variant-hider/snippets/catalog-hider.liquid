@@ -1,10 +1,26 @@
-<div
-  id="catalog-variant-hider-data"
-  data-catalog-id="gid://shopify/AppCatalog/10593567033"
-  {% if product %}
-    data-product-id="gid://shopify/Product/{{ product.id }}"
+{% if customer and customer.b2b? %}
+  {%- assign b2b_catalog_id = customer.current_location.catalog.id -%}
+  
+  {% comment %} If current location is null, find the primary company location catalog {% endcomment %}
+  {% if b2b_catalog_id == blank %}
+    {% for location in customer.current_company.locations %}
+      {% if location.catalog.id != blank %}
+        {% assign b2b_catalog_id = location.catalog.id %}
+        {% break %}
+      {% endif %}
+    {% endfor %}
   {% endif %}
-  style="display:none;"
-  aria-hidden="true"
-></div>
-<script src="{{ 'catalog-variant-hider.js' | asset_url }}"></script>
+
+  {% if b2b_catalog_id != blank %}
+    <div
+      id="catalog-variant-hider-data"
+      data-catalog-id="{{ b2b_catalog_id }}"
+      {% if product %}
+        data-product-id="{{ product.id | prepend: 'gid://shopify/Product/' }}"
+      {% endif %}
+      style="display:none;"
+      aria-hidden="true"
+    ></div>
+    <script src="{{ 'catalog-variant-hider.js' | asset_url }}"></script>
+  {% endif %}
+{% endif %}
