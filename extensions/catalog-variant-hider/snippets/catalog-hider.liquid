@@ -14,6 +14,7 @@
       style="display:none;"
       aria-hidden="true"
     ></div>
-    {{ 'catalog-variant-hider.js' | asset_url | script_tag }}
+    {% comment %} Using defer ensures the script doesn't block page rendering {% endcomment %}
+    <script src="{{ 'catalog-variant-hider.js' | asset_url }}" defer></script>
   {%- endif -%}
 {% endif %}
