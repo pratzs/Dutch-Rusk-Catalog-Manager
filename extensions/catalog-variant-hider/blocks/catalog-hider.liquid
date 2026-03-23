@@ -1,17 +1,9 @@
-{% if customer and customer.b2b? %}
-  {%- assign catalog_id = customer.current_location.catalog.id -%}
-  {%- if catalog_id != blank -%}
-    <div
-      id="catalog-variant-hider-data"
-      data-catalog-id="{{ catalog_id | escape }}"
-      {% if product %}
-        data-product-id="{{ product.id | prepend: 'gid://shopify/Product/' }}"
-      {% endif %}
-      style="display:none;"
-      aria-hidden="true"
-    ></div>
-    <script src="{{ 'catalog-variant-hider.js' | asset_url }}" defer></script>
-  {%- else -%}
-    {%- endif -%}
-{% else %}
-  {% endif %}
+{% render 'catalog-hider' %}
+
+{% schema %}
+{
+  "name": "Catalog Variant Hider",
+  "target": "head",
+  "settings": []
+}
+{% endschema %}
