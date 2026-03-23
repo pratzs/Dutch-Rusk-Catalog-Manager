@@ -1,11 +1,25 @@
-{% comment %} TEMPORARY GLOBAL TEST - Remove B2B Check {% endcomment %}
-<div
-  id="catalog-variant-hider-data"
-  data-catalog-id="gid://shopify/AppCatalog/10593567033"
-  {% if product %}
-    data-product-id="{{ product.id | prepend: 'gid://shopify/Product/' }}"
-  {% endif %}
-  style="display:none;"
-  aria-hidden="true"
-></div>
-<script src="{{ 'catalog-variant-hider.js' | asset_url }}" defer></script>
+{% comment %}
+  Dutch Rusk Dynamic B2B Catalog Detector
+  Detects the specific B2B catalog for the logged-in customer location.
+{% endcomment %}
+{% if customer and customer.b2b? %}
+  {%- assign catalog_id = customer.current_location.catalog.id -%}
+  
+  {% comment %} Fallback: If they haven't selected a location yet, grab their primary one {% endcomment %}
+  {%- if catalog_id == blank -%}
+    {%- assign catalog_id = customer.current_company.locations.first.catalog.id -%}
+  {%- endif -%}
+
+  {%- if catalog_id != blank -%}
+    <div
+      id="catalog-variant-hider-data"
+      data-catalog-id="{{ catalog_id }}"
+      {% if product %}
+        data-product-id="{{ product.id | prepend: 'gid://shopify/Product/' }}"
+      {% endif %}
+      style="display:none;"
+      aria-hidden="true"
+    ></div>
+    <script src="{{ 'catalog-variant-hider.js' | asset_url }}" defer></script>
+  {%- endif -%}
+{% endif %}
