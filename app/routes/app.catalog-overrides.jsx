@@ -20,31 +20,16 @@ export async function loader({ request }) {
   
   const fullCatalogId = `gid://shopify/Catalog/${cleanId}`;
 
+  let products = [];
+  let pageInfo = { hasNextPage: false, hasPreviousPage: false };
+
   try {
-    // Attempt B2B Catalog Fetch
+    // Attempt B2B/Market Catalog Fetch with fixed variable usage
     const response = await admin.graphql(
-      `query getCatalogProducts($id: ID!, $query: String) {
+      `query getCatalogProducts($id: ID!, $searchQuery: String) {
         catalog(id: $id) {
           publication {
-            id
-          }
-        }
-      }`,
-      { variables: { id: fullCatalogId } }
-    );
-
-    const resJson = await response.json();
-    const publicationId = resJson.data?.catalog?.publication?.id;
-
-    let products = [];
-    let pageInfo = { hasNextPage: false, hasPreviousPage: false };
-
-    if (publicationId) {
-      // If B2B publication exists, fetch its specific products
-      const b2bProdResponse = await admin.graphql(
-        `query getB2BProducts($id: ID!, $query: String) {
-          publication(id: $id) {
-            catalogProducts(${paginationArgs}, query: $query) {
+            catalogProducts(${paginationArgs}, query: $searchQuery) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id
@@ -53,17 +38,20 @@ export async function loader({ request }) {
               }
             }
           }
-        }`,
-        { variables: { id: publicationId, query: search || undefined } }
-      );
-      const b2bData = await b2bProdResponse.json();
-      products = b2bData.data?.publication?.catalogProducts?.nodes || [];
-      pageInfo = b2bData.data?.publication?.catalogProducts?.pageInfo || pageInfo;
-    } else {
-      // Fallback: Use standard products if it's a Market Catalog or General
+        }
+      }`,
+      { variables: { id: fullCatalogId, searchQuery: search || undefined } }
+    );
+
+    const resJson = await response.json();
+    products = resJson.data?.catalog?.publication?.catalogProducts?.nodes;
+    pageInfo = resJson.data?.catalog?.publication?.catalogProducts?.pageInfo || pageInfo;
+
+    // FALLBACK: If catalog query returned errors or no products, fetch globally
+    if (!products || products.length === 0) {
       const fallbackResponse = await admin.graphql(
-        `query allProducts($query: String) {
-          products(${paginationArgs}, query: $query) {
+        `query allProducts($searchQuery: String) {
+          products(${paginationArgs}, query: $searchQuery) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
@@ -72,46 +60,44 @@ export async function loader({ request }) {
             }
           }
         }`,
-        { variables: { query: search || undefined } }
+        { variables: { searchQuery: search || undefined } }
       );
       const fallbackData = await fallbackResponse.json();
       products = fallbackData.data?.products?.nodes || [];
       pageInfo = fallbackData.data?.products?.pageInfo || pageInfo;
     }
-
-    const [overrides, rule] = await Promise.all([
-      prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
-      prisma.catalogRule.findUnique({ where: { catalogId: cleanId } }),
-    ]);
-
-    const globalHiddenSkus = rule ? rule.hiddenVariantIds : [];
-    const hiddenVariantTypes = rule ? rule.hiddenVariantTypes : [];
-    const overridesMap = overrides.reduce((acc, o) => ({ ...acc, [o.productId]: o.hiddenVariantIds }), {});
-
-    const allVariantTypes = new Set();
-    products.forEach((p) => {
-      p.variants.nodes.forEach((v) => {
-        const match = v.title.match(/^([A-Za-z]+)/);
-        if (match) allVariantTypes.add(match[1]);
-      });
-    });
-
-    return { 
-      catalogId: cleanId, 
-      catalogName, 
-      products, 
-      overridesMap, 
-      globalHiddenSkus, 
-      hiddenVariantTypes, 
-      search, 
-      allVariantTypes: Array.from(allVariantTypes).sort(), 
-      pageInfo 
-    };
   } catch (error) {
-    console.error("Loader Error:", error);
-    // Even on severe failure, return an empty state instead of crashing
-    return { catalogId: cleanId, catalogName, products: [], overridesMap: {}, globalHiddenSkus: [], hiddenVariantTypes: [], search: "", allVariantTypes: [], pageInfo: { hasNextPage: false, hasPreviousPage: false } };
+    console.error("Loader Error Catch:", error);
   }
+
+  const [overrides, rule] = await Promise.all([
+    prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
+    prisma.catalogRule.findUnique({ where: { catalogId: cleanId } }),
+  ]);
+
+  const globalHiddenSkus = rule ? rule.hiddenVariantIds : [];
+  const hiddenVariantTypes = rule ? rule.hiddenVariantTypes : [];
+  const overridesMap = overrides.reduce((acc, o) => ({ ...acc, [o.productId]: o.hiddenVariantIds }), {});
+
+  const allVariantTypes = new Set();
+  products.forEach((p) => {
+    p.variants.nodes.forEach((v) => {
+      const match = v.title.match(/^([A-Za-z]+)/);
+      if (match) allVariantTypes.add(match[1]);
+    });
+  });
+
+  return { 
+    catalogId: cleanId, 
+    catalogName, 
+    products, 
+    overridesMap, 
+    globalHiddenSkus, 
+    hiddenVariantTypes, 
+    search, 
+    allVariantTypes: Array.from(allVariantTypes).sort(), 
+    pageInfo 
+  };
 }
 
 export async function action({ request }) {
