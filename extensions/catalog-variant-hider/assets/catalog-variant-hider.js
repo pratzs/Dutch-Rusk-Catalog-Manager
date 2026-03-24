@@ -1,5 +1,6 @@
 (function () {
   const APP_URL = "https://dutch-rusk-catalog-manager.onrender.com";
+  let isProcessing = false; // The Silencer
 
   async function init() {
     const el = document.getElementById('catalog-variant-hider-data') || document.querySelector("[data-catalog-id]");
@@ -13,60 +14,65 @@
       const validTypes = rules.hiddenVariantTypes || [];
       const validIds = rules.hiddenVariantIds || [];
 
-      const nuke = () => {
-        // 1. Target every single product container on the page (Product Page or Collection)
-        const containers = document.querySelectorAll('.product, .product-single, .card, .grid__item, .product-section, main');
+      const applyRules = () => {
+        if (isProcessing) return; // Stop the loop
+        isProcessing = true;
+
+        const containers = document.querySelectorAll('.product, .product-single, .card, .grid__item, .product-section');
 
         containers.forEach(container => {
-          const text = container.textContent || "";
-          const isMatch = validTypes.some(type => text.includes(type)) || validIds.some(id => text.includes(id));
+          const content = container.textContent || "";
+          const isMatch = validTypes.some(type => content.includes(type)) || validIds.some(id => container.innerHTML.includes(id));
 
-          // 2. If this container mentions a hidden type (like "Shipper")
           if (isMatch) {
-            // Check if there are "Safe" variants like "Bag" or "Outer" also present
-            const hasSafeVariant = text.includes("Bag") || text.includes("Outer") || text.includes("Pack");
-            
-            // If it's ONLY a Shipper (no other safe words found) OR the active ID is hidden
-            if (!hasSafeVariant || validIds.some(id => container.innerHTML.includes(id))) {
-              
-              // HIDE THE EXTRAS PERMANENTLY
-              const selectors = [
-                'button[name="add"]', '.add-to-cart', '[type="submit"]',
-                '.inventory-pill', '.inventory', '.stock', '[id^="Inventory"]',
-                '.quantity', 'quantity-input', '.product-form__input', 'fieldset', '.variant-wrapper'
-              ];
+            // Check if there are other valid options like "Bag"
+            const hasOtherOptions = content.includes("Bag") || content.includes("Outer") || container.querySelectorAll('input[type="radio"]:not([style*="none"])').length > 1;
 
-              container.querySelectorAll(selectors.join(',')).forEach(el => {
-                // If it's the button, change it to Sold Out first
-                if (el.tagName === 'BUTTON' || el.type === 'submit') {
-                  el.disabled = true;
-                  el.textContent = window.location.pathname.includes('/products/') ? "Sold out" : "Back soon";
-                  el.style.opacity = "0.5";
-                } else {
-                  // Otherwise, just make it vanish
-                  el.style.setProperty('display', 'none', 'important');
-                  el.style.setProperty('visibility', 'hidden', 'important');
-                  el.style.setProperty('height', '0', 'important');
+            if (!hasOtherOptions) {
+              // SCENARIO: Single-variant "Shipper" (The Candy Floss Case)
+              const btn = container.querySelector('button[name="add"], .add-to-cart, [type="submit"]');
+              if (btn) {
+                btn.disabled = true;
+                btn.textContent = window.location.pathname.includes('/products/') ? "Sold out" : "Back soon";
+                btn.style.opacity = "0.5";
+              }
+
+              // Target specific labels and inventory text
+              container.querySelectorAll('label, .inventory, .stock, .quantity, .variant-wrapper, [id^="Inventory"]').forEach(item => {
+                const itemText = item.textContent || "";
+                if (validTypes.some(t => itemText.includes(t)) || itemText.includes("Pack Size") || itemText.includes("stock") || item.closest('.quantity')) {
+                  item.style.setProperty('display', 'none', 'important');
                 }
               });
             } else {
-              // It's a Multi-variant product (Bag + Shipper)
-              // Only hide the specific "Shipper" buttons/swatches
+              // SCENARIO: Multi-variant (The Mackintosh's Case)
               container.querySelectorAll('input, label, option, .swatch-element').forEach(item => {
-                if (validTypes.some(t => item.textContent.includes(t) || item.value?.includes(t))) {
+                const val = item.value || item.textContent || "";
+                if (validTypes.some(t => val.includes(t))) {
                   item.style.setProperty('display', 'none', 'important');
                   const wrap = item.closest('.swatch-element, .variant-input, li');
-                  if (wrap) wrap.style.setProperty('display', 'none', 'important');
+                  if (wrap && !wrap.classList.contains('grid__item')) {
+                    wrap.style.setProperty('display', 'none', 'important');
+                  }
                 }
               });
             }
           }
         });
+
+        // Release the silencer after a tiny delay
+        setTimeout(() => { isProcessing = false; }, 100);
       };
 
-      // Run immediately and then watch like a hawk
-      nuke();
-      new MutationObserver(nuke).observe(document.body, { childList: true, subtree: true });
+      applyRules();
+      
+      // Watch for theme AJAX changes but ignore our own changes
+      const observer = new MutationObserver((mutations) => {
+        const shouldTrigger = mutations.some(m => !m.target.closest || !m.target.closest('[data-cvh-processed]'));
+        if (shouldTrigger) applyRules();
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
     }
   }
 
