@@ -33,13 +33,10 @@ try {
           if (isMatch) {
             el.dataset.cvhHidden = "true";
             el.style.display = "none";
-            const wrapper = el.closest(".swatch-element, .variant-option, .variant-input");
-            if (wrapper) wrapper.style.display = "none";
+            const wrapper = el.closest(".swatch-element, .variant-option, .variant-input, li");
+            if (wrapper && !wrapper.classList.contains('grid__item')) wrapper.style.display = "none";
           } else {
              el.dataset.cvhHidden = "false";
-             // Ensure it's visible if it doesn't match a rule
-             const wrapper = el.closest(".swatch-element, .variant-option, .variant-input");
-             if (wrapper) wrapper.style.display = "";
           }
         });
 
@@ -51,19 +48,19 @@ try {
           const allOptions = Array.from(form.querySelectorAll('input[type="radio"], option'));
           const visibleOptions = allOptions.filter(o => o.dataset.cvhHidden !== "true" && o.style.display !== "none");
 
-          // DECISION A: Multi-variant product (like Bag + Shipper)
+          const variantIdInput = form.querySelector('input[name="id"]');
+          const currentVariantId = variantIdInput ? variantIdInput.value : null;
+
+          let shouldDisable = false;
+
+          // CASE A: Multi-variant (Radios/Dropdowns exist)
           if (allOptions.length > 0) {
             if (visibleOptions.length === 0) {
-              // Everything is hidden
-              disableProduct(btn, container);
+              shouldDisable = true;
             } else {
-              // We have visible options (like the Bag)! Ensure button is enabled.
-              enableProduct(btn, container);
-              
-              // Auto-select if current selection is a hidden one
+              // Switch away from hidden default
               const selected = allOptions.find(o => (o.checked || o.selected) && o.dataset.cvhHidden === "true");
               if (selected) {
-                console.log(`🔄 [CatalogVariantHider] Switching to visible option: ${visibleOptions[0].value}`);
                 if (visibleOptions[0].tagName === 'OPTION') {
                   visibleOptions[0].parentElement.value = visibleOptions[0].value;
                 } else {
@@ -74,44 +71,32 @@ try {
               }
             }
           } 
-          // DECISION B: Single-variant product (No radios/dropdowns)
-          else {
-            const variantIdInput = form.querySelector('input[name="id"]');
-            const currentVariantId = variantIdInput ? variantIdInput.value : null;
-            
-            // For single variants, we check if the ID or the specific title matches
-            const isIdHidden = currentVariantId && validIds.includes(currentVariantId);
-            // Check ONLY the specific variant title label, not the whole card text
-            const variantTitle = container.querySelector('.variant-label, .product-variant-title, .selected-variant');
+          // CASE B: Single-variant (Only a hidden ID input)
+          else if (currentVariantId) {
+            // If the active ID is in our 'Hidden IDs' list OR the product title/label contains a 'Hidden Type'
+            const isIdHidden = validIds.includes(currentVariantId);
+            const variantTitle = container.querySelector('.variant-label, .product-variant-title, .h1, .product__title');
             const isTitleHidden = variantTitle && validTypes.some(type => variantTitle.textContent.includes(type));
+            
+            if (isIdHidden || isTitleHidden) shouldDisable = true;
+          }
 
-            if (isIdHidden || isTitleHidden) {
-              disableProduct(btn, container);
-            } else {
-              enableProduct(btn, container);
+          if (shouldDisable) {
+            if (btn && !btn.disabled) {
+              btn.disabled = true;
+              btn.textContent = window.location.pathname.includes('/products/') ? "Sold out" : "Back soon";
+              btn.style.opacity = "0.5";
+              container.querySelectorAll('.inventory-pill, .inventory, [id^="Inventory"], .quantity-wrapper, quantity-input, variant-radios, variant-selects, fieldset').forEach(item => {
+                item.style.setProperty('display', 'none', 'important');
+              });
             }
-          }
-        });
-
-        function disableProduct(btn, container) {
-          if (btn && !btn.disabled) {
-            btn.disabled = true;
-            btn.textContent = window.location.pathname.includes('/products/') ? "Sold out" : "Back soon";
-            btn.style.opacity = "0.5";
-            const extras = container.querySelectorAll('.inventory-pill, .inventory, [id^="Inventory"], .quantity-wrapper, quantity-input, variant-radios, variant-selects, .variant-wrapper, fieldset, .product-form__input');
-            extras.forEach(item => item.style.setProperty('display', 'none', 'important'));
-          }
-        }
-
-        function enableProduct(btn, container) {
-          if (btn && btn.disabled && (btn.textContent === "Sold out" || btn.textContent === "Back soon")) {
+          } else if (btn && btn.disabled && (btn.textContent === "Sold out" || btn.textContent === "Back soon")) {
+            // Re-enable if it's a Bag or other valid variant
             btn.disabled = false;
             btn.textContent = "Add to cart";
             btn.style.opacity = "1";
-            const extras = container.querySelectorAll('.inventory-pill, .inventory, [id^="Inventory"], .quantity-wrapper, quantity-input, variant-radios, variant-selects, .variant-wrapper, fieldset, .product-form__input');
-            extras.forEach(item => item.style.display = "");
           }
-        }
+        });
 
         setTimeout(() => { isAdjusting = false; }, 100);
       };
