@@ -73,7 +73,6 @@ export async function action({ request }) {
   const formData = await request.formData();
   const intent = formData.get("intent");
   const catalogId = formData.get("catalogId");
-  const catalogName = formData.get("catalogName");
   const productId = formData.get("productId");
 
   if (intent === "save") {
@@ -89,7 +88,7 @@ export async function action({ request }) {
     await prisma.productOverride.deleteMany({ where: { catalogId, productId } });
   }
 
-  return redirect(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogId)}&catalogName=${encodeURIComponent(catalogName)}`);
+  return null; // Return null to stay on page and refresh via revalidation
 }
 
 export default function CatalogOverrides() {
@@ -99,21 +98,29 @@ export default function CatalogOverrides() {
   const navigation = useNavigation();
   const isSaving = navigation.state === "submitting";
 
-  // Use state but refresh it when loader data changes (pagination/search)
   const [pendingHidden, setPendingHidden] = useState({});
 
+  // CRITICAL: Robust logic to calculate hidden state
   useEffect(() => {
     const initial = {};
     products.forEach((p) => { 
       const manual = overridesMap[p.id] || [];
-      const masterForThisProduct = p.variants.nodes
-        .filter(v => globalHiddenSkus.includes(v.sku))
+      const fromMaster = p.variants.nodes
+        .filter(v => {
+          // Normalize SKUs for comparison (trim and uppercase)
+          const variantSku = (v.sku || "").trim().toUpperCase();
+          return globalHiddenSkus.some(gs => gs.trim().toUpperCase() === variantSku);
+        })
         .map(v => v.id);
       
-      initial[p.id] = Array.from(new Set([...manual, ...masterForThisProduct])); 
+      const bulkType = p.variants.nodes
+        .filter(v => hiddenVariantTypes.some(t => v.title.toLowerCase().includes(t.toLowerCase())))
+        .map(v => v.id);
+      
+      initial[p.id] = Array.from(new Set([...manual, ...fromMaster, ...bulkType])); 
     });
     setPendingHidden(initial);
-  }, [products, overridesMap, globalHiddenSkus]);
+  }, [products, overridesMap, globalHiddenSkus, hiddenVariantTypes]);
 
   const [variantFilter, setVariantFilter] = useState("all");
   const [searchInput, setSearchInput] = useState(search);
@@ -134,7 +141,6 @@ export default function CatalogOverrides() {
     const formData = new FormData();
     formData.append("intent", "save");
     formData.append("catalogId", catalogId);
-    formData.append("catalogName", catalogName);
     formData.append("productId", productId);
     (pendingHidden[productId] || []).forEach((v) => formData.append("hiddenVariantIds", v));
     submit(formData, { method: "post" });
@@ -149,7 +155,6 @@ export default function CatalogOverrides() {
       <s-section heading="Manage Visibility Exceptions">
         <s-paragraph>
           <b>Red background = Hidden.</b> Ticking a variant overrides bulk rules. 
-          {globalHiddenSkus.length > 0 && " Locksmith migration rules are active for this catalog."}
         </s-paragraph>
 
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "flex-end" }}>
@@ -178,10 +183,7 @@ export default function CatalogOverrides() {
                 <s-text fontWeight="bold" style={{ marginBottom: "12px", display: "block" }}>{product.title}</s-text>
                 <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
                   {product.variants.nodes.map((variant) => {
-                    const isBulkTypeHidden = hiddenVariantTypes.some(t => variant.title.startsWith(t));
-                    const isGlobalHidden = globalHiddenSkus.includes(variant.sku);
-                    const isHidden = currentHidden.includes(variant.id) || isBulkTypeHidden || isGlobalHidden;
-
+                    const isHidden = currentHidden.includes(variant.id);
                     return (
                       <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
                         <s-checkbox label={variant.title} checked={isHidden} onInput={() => handleVariantToggle(product.id, variant.id)} />
