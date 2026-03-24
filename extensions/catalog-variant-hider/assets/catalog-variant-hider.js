@@ -35,13 +35,11 @@ try {
         if (isAdjusting) return;
         isAdjusting = true;
 
-        // Clean rules to prevent accidental empty-string matches
         const validTypes = (rules.hiddenVariantTypes || []).filter(t => t && t.trim() !== "");
         const validIds = rules.hiddenVariantIds || [];
 
-        // 1. PRECISION HIDING (Generic HTML targeting, no collateral damage)
+        // 1. PRECISION HIDING 
         document.querySelectorAll('input[type="radio"], select option, label, .variant-picker__option-value').forEach(el => {
-          // Ignore non-variant inputs like quantity
           if (el.name && el.name.toLowerCase().includes('quantity')) return;
 
           const val = el.value || el.textContent?.trim() || "";
@@ -58,7 +56,6 @@ try {
                 el.style.display = "none";
             } else if (el.tagName === 'INPUT' && el.type === 'radio') {
                 el.style.display = "none";
-                // Standard HTML: Hide this exact input's linked label
                 if (el.id) {
                     const linkedLabel = document.querySelector(`label[for="${el.id}"]`);
                     if (linkedLabel) {
@@ -67,20 +64,21 @@ try {
                     }
                 }
             } else {
-                // If it's a loose label or custom span
                 el.style.display = "none";
             }
 
-            // GROUP PROTECTION: Only hide the parent wrapper if it belongs EXCLUSIVELY to this variant
+            // GROUP PROTECTION & BLAST SHIELD
             const wrapper = el.closest(".swatch-element, .variant-option, li, .variant-input");
             if (wrapper && wrapper.tagName !== 'BODY') {
-                const siblings = wrapper.querySelectorAll('input[type="radio"], option');
-                if (siblings.length <= 1) {
-                    wrapper.style.display = "none";
+                // BLAST SHIELD: Never hide a container if it holds a form or a button (prevents hiding whole product cards)
+                if (!wrapper.querySelector('form') && !wrapper.querySelector('button')) {
+                    const siblings = wrapper.querySelectorAll('input[type="radio"], option');
+                    if (siblings.length <= 1) {
+                        wrapper.style.display = "none";
+                    }
                 }
             }
           } else {
-            // Ensure non-matching elements remain flagged as visible
             if (el.dataset.cvhHidden !== "true") {
                 el.dataset.cvhHidden = "false";
             }
@@ -89,8 +87,8 @@ try {
 
         // 2. FORM EVALUATION (Auto-select & Complete Disabling)
         document.querySelectorAll('form[action*="/cart"]').forEach(form => {
-             const isCollectionCard = !!form.closest('.card, .product-item, .grid-item, .product-grid-item, .product-card');
-             const container = form.closest('.product, .product-single, .card, .product-item, .grid-item, section') || form;
+             const isCollectionCard = !!form.closest('.card, .product-item, .grid-item, .product-grid-item, .product-card, .grid__item');
+             const container = form.closest('.product, .product-single, .card, .product-item, .grid-item, .grid__item, section') || form;
              
              let shouldDisable = false;
 
@@ -114,7 +112,7 @@ try {
                      const visibleRadios = group.filter(r => r.dataset.cvhHidden !== "true");
                      
                      if (visibleRadios.length > 0) {
-                         allInteractiveHidden = false; // We found a visible variant (like "Bag"!)
+                         allInteractiveHidden = false; 
                          const checkedRadio = group.find(r => r.checked);
                          
                          if (checkedRadio && checkedRadio.dataset.cvhHidden === "true") {
