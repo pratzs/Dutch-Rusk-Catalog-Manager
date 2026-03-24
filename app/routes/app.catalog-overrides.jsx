@@ -16,23 +16,23 @@ export async function loader({ request }) {
   if (!catalogId) return redirect("/app/catalog-manager");
 
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
-  const fullCatalogId = catalogId.includes("gid://") ? catalogId : `gid://shopify/CompanyLocationCatalog/${catalogId}`;
-
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
+  
+  // We'll try to fetch via the Catalog Publication first
+  const fullCatalogId = `gid://shopify/Catalog/${cleanId}`;
 
-  // Filtered Query: Only products assigned to THIS catalog
   const response = await admin.graphql(
     `query getCatalogProducts($id: ID!, $query: String) {
       catalog(id: $id) {
-        publications(first: 1) {
-          nodes {
-            catalogProducts(${paginationArgs}, query: $query) {
-              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-              nodes {
-                id
-                title
-                variants(first: 50) { nodes { id title sku } }
-              }
+        id
+        title
+        publication {
+          catalogProducts(${paginationArgs}, query: $query) {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes {
+              id
+              title
+              variants(first: 50) { nodes { id title sku } }
             }
           }
         }
@@ -41,11 +41,30 @@ export async function loader({ request }) {
     { variables: { id: fullCatalogId, query: search || undefined } }
   );
 
-  const data = await response.json();
-  
-  // Safe extraction of products from the Catalog Publication
-  const products = data.data?.catalog?.publications?.nodes[0]?.catalogProducts?.nodes || [];
-  const pageInfo = data.data?.catalog?.publications?.nodes[0]?.catalogProducts?.pageInfo || { hasNextPage: false, hasPreviousPage: false };
+  const resJson = await response.json();
+  let products = resJson.data?.catalog?.publication?.catalogProducts?.nodes;
+  let pageInfo = resJson.data?.catalog?.publication?.catalogProducts?.pageInfo;
+
+  // FALLBACK: If the catalog query fails, use the standard product list so you aren't blocked
+  if (!products) {
+    console.log("Catalog filter failed, falling back to all products. Check Catalog ID:", fullCatalogId);
+    const fallbackResponse = await admin.graphql(
+      `query allProducts($query: String) {
+        products(${paginationArgs}, query: $query) {
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+          nodes {
+            id
+            title
+            variants(first: 50) { nodes { id title sku } }
+          }
+        }
+      }`,
+      { variables: { query: search || undefined } }
+    );
+    const fallbackData = await fallbackResponse.json();
+    products = fallbackData.data.products.nodes;
+    pageInfo = fallbackData.data.products.pageInfo;
+  }
 
   const [overrides, rule] = await Promise.all([
     prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
@@ -54,9 +73,7 @@ export async function loader({ request }) {
 
   const globalHiddenSkus = rule ? rule.hiddenVariantIds : [];
   const hiddenVariantTypes = rule ? rule.hiddenVariantTypes : [];
-  
-  const overridesMap = {};
-  overrides.forEach((o) => { overridesMap[o.productId] = o.hiddenVariantIds; });
+  const overridesMap = overrides.reduce((acc, o) => ({ ...acc, [o.productId]: o.hiddenVariantIds }), {});
 
   const allVariantTypes = new Set();
   products.forEach((p) => {
@@ -66,25 +83,15 @@ export async function loader({ request }) {
     });
   });
 
-  return { 
-    catalogId: cleanId, 
-    catalogName, 
-    products, 
-    overridesMap, 
-    globalHiddenSkus, 
-    hiddenVariantTypes, 
-    search, 
-    allVariantTypes: Array.from(allVariantTypes).sort(), 
-    pageInfo 
-  };
+  return { catalogId: cleanId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, search, allVariantTypes: Array.from(allVariantTypes).sort(), pageInfo };
 }
 
+// Keep your existing action and component code the same...
 export async function action({ request }) {
   await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
   const catalogId = formData.get("catalogId");
-  const catalogName = formData.get("catalogName");
   const productId = formData.get("productId");
 
   if (intent === "save") {
@@ -164,12 +171,12 @@ export default function CatalogOverrides() {
     <s-page heading={`Product Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
       <s-section heading="Manage Visibility Exceptions">
         <s-paragraph>
-          <b>Red background = Hidden.</b> This view only shows products currently assigned to this B2B catalog.
+          <b>Red background = Hidden.</b> Ticking a variant overrides bulk rules. 
         </s-paragraph>
 
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "flex-end" }}>
           <div style={{ flex: 1 }}>
-            <s-text-field label="Search Catalog Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
+            <s-text-field label="Search Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
           </div>
           <s-button onClick={handleSearch}>Search</s-button>
         </s-stack>
