@@ -1,24 +1,23 @@
 (function () {
   const APP_URL = "https://dutch-rusk-catalog-manager.onrender.com";
-  let observer = null;
+  let isProcessing = false;
 
   async function init() {
     const el = document.getElementById('catalog-variant-hider-data') || document.querySelector("[data-catalog-id]");
     if (!el) return;
 
     const { catalogId, productId } = el.dataset;
-    
-    // Cache the rules so we don't spam Render
     const res = await fetch(`${APP_URL}/api/catalog-rules?catalogId=${catalogId}&productId=${productId || ''}`);
     const rules = await res.json();
 
     if (rules.hiddenVariantTypes?.length > 0 || rules.hiddenVariantIds?.length > 0) {
-      const applyRules = () => {
-        // 1. Temporarily stop watching to avoid infinite loops
-        if (observer) observer.disconnect();
+      const validTypes = rules.hiddenVariantTypes || [];
+      const validIds = rules.hiddenVariantIds || [];
 
-        const validTypes = rules.hiddenVariantTypes || [];
-        const validIds = rules.hiddenVariantIds || [];
+      const applyRules = () => {
+        if (isProcessing) return;
+        isProcessing = true;
+
         const containers = document.querySelectorAll('.product, .product-single, .card, .grid__item, .product-section');
 
         containers.forEach(container => {
@@ -26,24 +25,51 @@
           const isMatch = validTypes.some(type => content.includes(type)) || validIds.some(id => container.innerHTML.includes(id));
 
           if (isMatch) {
+            // Check if there are "safe" variants available (like Bag or Outer)
             const hasOtherOptions = content.includes("Bag") || content.includes("Outer") || container.querySelectorAll('input[type="radio"]:not([style*="none"])').length > 1;
 
             if (!hasOtherOptions) {
-              // SINGLE VARIANT (Candy Floss)
+              // 1. UPDATE BUTTONS
               const btn = container.querySelector('button[name="add"], .add-to-cart, [type="submit"]');
-              if (btn && !btn.disabled) {
+              if (btn) {
                 btn.disabled = true;
                 btn.textContent = window.location.pathname.includes('/products/') ? "Sold out" : "Back soon";
                 btn.style.opacity = "0.5";
               }
-              container.querySelectorAll('label, .inventory, .stock, .quantity, .variant-wrapper, [id^="Inventory"]').forEach(item => {
-                const itemText = item.textContent || "";
-                if (validTypes.some(t => itemText.includes(t)) || itemText.includes("Pack Size") || itemText.includes("stock") || item.closest('.quantity')) {
+
+              // 2. FORCE BADGES TO "SOLD OUT"
+              container.querySelectorAll('.badge, .card__badge, .product-badge, .sale-badge, .grid-product__badge').forEach(badge => {
+                badge.textContent = 'Sold out';
+                badge.style.setProperty('background-color', '#333', 'important'); // Dark grey color
+                badge.style.setProperty('color', '#fff', 'important');
+                badge.style.setProperty('border-color', '#333', 'important');
+              });
+
+              // 3. AGGRESSIVELY HIDE PRICES & STOCK
+              const extras = container.querySelectorAll('label, .inventory, .stock, .quantity, .variant-wrapper, [id^="Inventory"], .price, [class*="price"], [class*="stock"], [class*="inventory"]');
+              
+              extras.forEach(item => {
+                const itemText = (item.textContent || "").toLowerCase();
+                const validTypesLower = validTypes.map(t => t.toLowerCase());
+                const classStr = (typeof item.className === 'string') ? item.className.toLowerCase() : "";
+
+                // If the element is related to Price, Stock, or a Hidden Variant Type -> Nuke it
+                if (
+                  validTypesLower.some(t => itemText.includes(t)) || 
+                  itemText.includes("pack size") || 
+                  itemText.includes("in stock") || 
+                  itemText.includes("stock") ||
+                  item.closest('.quantity') ||
+                  classStr.includes('price') ||
+                  classStr.includes('stock') ||
+                  classStr.includes('inventory')
+                ) {
                   item.style.setProperty('display', 'none', 'important');
                 }
               });
+
             } else {
-              // MULTI VARIANT (Mackintosh's)
+              // MULTI VARIANT (Mackintosh's Case) - Just hide the Shipper buttons
               container.querySelectorAll('input, label, option, .swatch-element').forEach(item => {
                 const val = item.value || item.textContent || "";
                 if (validTypes.some(t => val.includes(t))) {
@@ -58,21 +84,17 @@
           }
         });
 
-        // 2. Start watching again after changes are done
-        startObserver();
-      };
-
-      const startObserver = () => {
-        observer = new MutationObserver((mutations) => {
-          // Only re-run if something significant changed (like a new product loading)
-          // and not just a style change we made.
-          const isSignificant = mutations.some(m => m.addedNodes.length > 0);
-          if (isSignificant) applyRules();
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
+        setTimeout(() => { isProcessing = false; }, 100);
       };
 
       applyRules();
+      
+      const observer = new MutationObserver((mutations) => {
+        const shouldTrigger = mutations.some(m => !m.target.closest || !m.target.closest('[data-cvh-processed]'));
+        if (shouldTrigger) applyRules();
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
     }
   }
 
