@@ -32,6 +32,7 @@ model CatalogRule {
   catalogId           String
   catalogName         String
   hiddenVariantTypes  String[]
+  hiddenVariantIds    String[]
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

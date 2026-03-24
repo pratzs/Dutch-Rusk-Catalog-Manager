@@ -13,6 +13,8 @@ export const loader = async ({ request }) => {
   const recentRules = await prisma.catalogRule.findMany({
     orderBy: { updatedAt: "desc" },
     take: 5,
+    // We don't need to specify select if we want all fields, 
+    // but Prisma will now include hiddenVariantIds by default
   });
 
   return { totalRules, totalOverrides, recentRules };
@@ -83,11 +85,11 @@ export default function Index() {
                   <s-stack direction="block" gap="extraTight" style={{ flex: 1 }}>
                     <s-text fontWeight="bold">{rule.catalogName}</s-text>
                     <s-text tone="subdued">
-                      Hiding:{" "}
-                      {rule.hiddenVariantTypes.length > 0
-                        ? rule.hiddenVariantTypes.join(", ")
-                        : "nothing"}
-                    </s-text>
+                    Hiding: {rule.hiddenVariantTypes.length > 0 ? rule.hiddenVariantTypes.join(", ") : "nothing"}
+                    {rule.hiddenVariantIds?.length > 0 && (
+                      <> | <s-text fontWeight="bold">{rule.hiddenVariantIds.length} Restricted SKUs</s-text></>
+                    )}
+                  </s-text>
                   </s-stack>
                   <s-button
                     variant="secondary"

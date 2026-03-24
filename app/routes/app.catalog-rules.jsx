@@ -46,7 +46,6 @@ export async function loader({ request }) {
 
   if (!catalogId) return redirect("/app/catalog-manager");
 
-  // NORMALIZE: Ensure we look up the numeric ID only
   const cleanCatalogId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
 
   const [rule, variantTypes] = await Promise.all([
@@ -55,9 +54,10 @@ export async function loader({ request }) {
   ]);
 
   return {
-    catalogId, // We keep the original for the form
+    catalogId,
     catalogName,
     hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],
+    hiddenVariantIds: rule ? rule.hiddenVariantIds : [], // <--- FETCH SKUs
     variantTypes,
   };
 }
@@ -68,22 +68,36 @@ export async function action({ request }) {
   let catalogId = formData.get("catalogId");
   const catalogName = formData.get("catalogName");
   const hiddenVariantTypes = formData.getAll("hiddenVariantTypes");
+  
+  // GET SKUs from the new text field and clean them up
+  const skusRaw = formData.get("hiddenVariantIds") || "";
+  const hiddenVariantIds = skusRaw.split(",").map(s => s.trim()).filter(s => s !== "");
 
-  // NORMALIZE: Ensure we save the numeric ID only
   const cleanCatalogId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
 
   await prisma.catalogRule.upsert({
     where: { catalogId: cleanCatalogId },
-    update: { hiddenVariantTypes, catalogName },
-    create: { catalogId: cleanCatalogId, catalogName, hiddenVariantTypes },
+    update: { 
+        hiddenVariantTypes, 
+        hiddenVariantIds, // <--- SAVE SKUs
+        catalogName 
+    },
+    create: { 
+        catalogId: cleanCatalogId, 
+        catalogName, 
+        hiddenVariantTypes, 
+        hiddenVariantIds // <--- SAVE SKUs
+    },
   });
 
   return redirect("/app/catalog-manager");
 }
 
 export default function CatalogRules() {
-  const { catalogId, catalogName, hiddenVariantTypes, variantTypes } = useLoaderData();
+  const { catalogId, catalogName, hiddenVariantTypes, hiddenVariantIds, variantTypes } = useLoaderData();
   const [selected, setSelected] = useState(hiddenVariantTypes);
+  const [skuList, setSkuList] = useState(hiddenVariantIds.join(", ")); // Local state for the text field
+  
   const submit = useSubmit();
   const navigate = useNavigate();
   const navigation = useNavigation();
@@ -99,6 +113,7 @@ export default function CatalogRules() {
     const formData = new FormData();
     formData.append("catalogId", catalogId);
     formData.append("catalogName", catalogName);
+    formData.append("hiddenVariantIds", skuList); // Send the SKU string to the action
     selected.forEach((v) => formData.append("hiddenVariantTypes", v));
     submit(formData, { method: "post" });
   };
@@ -108,10 +123,9 @@ export default function CatalogRules() {
       heading={`Rules for: ${catalogName}`}
       back-action-url="/app/catalog-manager"
     >
-      <s-section heading="Hide Variant Types">
+      <s-section heading="Hide Variant Types (Bulk)">
         <s-paragraph>
-          These variant types are pulled live from your store. Tick the ones
-          to hide from customers in this catalog.
+          Hide entire categories (e.g. all Shippers) for this catalog.
         </s-paragraph>
 
         <s-stack direction="block" gap="tight" style={{ marginTop: "12px" }}>
@@ -124,23 +138,45 @@ export default function CatalogRules() {
             />
           ))}
         </s-stack>
-
-        <div style={{ marginTop: "16px", display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-          <s-button
-            variant="secondary"
-            onClick={() => navigate("/app/catalog-manager")}
-          >
-            Cancel
-          </s-button>
-          <s-button
-            variant="primary"
-            onClick={handleSave}
-            disabled={isSaving}
-          >
-            {isSaving ? "Saving..." : "Save Rules"}
-          </s-button>
-        </div>
       </s-section>
+
+      {/* NEW SECTION FOR SKUs */}
+      <s-section heading="Restricted SKUs (Individual Exceptions)" style={{ marginTop: "24px" }}>
+        <s-paragraph>
+          Paste specific SKUs (e.g. 415319_Bag) separated by commas to hide them even if their type is allowed.
+        </s-paragraph>
+        
+        <textarea
+          style={{ 
+            width: "100%", 
+            minHeight: "150px", 
+            marginTop: "12px", 
+            padding: "8px",
+            fontFamily: "monospace",
+            borderRadius: "4px",
+            border: "1px solid #ccc" 
+          }}
+          value={skuList}
+          onChange={(e) => setSkuList(e.target.value)}
+          placeholder="Enter SKUs separated by commas..."
+        />
+      </s-section>
+
+      <div style={{ marginTop: "24px", display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+        <s-button
+          variant="secondary"
+          onClick={() => navigate("/app/catalog-manager")}
+        >
+          Cancel
+        </s-button>
+        <s-button
+          variant="primary"
+          onClick={handleSave}
+          disabled={isSaving}
+        >
+          {isSaving ? "Saving..." : "Save Rules"}
+        </s-button>
+      </div>
     </s-page>
   );
 }
