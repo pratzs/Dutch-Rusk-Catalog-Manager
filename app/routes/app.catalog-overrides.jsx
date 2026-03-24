@@ -14,27 +14,38 @@ export async function loader({ request }) {
   const before = url.searchParams.get("before") || null;
 
   if (!catalogId) return redirect("/app/catalog-manager");
+
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
+  const fullCatalogId = catalogId.includes("gid://") ? catalogId : `gid://shopify/CompanyLocationCatalog/${catalogId}`;
 
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
 
+  // Filtered Query: Only products assigned to THIS catalog
   const response = await admin.graphql(
-    `query searchProducts($query: String) {
-      products(${paginationArgs}, query: $query) {
-        pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-        nodes {
-          id
-          title
-          variants(first: 50) { nodes { id title sku } }
+    `query getCatalogProducts($id: ID!, $query: String) {
+      catalog(id: $id) {
+        publications(first: 1) {
+          nodes {
+            catalogProducts(${paginationArgs}, query: $query) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                id
+                title
+                variants(first: 50) { nodes { id title sku } }
+              }
+            }
+          }
         }
       }
     }`,
-    { variables: { query: search || undefined } }
+    { variables: { id: fullCatalogId, query: search || undefined } }
   );
 
   const data = await response.json();
-  const products = data.data.products.nodes;
-  const pageInfo = data.data.products.pageInfo;
+  
+  // Safe extraction of products from the Catalog Publication
+  const products = data.data?.catalog?.publications?.nodes[0]?.catalogProducts?.nodes || [];
+  const pageInfo = data.data?.catalog?.publications?.nodes[0]?.catalogProducts?.pageInfo || { hasNextPage: false, hasPreviousPage: false };
 
   const [overrides, rule] = await Promise.all([
     prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
@@ -73,6 +84,7 @@ export async function action({ request }) {
   const formData = await request.formData();
   const intent = formData.get("intent");
   const catalogId = formData.get("catalogId");
+  const catalogName = formData.get("catalogName");
   const productId = formData.get("productId");
 
   if (intent === "save") {
@@ -88,7 +100,7 @@ export async function action({ request }) {
     await prisma.productOverride.deleteMany({ where: { catalogId, productId } });
   }
 
-  return null; // Return null to stay on page and refresh via revalidation
+  return null;
 }
 
 export default function CatalogOverrides() {
@@ -100,14 +112,12 @@ export default function CatalogOverrides() {
 
   const [pendingHidden, setPendingHidden] = useState({});
 
-  // CRITICAL: Robust logic to calculate hidden state
   useEffect(() => {
     const initial = {};
     products.forEach((p) => { 
       const manual = overridesMap[p.id] || [];
       const fromMaster = p.variants.nodes
         .filter(v => {
-          // Normalize SKUs for comparison (trim and uppercase)
           const variantSku = (v.sku || "").trim().toUpperCase();
           return globalHiddenSkus.some(gs => gs.trim().toUpperCase() === variantSku);
         })
@@ -154,12 +164,12 @@ export default function CatalogOverrides() {
     <s-page heading={`Product Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
       <s-section heading="Manage Visibility Exceptions">
         <s-paragraph>
-          <b>Red background = Hidden.</b> Ticking a variant overrides bulk rules. 
+          <b>Red background = Hidden.</b> This view only shows products currently assigned to this B2B catalog.
         </s-paragraph>
 
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "flex-end" }}>
           <div style={{ flex: 1 }}>
-            <s-text-field label="Search Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
+            <s-text-field label="Search Catalog Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
           </div>
           <s-button onClick={handleSearch}>Search</s-button>
         </s-stack>
