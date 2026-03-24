@@ -18,16 +18,37 @@ export async function loader({ request }) {
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
   
-  // We'll try to fetch via the Catalog Publication first
+  // Attempt to fetch via Catalog Publication
   const fullCatalogId = `gid://shopify/Catalog/${cleanId}`;
 
-  const response = await admin.graphql(
-    `query getCatalogProducts($id: ID!, $query: String) {
-      catalog(id: $id) {
-        id
-        title
-        publication {
-          catalogProducts(${paginationArgs}, query: $query) {
+  try {
+    const response = await admin.graphql(
+      `query getCatalogProducts($id: ID!, $query: String) {
+        catalog(id: $id) {
+          publication {
+            catalogProducts(${paginationArgs}, query: $query) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                id
+                title
+                variants(first: 50) { nodes { id title sku } }
+              }
+            }
+          }
+        }
+      }`,
+      { variables: { id: fullCatalogId, query: search || undefined } }
+    );
+
+    const resJson = await response.json();
+    let products = resJson.data?.catalog?.publication?.catalogProducts?.nodes;
+    let pageInfo = resJson.data?.catalog?.publication?.catalogProducts?.pageInfo;
+
+    // FALLBACK: If catalog query returns null or errors, use standard product list
+    if (!products) {
+      const fallbackResponse = await admin.graphql(
+        `query allProducts($query: String) {
+          products(${paginationArgs}, query: $query) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
@@ -35,58 +56,38 @@ export async function loader({ request }) {
               variants(first: 50) { nodes { id title sku } }
             }
           }
-        }
-      }
-    }`,
-    { variables: { id: fullCatalogId, query: search || undefined } }
-  );
+        }`,
+        { variables: { query: search || undefined } }
+      );
+      const fallbackData = await fallbackResponse.json();
+      products = fallbackData.data.products.nodes || [];
+      pageInfo = fallbackData.data.products.pageInfo || { hasNextPage: false, hasPreviousPage: false };
+    }
 
-  const resJson = await response.json();
-  let products = resJson.data?.catalog?.publication?.catalogProducts?.nodes;
-  let pageInfo = resJson.data?.catalog?.publication?.catalogProducts?.pageInfo;
+    const [overrides, rule] = await Promise.all([
+      prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
+      prisma.catalogRule.findUnique({ where: { catalogId: cleanId } }),
+    ]);
 
-  // FALLBACK: If the catalog query fails, use the standard product list so you aren't blocked
-  if (!products) {
-    console.log("Catalog filter failed, falling back to all products. Check Catalog ID:", fullCatalogId);
-    const fallbackResponse = await admin.graphql(
-      `query allProducts($query: String) {
-        products(${paginationArgs}, query: $query) {
-          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-          nodes {
-            id
-            title
-            variants(first: 50) { nodes { id title sku } }
-          }
-        }
-      }`,
-      { variables: { query: search || undefined } }
-    );
-    const fallbackData = await fallbackResponse.json();
-    products = fallbackData.data.products.nodes;
-    pageInfo = fallbackData.data.products.pageInfo;
-  }
+    const globalHiddenSkus = rule ? rule.hiddenVariantIds : [];
+    const hiddenVariantTypes = rule ? rule.hiddenVariantTypes : [];
+    const overridesMap = overrides.reduce((acc, o) => ({ ...acc, [o.productId]: o.hiddenVariantIds }), {});
 
-  const [overrides, rule] = await Promise.all([
-    prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
-    prisma.catalogRule.findUnique({ where: { catalogId: cleanId } }),
-  ]);
-
-  const globalHiddenSkus = rule ? rule.hiddenVariantIds : [];
-  const hiddenVariantTypes = rule ? rule.hiddenVariantTypes : [];
-  const overridesMap = overrides.reduce((acc, o) => ({ ...acc, [o.productId]: o.hiddenVariantIds }), {});
-
-  const allVariantTypes = new Set();
-  products.forEach((p) => {
-    p.variants.nodes.forEach((v) => {
-      const match = v.title.match(/^([A-Za-z]+)/);
-      if (match) allVariantTypes.add(match[1]);
+    const allVariantTypes = new Set();
+    products.forEach((p) => {
+      p.variants.nodes.forEach((v) => {
+        const match = v.title.match(/^([A-Za-z]+)/);
+        if (match) allVariantTypes.add(match[1]);
+      });
     });
-  });
 
-  return { catalogId: cleanId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, search, allVariantTypes: Array.from(allVariantTypes).sort(), pageInfo };
+    return { catalogId: cleanId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, search, allVariantTypes: Array.from(allVariantTypes).sort(), pageInfo };
+  } catch (error) {
+    console.error("Loader Error:", error);
+    throw new Response("Internal Server Error", { status: 500 });
+  }
 }
 
-// Keep your existing action and component code the same...
 export async function action({ request }) {
   await authenticate.admin(request);
   const formData = await request.formData();
@@ -121,21 +122,23 @@ export default function CatalogOverrides() {
 
   useEffect(() => {
     const initial = {};
-    products.forEach((p) => { 
-      const manual = overridesMap[p.id] || [];
-      const fromMaster = p.variants.nodes
-        .filter(v => {
-          const variantSku = (v.sku || "").trim().toUpperCase();
-          return globalHiddenSkus.some(gs => gs.trim().toUpperCase() === variantSku);
-        })
-        .map(v => v.id);
-      
-      const bulkType = p.variants.nodes
-        .filter(v => hiddenVariantTypes.some(t => v.title.toLowerCase().includes(t.toLowerCase())))
-        .map(v => v.id);
-      
-      initial[p.id] = Array.from(new Set([...manual, ...fromMaster, ...bulkType])); 
-    });
+    if (products) {
+      products.forEach((p) => { 
+        const manual = overridesMap[p.id] || [];
+        const fromMaster = p.variants.nodes
+          .filter(v => {
+            const variantSku = (v.sku || "").trim().toUpperCase();
+            return globalHiddenSkus.some(gs => gs.trim().toUpperCase() === variantSku);
+          })
+          .map(v => v.id);
+        
+        const bulkType = p.variants.nodes
+          .filter(v => hiddenVariantTypes.some(t => v.title.toLowerCase().includes(t.toLowerCase())))
+          .map(v => v.id);
+        
+        initial[p.id] = Array.from(new Set([...manual, ...fromMaster, ...bulkType])); 
+      });
+    }
     setPendingHidden(initial);
   }, [products, overridesMap, globalHiddenSkus, hiddenVariantTypes]);
 
@@ -143,6 +146,7 @@ export default function CatalogOverrides() {
   const [searchInput, setSearchInput] = useState(search);
 
   const filteredProducts = useMemo(() => {
+    if (!products) return [];
     if (variantFilter === "all") return products;
     return products.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
   }, [products, variantFilter]);
@@ -170,10 +174,6 @@ export default function CatalogOverrides() {
   return (
     <s-page heading={`Product Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
       <s-section heading="Manage Visibility Exceptions">
-        <s-paragraph>
-          <b>Red background = Hidden.</b> Ticking a variant overrides bulk rules. 
-        </s-paragraph>
-
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "flex-end" }}>
           <div style={{ flex: 1 }}>
             <s-text-field label="Search Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
