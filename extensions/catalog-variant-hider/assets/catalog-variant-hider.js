@@ -37,12 +37,18 @@
                 btn.style.opacity = "0.5";
               }
 
-              // 2. FORCE BADGES TO "SOLD OUT"
+              // 2. TRIGGER THE THEME'S NATIVE SOLD OUT BADGE
               container.querySelectorAll('.badge, .card__badge, .product-badge, .sale-badge, .grid-product__badge').forEach(badge => {
                 badge.textContent = 'Sold out';
-                badge.style.setProperty('background-color', '#333', 'important'); // Dark grey color
-                badge.style.setProperty('color', '#fff', 'important');
-                badge.style.setProperty('border-color', '#333', 'important');
+                // Remove the theme's 'sale' classes so it drops the red color
+                badge.classList.remove('badge--sale', 'card__badge--sale', 'sale-badge', 'grid-product__badge--sale');
+                // Add the theme's standard 'sold out' classes
+                badge.classList.add('badge--sold-out', 'card__badge--sold-out', 'sold-out-badge', 'grid-product__badge--sold-out');
+                
+                // Clear any inline styles that might be overriding the theme
+                badge.style.backgroundColor = '';
+                badge.style.color = '';
+                badge.style.borderColor = '';
               });
 
               // 3. AGGRESSIVELY HIDE PRICES & STOCK
@@ -53,7 +59,6 @@
                 const validTypesLower = validTypes.map(t => t.toLowerCase());
                 const classStr = (typeof item.className === 'string') ? item.className.toLowerCase() : "";
 
-                // If the element is related to Price, Stock, or a Hidden Variant Type -> Nuke it
                 if (
                   validTypesLower.some(t => itemText.includes(t)) || 
                   itemText.includes("pack size") || 
@@ -69,7 +74,7 @@
               });
 
             } else {
-              // MULTI VARIANT (Mackintosh's Case) - Just hide the Shipper buttons
+              // MULTI VARIANT - Just hide the Shipper buttons
               container.querySelectorAll('input, label, option, .swatch-element').forEach(item => {
                 const val = item.value || item.textContent || "";
                 if (validTypes.some(t => val.includes(t))) {
