@@ -22,13 +22,23 @@
 
         containers.forEach(container => {
           const content = container.textContent || "";
-          const isMatch = validTypes.some(type => content.includes(type)) || validIds.some(id => container.innerHTML.includes(id));
+          
+          // 1. Grab the selected SKU dynamically from Ignite's native elements
+          const currentSkuElement = container.querySelector('.product__sku, [data-sku]');
+          const currentSku = currentSkuElement ? currentSkuElement.textContent.trim() : "";
+          
+          const isForbiddenSkuSelected = validIds.includes(currentSku);
+
+          // 2. Add SKU matching to the main logic
+          const isMatch = validTypes.some(type => content.includes(type)) || isForbiddenSkuSelected || validIds.some(id => container.innerHTML.includes(id));
 
           if (isMatch) {
             const hasOtherOptions = content.includes("Bag") || content.includes("Outer") || container.querySelectorAll('input[type="radio"]:not([style*="none"])').length > 1;
 
-            if (!hasOtherOptions) {
-              // 1. UPDATE BUTTONS
+            // 3. FORCE disable if they land on a forbidden SKU exception
+            if (!hasOtherOptions || isForbiddenSkuSelected) {
+              
+              // A. UPDATE BUTTONS
               const btn = container.querySelector('button[name="add"], .add-to-cart, [type="submit"]');
               if (btn) {
                 btn.disabled = true;
@@ -36,13 +46,12 @@
                 btn.style.opacity = "0.5";
               }
 
-              // 2. INJECT NATIVE SIDE-BY-SIDE SOLD OUT BADGE
+              // B. INJECT NATIVE SIDE-BY-SIDE SOLD OUT BADGE
               const badges = container.querySelectorAll('.badge, .card__badge, .product-badge, .sale-badge, .grid-product__badge');
               let badgeParent = null;
               let templateBadge = null;
 
               badges.forEach(b => {
-                // Ignore wrappers by ensuring this element doesn't contain other badges inside it
                 if (!b.querySelector('.badge, .card__badge, .product-badge')) {
                   badgeParent = b.parentElement;
                   templateBadge = b;
@@ -50,25 +59,18 @@
               });
 
               if (badgeParent && templateBadge) {
-                // Make sure we haven't already added one
                 if (!badgeParent.textContent.toLowerCase().includes('sold out')) {
                   const soldOutBadge = templateBadge.cloneNode(true);
                   soldOutBadge.textContent = 'Sold out';
-                  
-                  // Swap theme sale classes for sold-out classes
                   soldOutBadge.className = templateBadge.className.replace(/sale/g, 'sold-out').replace(/Sale/g, 'SoldOut');
-                  
-                  // Force the dark grey theme colors to match your screenshot perfectly
                   soldOutBadge.style.setProperty('background-color', '#4a4a4a', 'important');
                   soldOutBadge.style.setProperty('color', '#ffffff', 'important');
                   soldOutBadge.style.setProperty('border-color', '#4a4a4a', 'important');
-                  
-                  // Add it right next to the sale badge
                   badgeParent.appendChild(soldOutBadge);
                 }
               }
 
-              // 3. AGGRESSIVELY HIDE PRICES & STOCK
+              // C. AGGRESSIVELY HIDE PRICES & STOCK
               const extras = container.querySelectorAll('label, .inventory, .stock, .quantity, .variant-wrapper, [id^="Inventory"], .price, [class*="price"], [class*="stock"], [class*="inventory"]');
               
               extras.forEach(item => {
@@ -91,10 +93,10 @@
               });
 
             } else {
-              // MULTI VARIANT - Hide Shipper buttons only
+              // MULTI VARIANT - Hide restricted buttons only
               container.querySelectorAll('input, label, option, .swatch-element').forEach(item => {
                 const val = item.value || item.textContent || "";
-                if (validTypes.some(t => val.includes(t))) {
+                if (validTypes.some(t => val.includes(t)) || validIds.some(id => val.includes(id))) {
                   item.style.setProperty('display', 'none', 'important');
                   const wrap = item.closest('.swatch-element, .variant-input, li');
                   if (wrap && !wrap.classList.contains('grid__item')) {
