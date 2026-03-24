@@ -18,14 +18,32 @@ export async function loader({ request }) {
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
   
-  // Attempt to fetch via Catalog Publication
   const fullCatalogId = `gid://shopify/Catalog/${cleanId}`;
 
   try {
+    // Attempt B2B Catalog Fetch
     const response = await admin.graphql(
       `query getCatalogProducts($id: ID!, $query: String) {
         catalog(id: $id) {
           publication {
+            id
+          }
+        }
+      }`,
+      { variables: { id: fullCatalogId } }
+    );
+
+    const resJson = await response.json();
+    const publicationId = resJson.data?.catalog?.publication?.id;
+
+    let products = [];
+    let pageInfo = { hasNextPage: false, hasPreviousPage: false };
+
+    if (publicationId) {
+      // If B2B publication exists, fetch its specific products
+      const b2bProdResponse = await admin.graphql(
+        `query getB2BProducts($id: ID!, $query: String) {
+          publication(id: $id) {
             catalogProducts(${paginationArgs}, query: $query) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
@@ -35,17 +53,14 @@ export async function loader({ request }) {
               }
             }
           }
-        }
-      }`,
-      { variables: { id: fullCatalogId, query: search || undefined } }
-    );
-
-    const resJson = await response.json();
-    let products = resJson.data?.catalog?.publication?.catalogProducts?.nodes;
-    let pageInfo = resJson.data?.catalog?.publication?.catalogProducts?.pageInfo;
-
-    // FALLBACK: If catalog query returns null or errors, use standard product list
-    if (!products) {
+        }`,
+        { variables: { id: publicationId, query: search || undefined } }
+      );
+      const b2bData = await b2bProdResponse.json();
+      products = b2bData.data?.publication?.catalogProducts?.nodes || [];
+      pageInfo = b2bData.data?.publication?.catalogProducts?.pageInfo || pageInfo;
+    } else {
+      // Fallback: Use standard products if it's a Market Catalog or General
       const fallbackResponse = await admin.graphql(
         `query allProducts($query: String) {
           products(${paginationArgs}, query: $query) {
@@ -60,8 +75,8 @@ export async function loader({ request }) {
         { variables: { query: search || undefined } }
       );
       const fallbackData = await fallbackResponse.json();
-      products = fallbackData.data.products.nodes || [];
-      pageInfo = fallbackData.data.products.pageInfo || { hasNextPage: false, hasPreviousPage: false };
+      products = fallbackData.data?.products?.nodes || [];
+      pageInfo = fallbackData.data?.products?.pageInfo || pageInfo;
     }
 
     const [overrides, rule] = await Promise.all([
@@ -81,10 +96,21 @@ export async function loader({ request }) {
       });
     });
 
-    return { catalogId: cleanId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, search, allVariantTypes: Array.from(allVariantTypes).sort(), pageInfo };
+    return { 
+      catalogId: cleanId, 
+      catalogName, 
+      products, 
+      overridesMap, 
+      globalHiddenSkus, 
+      hiddenVariantTypes, 
+      search, 
+      allVariantTypes: Array.from(allVariantTypes).sort(), 
+      pageInfo 
+    };
   } catch (error) {
     console.error("Loader Error:", error);
-    throw new Response("Internal Server Error", { status: 500 });
+    // Even on severe failure, return an empty state instead of crashing
+    return { catalogId: cleanId, catalogName, products: [], overridesMap: {}, globalHiddenSkus: [], hiddenVariantTypes: [], search: "", allVariantTypes: [], pageInfo: { hasNextPage: false, hasPreviousPage: false } };
   }
 }
 
