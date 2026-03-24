@@ -29,94 +29,127 @@ try {
     }
 
     function applyHiding(rules) {
-      let isAdjusting = false; // Prevents infinite loops when we programmatically click variants
+      let isAdjusting = false; 
 
       const apply = () => {
         if (isAdjusting) return;
+        isAdjusting = true; 
 
-        console.log("🚫 [CatalogVariantHider] Hiding elements...");
+        // 1. Locate the master product form (Universal Shopify standard)
+        const productForms = document.querySelectorAll('form[action^="/cart/add"]');
         
-        // 1. Hide matching elements
-        document.querySelectorAll("input, label, .variant-picker__option-value, option").forEach(el => {
-          const val = el.value || el.textContent.trim();
-          const isTypeMatch = rules.hiddenVariantTypes?.some(type => val.startsWith(type));
-          const isIdMatch = rules.hiddenVariantIds?.includes(val);
+        productForms.forEach(form => {
+          let allVariantsHidden = true;
+          let requiresChangeTrigger = false;
+          let triggerElement = null;
 
-          if (isTypeMatch || isIdMatch) {
-            const wrapper = el.closest(".swatch-element, .variant-option, li, label, .variant-input") || el;
-            wrapper.style.display = "none";
+          // --- SCENARIO A: Theme uses standard Dropdowns (<select>) ---
+          form.querySelectorAll('select').forEach(select => {
+            let hasVisibleOptionInThisSelect = false;
+
+            Array.from(select.options).forEach(opt => {
+              const val = opt.textContent.trim();
+              const isMatch = rules.hiddenVariantTypes?.some(type => val.startsWith(type)) || rules.hiddenVariantIds?.includes(val) || rules.hiddenVariantIds?.includes(opt.value);
+              
+              if (isMatch) {
+                opt.style.display = "none";
+                opt.disabled = true; // Crucial for dropdowns
+              } else {
+                opt.style.display = "";
+                opt.disabled = false;
+                hasVisibleOptionInThisSelect = true;
+              }
+            });
+
+            if (hasVisibleOptionInThisSelect) {
+              allVariantsHidden = false;
+              
+              // Auto-select fallback if the currently selected option is hidden
+              const selectedOpt = select.options[select.selectedIndex];
+              if (!selectedOpt || selectedOpt.disabled || selectedOpt.style.display === "none") {
+                const firstVisible = Array.from(select.options).find(o => !o.disabled && o.style.display !== "none");
+                if (firstVisible) {
+                  select.value = firstVisible.value;
+                  requiresChangeTrigger = true;
+                  triggerElement = select;
+                }
+              }
+            }
+          });
+
+          // --- SCENARIO B: Theme uses Radio Buttons / Pills ---
+          // Group radios by name to handle multiple option groups (e.g., Size, Color)
+          const radioGroups = {};
+          form.querySelectorAll('input[type="radio"]').forEach(radio => {
+            if (!radioGroups[radio.name]) radioGroups[radio.name] = [];
+            radioGroups[radio.name].push(radio);
+          });
+
+          Object.keys(radioGroups).forEach(groupName => {
+            let hasVisibleRadioInThisGroup = false;
+            const radios = radioGroups[groupName];
+
+            radios.forEach(radio => {
+              const label = form.querySelector(`label[for="${radio.id}"]`);
+              const val = radio.value || (label ? label.textContent.trim() : "");
+              const isMatch = rules.hiddenVariantTypes?.some(type => val.startsWith(type)) || rules.hiddenVariantIds?.includes(val);
+
+              // Find the generic parent wrapper if it exists (li, fieldset, or a generic div)
+              const wrapper = radio.closest('li, fieldset, div[class*="swatch"], div[class*="variant"]');
+
+              if (isMatch) {
+                radio.style.display = "none";
+                if (label) label.style.display = "none";
+                if (wrapper && wrapper.children.length <= 2) wrapper.style.display = "none"; // Only hide wrapper if it strictly belongs to this radio
+              } else {
+                hasVisibleRadioInThisGroup = true;
+              }
+            });
+
+            if (hasVisibleRadioInThisGroup) {
+              allVariantsHidden = false;
+
+              // Auto-select fallback if the currently checked radio is hidden
+              const checkedRadio = radios.find(r => r.checked);
+              if (!checkedRadio || checkedRadio.style.display === "none") {
+                const firstVisible = radios.find(r => r.style.display !== "none");
+                if (firstVisible) {
+                  firstVisible.checked = true;
+                  requiresChangeTrigger = true;
+                  triggerElement = firstVisible;
+                }
+              }
+            }
+          });
+
+          // --- FINALIZE: Disable Cart OR Trigger Auto-Select ---
+          const hasInputs = form.querySelectorAll('select, input[type="radio"]').length > 0;
+          const addToCartBtns = form.querySelectorAll('[type="submit"], button[name="add"]');
+
+          if (hasInputs && allVariantsHidden) {
+            addToCartBtns.forEach(btn => {
+              btn.disabled = true;
+              btn.textContent = 'Unavailable';
+              btn.style.opacity = '0.5';
+            });
+            // Hide generic quantity selectors
+            const qtyContainers = form.querySelectorAll('input[name="quantity"], quantity-input');
+            qtyContainers.forEach(qty => {
+               const wrap = qty.closest('div');
+               if(wrap) wrap.style.display = 'none';
+            });
+          } else if (requiresChangeTrigger && triggerElement) {
+            console.log("🔄 [CatalogVariantHider] Auto-selecting fallback variant.");
+            triggerElement.dispatchEvent(new Event('change', { bubbles: true }));
+            if (triggerElement.type === 'radio') triggerElement.click(); // Ensures visual swatches update
           }
         });
 
-        // 2. Handle Auto-Select and Sold Out states
-        isAdjusting = true; 
-        
-        const addToCartBtn = document.querySelector('button[name="add"], #AddToCart, .add-to-cart');
-        
-        const disableCart = () => {
-          if (addToCartBtn && !addToCartBtn.disabled) {
-            console.log("🚫 [CatalogVariantHider] All variants hidden. Disabling cart button.");
-            addToCartBtn.disabled = true;
-            addToCartBtn.textContent = 'Unavailable';
-            addToCartBtn.style.opacity = '0.5';
-            
-            // Hide quantity selector
-            const qty = document.querySelector('.quantity-wrapper, quantity-input, .product-form__quantity, input[name="quantity"]');
-            if (qty) {
-                const qtyWrapper = qty.closest('.quantity-wrapper, .product-form__input') || qty;
-                qtyWrapper.style.display = 'none';
-            }
-          }
-        };
-
-        // Handle Radio Buttons / Visual Swatches
-        const variantRadios = Array.from(document.querySelectorAll('input[type="radio"][name*="option"]'));
-        if (variantRadios.length > 0) {
-          const visibleRadios = variantRadios.filter(radio => {
-            const wrapper = radio.closest(".swatch-element, .variant-option, li, label, .variant-input") || radio;
-            return wrapper.style.display !== "none";
-          });
-
-          if (visibleRadios.length === 0) {
-            disableCart();
-          } else {
-            const currentlySelected = variantRadios.find(r => r.checked);
-            const wrapper = currentlySelected ? (currentlySelected.closest(".swatch-element, .variant-option, li, label, .variant-input") || currentlySelected) : null;
-            
-            if (wrapper && wrapper.style.display === "none") {
-              console.log(`🔄 [CatalogVariantHider] Default hidden. Auto-selecting: ${visibleRadios[0].value}`);
-              visibleRadios[0].checked = true;
-              visibleRadios[0].click(); // Triggers the theme's JS
-              visibleRadios[0].dispatchEvent(new Event('change', { bubbles: true }));
-            }
-          }
-        }
-
-        // Handle Select Dropdowns
-        const variantSelects = Array.from(document.querySelectorAll('select[name*="option"], select[name="id"]'));
-        if (variantSelects.length > 0) {
-           variantSelects.forEach(select => {
-             const visibleOptions = Array.from(select.options).filter(opt => opt.style.display !== "none");
-             
-             if (visibleOptions.length === 0) {
-                disableCart();
-             } else {
-                const selectedOption = select.options[select.selectedIndex];
-                if (selectedOption && selectedOption.style.display === "none") {
-                    console.log(`🔄 [CatalogVariantHider] Default hidden. Auto-selecting: ${visibleOptions[0].value}`);
-                    select.value = visibleOptions[0].value;
-                    select.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-             }
-           });
-        }
-
-        // Resume observer logic after theme JS finishes rendering
-        setTimeout(() => { isAdjusting = false; }, 50);
+        setTimeout(() => { isAdjusting = false; }, 100);
       };
       
       apply();
-      // Watch for theme changes
+      // Watch for dynamic theme changes (AJAX cart, quick view, etc.)
       new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
     }
 
