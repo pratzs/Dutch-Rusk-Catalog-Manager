@@ -35,25 +35,55 @@ try {
         if (isAdjusting) return;
         isAdjusting = true;
 
-        // 1. WIDE NET HIDING (Visual Hiding of Options)
-        document.querySelectorAll("input, label, .variant-picker__option-value, option").forEach(el => {
-          const val = el.value || el.textContent?.trim();
+        // Clean rules to prevent accidental empty-string matches
+        const validTypes = (rules.hiddenVariantTypes || []).filter(t => t && t.trim() !== "");
+        const validIds = rules.hiddenVariantIds || [];
+
+        // 1. PRECISION HIDING (Generic HTML targeting, no collateral damage)
+        document.querySelectorAll('input[type="radio"], select option, label, .variant-picker__option-value').forEach(el => {
+          // Ignore non-variant inputs like quantity
+          if (el.name && el.name.toLowerCase().includes('quantity')) return;
+
+          const val = el.value || el.textContent?.trim() || "";
           if (!val) return;
 
-          // UPGRADE: Use .includes() to catch things like "BLUE18_Shipper" when rule is "Shipper"
-          const isTypeMatch = rules.hiddenVariantTypes?.some(type => val.includes(type));
-          const isIdMatch = rules.hiddenVariantIds?.includes(val);
+          const isTypeMatch = validTypes.some(type => val.includes(type.trim()));
+          const isIdMatch = validIds.includes(val);
 
           if (isTypeMatch || isIdMatch) {
             el.dataset.cvhHidden = "true"; 
             
-            const wrapper = el.closest(".swatch-element, .variant-option, li, label, .variant-input") || el;
-            if (wrapper && wrapper.tagName !== 'BODY') {
-                wrapper.style.display = "none";
+            if (el.tagName === 'OPTION') {
+                el.disabled = true;
+                el.style.display = "none";
+            } else if (el.tagName === 'INPUT' && el.type === 'radio') {
+                el.style.display = "none";
+                // Standard HTML: Hide this exact input's linked label
+                if (el.id) {
+                    const linkedLabel = document.querySelector(`label[for="${el.id}"]`);
+                    if (linkedLabel) {
+                        linkedLabel.style.display = "none";
+                        linkedLabel.dataset.cvhHidden = "true";
+                    }
+                }
+            } else {
+                // If it's a loose label or custom span
+                el.style.display = "none";
             }
-            if (el.tagName === 'OPTION') el.disabled = true;
+
+            // GROUP PROTECTION: Only hide the parent wrapper if it belongs EXCLUSIVELY to this variant
+            const wrapper = el.closest(".swatch-element, .variant-option, li, .variant-input");
+            if (wrapper && wrapper.tagName !== 'BODY') {
+                const siblings = wrapper.querySelectorAll('input[type="radio"], option');
+                if (siblings.length <= 1) {
+                    wrapper.style.display = "none";
+                }
+            }
           } else {
-            el.dataset.cvhHidden = "false";
+            // Ensure non-matching elements remain flagged as visible
+            if (el.dataset.cvhHidden !== "true") {
+                el.dataset.cvhHidden = "false";
+            }
           }
         });
 
@@ -64,20 +94,19 @@ try {
              
              let shouldDisable = false;
 
-             const allRadios = Array.from(form.querySelectorAll('input[type="radio"]'));
+             const allRadios = Array.from(form.querySelectorAll('input[type="radio"]')).filter(r => !r.name?.toLowerCase().includes('quantity'));
              const allOptions = Array.from(form.querySelectorAll('select option'));
              
-             // SCENARIO A: Multi-Variant Product (Radios or Selects exist)
+             // SCENARIO A: Multi-Variant Product
              if (allRadios.length > 0 || allOptions.length > 0) {
                  let allInteractiveHidden = true;
 
-                 // Radios
+                 // Check Radios
                  const radioGroups = {};
                  allRadios.forEach(r => {
-                     if (r.name) {
-                         if (!radioGroups[r.name]) radioGroups[r.name] = [];
-                         radioGroups[r.name].push(r);
-                     }
+                     const name = r.name || 'unnamed';
+                     if (!radioGroups[name]) radioGroups[name] = [];
+                     radioGroups[name].push(r);
                  });
 
                  Object.keys(radioGroups).forEach(groupName => {
@@ -85,7 +114,7 @@ try {
                      const visibleRadios = group.filter(r => r.dataset.cvhHidden !== "true");
                      
                      if (visibleRadios.length > 0) {
-                         allInteractiveHidden = false; // Found a visible variant!
+                         allInteractiveHidden = false; // We found a visible variant (like "Bag"!)
                          const checkedRadio = group.find(r => r.checked);
                          
                          if (checkedRadio && checkedRadio.dataset.cvhHidden === "true") {
@@ -97,16 +126,16 @@ try {
                      }
                  });
 
-                 // Selects
+                 // Check Selects
                  form.querySelectorAll('select').forEach(select => {
                      const options = Array.from(select.options);
-                     const visibleOptions = options.filter(o => o.dataset.cvhHidden !== "true");
+                     const visibleOptions = options.filter(o => o.dataset.cvhHidden !== "true" && !o.disabled);
                      
                      if (visibleOptions.length > 0) {
                          allInteractiveHidden = false;
                          const selectedOpt = select.options[select.selectedIndex];
                          
-                         if (selectedOpt && selectedOpt.dataset.cvhHidden === "true") {
+                         if (selectedOpt && (selectedOpt.dataset.cvhHidden === "true" || selectedOpt.disabled)) {
                              console.log(`🔄 [CatalogVariantHider] Auto-selecting dropdown: ${visibleOptions[0].value}`);
                              select.value = visibleOptions[0].value;
                              select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -116,16 +145,11 @@ try {
 
                  shouldDisable = allInteractiveHidden;
              } 
-             // SCENARIO B: Collection Card or Single-Variant Product (No visual options)
+             // SCENARIO B: Single Variant Fallback
              else {
                  const hiddenIdInput = form.querySelector('input[name="id"]');
                  const currentId = hiddenIdInput ? hiddenIdInput.value : null;
-                 const containerText = container.textContent || "";
-                 
-                 const idMatch = currentId && rules.hiddenVariantIds?.includes(currentId);
-                 const typeMatch = rules.hiddenVariantTypes?.some(type => containerText.includes(type));
-
-                 if (idMatch || typeMatch) {
+                 if (currentId && validIds.includes(currentId)) {
                      shouldDisable = true;
                  }
              }
@@ -140,8 +164,6 @@ try {
                       btn.textContent = isCollectionCard ? 'Back soon' : 'Sold out';
                       btn.style.opacity = '0.5';
 
-                      // Aggressively hide Inventory, Quantities, and Variant Labels
-                      // Safety check included so we don't accidentally hide the submit button container
                       const elementsToHide = container.querySelectorAll('.inventory-pill, .inventory, .stock-level, [id^="Inventory"], .quantity-wrapper, quantity-input, .product-form__quantity, variant-radios, variant-selects, fieldset, .variant-wrapper, .product-form__input, .product-form__controls-group');
                       
                       elementsToHide.forEach(el => {
@@ -157,7 +179,6 @@ try {
       };
       
       apply();
-      // Watch for DOM changes (like AJAX loading)
       new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
     }
 
