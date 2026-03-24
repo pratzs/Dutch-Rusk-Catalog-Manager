@@ -1,6 +1,6 @@
 import { redirect } from "react-router";
 import { useLoaderData, useNavigate, useSubmit, useNavigation } from "react-router";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -99,21 +99,21 @@ export default function CatalogOverrides() {
   const navigation = useNavigation();
   const isSaving = navigation.state === "submitting";
 
-  // State to track manual checkboxes
-  const [pendingHidden, setPendingHidden] = useState(() => {
+  // Use state but refresh it when loader data changes (pagination/search)
+  const [pendingHidden, setPendingHidden] = useState({});
+
+  useEffect(() => {
     const initial = {};
     products.forEach((p) => { 
-      // Merging: Current manual overrides + Master Rule SKUs that belong to this product
       const manual = overridesMap[p.id] || [];
       const masterForThisProduct = p.variants.nodes
         .filter(v => globalHiddenSkus.includes(v.sku))
         .map(v => v.id);
       
-      // Combine them so the UI shows them as Ticked/Red immediately
       initial[p.id] = Array.from(new Set([...manual, ...masterForThisProduct])); 
     });
-    return initial;
-  });
+    setPendingHidden(initial);
+  }, [products, overridesMap, globalHiddenSkus]);
 
   const [variantFilter, setVariantFilter] = useState("all");
   const [searchInput, setSearchInput] = useState(search);
@@ -149,10 +149,9 @@ export default function CatalogOverrides() {
       <s-section heading="Manage Visibility Exceptions">
         <s-paragraph>
           <b>Red background = Hidden.</b> Ticking a variant overrides bulk rules. 
-          {globalHiddenSkus.length > 0 && " Some variants are pre-selected based on the Locksmith migration."}
+          {globalHiddenSkus.length > 0 && " Locksmith migration rules are active for this catalog."}
         </s-paragraph>
 
-        {/* Search */}
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "flex-end" }}>
           <div style={{ flex: 1 }}>
             <s-text-field label="Search Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
@@ -160,7 +159,6 @@ export default function CatalogOverrides() {
           <s-button onClick={handleSearch}>Search</s-button>
         </s-stack>
 
-        {/* Filters */}
         <s-stack direction="inline" gap="tight" style={{ marginBottom: "20px", flexWrap: "wrap" }}>
           <s-text>Filter:</s-text>
           <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter("all")}>All</s-button>
@@ -169,13 +167,10 @@ export default function CatalogOverrides() {
           ))}
         </s-stack>
 
-        {/* Product Grid */}
         <s-stack direction="block" gap="base">
           {filteredProducts.map((product) => {
             const currentHidden = pendingHidden[product.id] || [];
             const savedHidden = overridesMap[product.id] || [];
-            
-            // Logic for visual changes
             const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
 
             return (
@@ -183,8 +178,9 @@ export default function CatalogOverrides() {
                 <s-text fontWeight="bold" style={{ marginBottom: "12px", display: "block" }}>{product.title}</s-text>
                 <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
                   {product.variants.nodes.map((variant) => {
-                    const isBulkTypeHidden = hiddenVariantTypes.some(t => variant.title.includes(t));
-                    const isHidden = currentHidden.includes(variant.id) || isBulkTypeHidden;
+                    const isBulkTypeHidden = hiddenVariantTypes.some(t => variant.title.startsWith(t));
+                    const isGlobalHidden = globalHiddenSkus.includes(variant.sku);
+                    const isHidden = currentHidden.includes(variant.id) || isBulkTypeHidden || isGlobalHidden;
 
                     return (
                       <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
@@ -203,7 +199,6 @@ export default function CatalogOverrides() {
           })}
         </s-stack>
 
-        {/* Pagination */}
         <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
           <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
           <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&after=${pageInfo.endCursor}`)}>Next →</s-button>
