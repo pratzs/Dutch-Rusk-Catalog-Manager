@@ -14,54 +14,37 @@ export async function loader({ request }) {
   const before = url.searchParams.get("before") || null;
 
   if (!catalogId) return redirect("/app/catalog-manager");
+  const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
 
-  const paginationArgs = before
-    ? `last: 50, before: "${before}"`
-    : after
-    ? `first: 50, after: "${after}"`
-    : `first: 50`;
+  const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
 
   const response = await admin.graphql(
-    search
-      ? `query searchProducts($query: String!) {
-          products(${paginationArgs}, query: $query) {
-            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-            nodes {
-              id
-              title
-              variants(first: 50) { nodes { id title } }
-            }
-          }
-        }`
-      : `{
-          products(${paginationArgs}) {
-            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-            nodes {
-              id
-              title
-              variants(first: 50) { nodes { id title } }
-            }
-          }
-        }`,
-    search ? { variables: { query: search } } : {}
+    `query searchProducts($query: String) {
+      products(${paginationArgs}, query: $query) {
+        pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+        nodes {
+          id
+          title
+          variants(first: 50) { nodes { id title sku } }
+        }
+      }
+    }`,
+    { variables: { query: search || undefined } }
   );
 
   const data = await response.json();
   const products = data.data.products.nodes;
   const pageInfo = data.data.products.pageInfo;
 
-  const overrides = await prisma.productOverride.findMany({
-    where: { catalogId },
-  });
-  const overridesMap = {};
-  overrides.forEach((o) => {
-    overridesMap[o.productId] = o.hiddenVariantIds;
-  });
+  const [overrides, rule] = await Promise.all([
+    prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
+    prisma.catalogRule.findUnique({ where: { catalogId: cleanId } }),
+  ]);
 
-  const rule = await prisma.catalogRule.findUnique({
-    where: { catalogId },
-  });
+  const globalHiddenSkus = rule ? rule.hiddenVariantIds : [];
   const hiddenVariantTypes = rule ? rule.hiddenVariantTypes : [];
+  const overridesMap = {};
+  overrides.forEach((o) => { overridesMap[o.productId] = o.hiddenVariantIds; });
 
   const allVariantTypes = new Set();
   products.forEach((p) => {
@@ -71,16 +54,7 @@ export async function loader({ request }) {
     });
   });
 
-  return {
-    catalogId,
-    catalogName,
-    products,
-    overridesMap,
-    hiddenVariantTypes,
-    search,
-    allVariantTypes: Array.from(allVariantTypes).sort(),
-    pageInfo,
-  };
+  return { catalogId: cleanId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, search, allVariantTypes: Array.from(allVariantTypes).sort(), pageInfo };
 }
 
 export async function action({ request }) {
@@ -101,28 +75,14 @@ export async function action({ request }) {
   }
 
   if (intent === "delete") {
-    await prisma.productOverride.deleteMany({
-      where: { catalogId, productId },
-    });
+    await prisma.productOverride.deleteMany({ where: { catalogId, productId } });
   }
 
-  return redirect(
-    `/app/catalog-overrides?catalogId=${encodeURIComponent(catalogId)}&catalogName=${encodeURIComponent(catalogName)}`
-  );
+  return redirect(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogId)}&catalogName=${encodeURIComponent(catalogName)}`);
 }
 
 export default function CatalogOverrides() {
-  const {
-    catalogId,
-    catalogName,
-    products,
-    overridesMap,
-    hiddenVariantTypes,
-    search,
-    allVariantTypes,
-    pageInfo,
-  } = useLoaderData();
-
+  const { catalogId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, search, allVariantTypes, pageInfo } = useLoaderData();
   const navigate = useNavigate();
   const submit = useSubmit();
   const navigation = useNavigation();
@@ -130,9 +90,7 @@ export default function CatalogOverrides() {
 
   const [pendingHidden, setPendingHidden] = useState(() => {
     const initial = {};
-    products.forEach((p) => {
-      initial[p.id] = overridesMap[p.id] ? [...overridesMap[p.id]] : [];
-    });
+    products.forEach((p) => { initial[p.id] = overridesMap[p.id] ? [...overridesMap[p.id]] : []; });
     return initial;
   });
 
@@ -141,20 +99,13 @@ export default function CatalogOverrides() {
 
   const filteredProducts = useMemo(() => {
     if (variantFilter === "all") return products;
-    return products.filter((p) =>
-      p.variants.nodes.some((v) => v.title.startsWith(variantFilter))
-    );
+    return products.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
   }, [products, variantFilter]);
 
   const handleVariantToggle = (productId, variantId) => {
     setPendingHidden((prev) => {
       const current = prev[productId] || [];
-      return {
-        ...prev,
-        [productId]: current.includes(variantId)
-          ? current.filter((v) => v !== variantId)
-          : [...current, variantId],
-      };
+      return { ...prev, [productId]: current.includes(variantId) ? current.filter((v) => v !== variantId) : [...current, variantId] };
     });
   };
 
@@ -164,257 +115,55 @@ export default function CatalogOverrides() {
     formData.append("catalogId", catalogId);
     formData.append("catalogName", catalogName);
     formData.append("productId", productId);
-    (pendingHidden[productId] || []).forEach((v) =>
-      formData.append("hiddenVariantIds", v)
-    );
+    (pendingHidden[productId] || []).forEach((v) => formData.append("hiddenVariantIds", v));
     submit(formData, { method: "post" });
-  };
-
-  const handleDelete = (productId) => {
-    const formData = new FormData();
-    formData.append("intent", "delete");
-    formData.append("catalogId", catalogId);
-    formData.append("catalogName", catalogName);
-    formData.append("productId", productId);
-    submit(formData, { method: "post" });
-  };
-
-  const handleSearch = () => {
-    navigate(
-      `/app/catalog-overrides?catalogId=${encodeURIComponent(catalogId)}&catalogName=${encodeURIComponent(catalogName)}&search=${encodeURIComponent(searchInput)}`
-    );
   };
 
   return (
-    <s-page
-      heading={`Product Overrides: ${catalogName}`}
-      back-action-url="/app/catalog-manager"
-    >
-      <s-section heading="Find & override variants per product">
+    <s-page heading={`Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
+      <s-section heading="Exceptions per Product">
         <s-paragraph>
-          {hiddenVariantTypes.length > 0 ? (
-            <>
-              Bulk rule hides:{" "}
-              <strong>{hiddenVariantTypes.join(", ")}</strong>. Use overrides
-              below to make exceptions per product.
-            </>
-          ) : (
-            <>
-              No bulk rules set. Use overrides to hide specific variants on
-              individual products.
-            </>
-          )}
+          Red variants are hidden. {globalHiddenSkus.length > 0 ? "Some are hidden by Master SKU rules." : ""}
         </s-paragraph>
-
-        <s-stack
-          direction="inline"
-          gap="base"
-          style={{ marginTop: "12px", alignItems: "flex-end" }}
-        >
+        
+        <s-stack direction="inline" gap="base" style={{ marginTop: "12px", alignItems: "flex-end" }}>
           <div style={{ flex: 1 }}>
-            <s-text-field
-              label="Search by product name"
-              placeholder="e.g. Peppermint, Cadbury..."
-              value={searchInput}
-              onInput={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            />
+            <s-text-field label="Search Product" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} />
           </div>
-          <s-button variant="secondary" onClick={handleSearch}>
-            Search
-          </s-button>
-          {search && (
-            <s-button
-              variant="secondary"
-              onClick={() => {
-                setSearchInput("");
-                navigate(
-                  `/app/catalog-overrides?catalogId=${encodeURIComponent(catalogId)}&catalogName=${encodeURIComponent(catalogName)}`
-                );
-              }}
-            >
-              Clear
-            </s-button>
-          )}
+          <s-button onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${searchInput}`)}>Search</s-button>
         </s-stack>
-
-        <s-stack
-          direction="inline"
-          gap="tight"
-          style={{ marginTop: "12px", flexWrap: "wrap" }}
-        >
-          <s-text>Filter by variant type:</s-text>
-          <s-button
-            variant={variantFilter === "all" ? "primary" : "secondary"}
-            size="slim"
-            onClick={() => setVariantFilter("all")}
-          >
-            All
-          </s-button>
-          {allVariantTypes.map((type) => (
-            <s-button
-              key={type}
-              variant={variantFilter === type ? "primary" : "secondary"}
-              size="slim"
-              onClick={() => setVariantFilter(type)}
-            >
-              {type}
-            </s-button>
-          ))}
-        </s-stack>
-
-        <s-text style={{ marginTop: "8px" }} tone="subdued">
-          Showing {filteredProducts.length} of {products.length} products
-          {variantFilter !== "all" ? ` with "${variantFilter}" variants` : ""}
-          {search ? ` matching "${search}"` : ""}
-        </s-text>
 
         <s-stack direction="block" gap="base" style={{ marginTop: "16px" }}>
-          {filteredProducts.length === 0 ? (
-            <s-paragraph>
-              No products found. Try a different search or filter.
-            </s-paragraph>
-          ) : (
-            filteredProducts.map((product) => {
-              const hasOverride = !!overridesMap[product.id];
-              const currentHidden = pendingHidden[product.id] || [];
-              const isDirty =
-                JSON.stringify([...currentHidden].sort()) !==
-                JSON.stringify([...(overridesMap[product.id] || [])].sort());
+          {filteredProducts.map((product) => {
+            const hasOverride = !!overridesMap[product.id];
+            const currentHidden = pendingHidden[product.id] || [];
+            const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...(overridesMap[product.id] || [])].sort());
 
-              return (
-                <s-box
-                  key={product.id}
-                  padding="base"
-                  borderWidth="base"
-                  borderRadius="base"
-                  background={hasOverride ? "highlight" : "subdued"}
-                >
-                  <s-stack
-                    direction="inline"
-                    gap="base"
-                    style={{ marginBottom: "12px" }}
-                  >
-                    <s-stack
-                      direction="block"
-                      gap="extraTight"
-                      style={{ flex: 1 }}
-                    >
-                      <s-text fontWeight="bold">{product.title}</s-text>
-                      <s-text tone="subdued">
-                        {hasOverride
-                          ? `Override active — ${overridesMap[product.id].length} variant(s) hidden`
-                          : "No override — bulk rules apply"}
-                      </s-text>
-                    </s-stack>
-                    {hasOverride && (
-                      <s-button
-                        variant="secondary"
-                        tone="critical"
-                        size="slim"
-                        onClick={() => handleDelete(product.id)}
-                      >
-                        Remove Override
-                      </s-button>
-                    )}
-                  </s-stack>
+            return (
+              <s-box key={product.id} padding="base" borderWidth="base" borderRadius="base" background={hasOverride ? "highlight" : "subdued"}>
+                <s-text fontWeight="bold" style={{ marginBottom: "8px", display: "block" }}>{product.title}</s-text>
+                <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
+                  {product.variants.nodes.map((variant) => {
+                    const isGloballyHidden = globalHiddenSkus.includes(variant.sku);
+                    const isBulkTypeHidden = hiddenVariantTypes.some(t => variant.title.includes(t));
+                    const isHidden = currentHidden.includes(variant.id) || isGloballyHidden || isBulkTypeHidden;
 
-                  <s-stack
-                    direction="inline"
-                    gap="tight"
-                    style={{ flexWrap: "wrap" }}
-                  >
-                    {product.variants.nodes.map((variant) => (
-                      <s-box
-                        key={variant.id}
-                        padding="tight"
-                        borderWidth="base"
-                        borderRadius="base"
-                        background={
-                          currentHidden.includes(variant.id)
-                            ? "critical-subdued"
-                            : "surface"
-                        }
-                      >
-                        <s-checkbox
-                          label={variant.title}
-                          checked={currentHidden.includes(variant.id)}
-                          onInput={() =>
-                            handleVariantToggle(product.id, variant.id)
-                          }
-                        />
+                    return (
+                      <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
+                        <s-checkbox label={variant.title} checked={isHidden} onInput={() => handleVariantToggle(product.id, variant.id)} />
                       </s-box>
-                    ))}
-                  </s-stack>
-
-                  {isDirty && (
-                    <div
-                      style={{
-                        marginTop: "12px",
-                        display: "flex",
-                        justifyContent: "flex-end",
-                      }}
-                    >
-                      <s-button
-                        variant="primary"
-                        onClick={() => handleSave(product.id)}
-                        disabled={isSaving}
-                      >
-                        {isSaving ? "Saving..." : "Save Override"}
-                      </s-button>
-                    </div>
-                  )}
-                </s-box>
-              );
-            })
-          )}
+                    );
+                  })}
+                </s-stack>
+                {isDirty && (
+                  <div style={{ marginTop: "12px", display: "flex", justifyContent: "flex-end" }}>
+                    <s-button variant="primary" onClick={() => handleSave(product.id)} disabled={isSaving}>Save Override</s-button>
+                  </div>
+                )}
+              </s-box>
+            );
+          })}
         </s-stack>
-
-        {/* Pagination */}
-        <s-stack
-          direction="inline"
-          gap="base"
-          style={{ marginTop: "16px", justifyContent: "space-between" }}
-        >
-          <s-button
-            variant="secondary"
-            disabled={!pageInfo.hasPreviousPage}
-            onClick={() =>
-              navigate(
-                `/app/catalog-overrides?catalogId=${encodeURIComponent(catalogId)}&catalogName=${encodeURIComponent(catalogName)}&search=${encodeURIComponent(search)}&before=${pageInfo.startCursor}`
-              )
-            }
-          >
-            ← Previous 50
-          </s-button>
-          <s-button
-            variant="secondary"
-            disabled={!pageInfo.hasNextPage}
-            onClick={() =>
-              navigate(
-                `/app/catalog-overrides?catalogId=${encodeURIComponent(catalogId)}&catalogName=${encodeURIComponent(catalogName)}&search=${encodeURIComponent(search)}&after=${pageInfo.endCursor}`
-              )
-            }
-          >
-            Next 50 →
-          </s-button>
-        </s-stack>
-      </s-section>
-
-      <s-section slot="aside" heading="How overrides work">
-        <s-paragraph>
-          Tick a variant to hide it for this catalog only. Overrides take
-          priority over bulk rules.
-        </s-paragraph>
-        <s-paragraph>
-          The Save button only appears when you make a change. Red background =
-          hidden. Click "Remove Override" to go back to bulk rules.
-        </s-paragraph>
-        <s-paragraph>
-          Use the variant type filter buttons to quickly find all products that
-          have a specific variant — e.g. click "Shipper" to see only products
-          with Shipper variants.
-        </s-paragraph>
       </s-section>
     </s-page>
   );

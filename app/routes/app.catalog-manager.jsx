@@ -35,20 +35,22 @@ export default function CatalogManager() {
 
   return (
     <s-page heading="Catalog Variant Manager">
-      <s-section heading="Your Catalogs">
+      <s-section heading="Your B2B Catalogs">
         <s-paragraph>
-          Select a catalog to manage which variant types are hidden from its customers.
+          Manage visibility rules for your B2B customers. "Manage Rules" sets bulk category blocks, while "Product Overrides" handles specific items.
         </s-paragraph>
 
         <s-stack direction="block" gap="base">
           {catalogs.length === 0 ? (
             <s-paragraph>
-              No catalogs found. Create B2B catalogs in your Shopify admin first.
+              No catalogs found. Create B2B catalogs in Shopify Admin first.
             </s-paragraph>
           ) : (
             catalogs.map((catalog) => {
-              const rule = rulesMap[catalog.id];
+              const rule = rulesMap[catalog.id.split("/").pop()];
               const hiddenTypes = rule ? rule.hiddenVariantTypes : [];
+              const hiddenSkusCount = rule?.hiddenVariantIds?.length || 0;
+
               return (
                 <s-box
                   key={catalog.id}
@@ -60,10 +62,13 @@ export default function CatalogManager() {
                   <s-stack direction="inline" gap="base" align="center">
                     <s-stack direction="block" gap="extraTight" style={{ flex: 1 }}>
                       <s-text fontWeight="bold">{catalog.title}</s-text>
-                      <s-text>
-                        {hiddenTypes.length > 0
-                          ? `Hiding: ${hiddenTypes.join(", ")}`
-                          : "No rules set — all variants visible"}
+                      <s-text tone="subdued">
+                        {hiddenTypes.length > 0 ? `Types: ${hiddenTypes.join(", ")}` : "No bulk types hidden"}
+                        {hiddenSkusCount > 0 && (
+                          <span style={{ marginLeft: '8px', color: '#bf0711', fontWeight: '600' }}>
+                            • {hiddenSkusCount} SKU Exceptions active
+                          </span>
+                        )}
                       </s-text>
                     </s-stack>
                     <s-stack direction="inline" gap="tight">

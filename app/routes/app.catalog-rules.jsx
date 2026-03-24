@@ -57,7 +57,7 @@ export async function loader({ request }) {
     catalogId,
     catalogName,
     hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],
-    hiddenVariantIds: rule ? rule.hiddenVariantIds : [], // <--- FETCH SKUs
+    hiddenVariantIds: rule ? rule.hiddenVariantIds : [],
     variantTypes,
   };
 }
@@ -68,8 +68,6 @@ export async function action({ request }) {
   let catalogId = formData.get("catalogId");
   const catalogName = formData.get("catalogName");
   const hiddenVariantTypes = formData.getAll("hiddenVariantTypes");
-  
-  // GET SKUs from the new text field and clean them up
   const skusRaw = formData.get("hiddenVariantIds") || "";
   const hiddenVariantIds = skusRaw.split(",").map(s => s.trim()).filter(s => s !== "");
 
@@ -77,17 +75,8 @@ export async function action({ request }) {
 
   await prisma.catalogRule.upsert({
     where: { catalogId: cleanCatalogId },
-    update: { 
-        hiddenVariantTypes, 
-        hiddenVariantIds, // <--- SAVE SKUs
-        catalogName 
-    },
-    create: { 
-        catalogId: cleanCatalogId, 
-        catalogName, 
-        hiddenVariantTypes, 
-        hiddenVariantIds // <--- SAVE SKUs
-    },
+    update: { hiddenVariantTypes, hiddenVariantIds, catalogName },
+    create: { catalogId: cleanCatalogId, catalogName, hiddenVariantTypes, hiddenVariantIds },
   });
 
   return redirect("/app/catalog-manager");
@@ -96,7 +85,7 @@ export async function action({ request }) {
 export default function CatalogRules() {
   const { catalogId, catalogName, hiddenVariantTypes, hiddenVariantIds, variantTypes } = useLoaderData();
   const [selected, setSelected] = useState(hiddenVariantTypes);
-  const [skuList, setSkuList] = useState(hiddenVariantIds.join(", ")); // Local state for the text field
+  const [skuList, setSkuList] = useState(hiddenVariantIds.join(", "));
   
   const submit = useSubmit();
   const navigate = useNavigate();
@@ -113,21 +102,15 @@ export default function CatalogRules() {
     const formData = new FormData();
     formData.append("catalogId", catalogId);
     formData.append("catalogName", catalogName);
-    formData.append("hiddenVariantIds", skuList); // Send the SKU string to the action
+    formData.append("hiddenVariantIds", skuList);
     selected.forEach((v) => formData.append("hiddenVariantTypes", v));
     submit(formData, { method: "post" });
   };
 
   return (
-    <s-page
-      heading={`Rules for: ${catalogName}`}
-      back-action-url="/app/catalog-manager"
-    >
-      <s-section heading="Hide Variant Types (Bulk)">
-        <s-paragraph>
-          Hide entire categories (e.g. all Shippers) for this catalog.
-        </s-paragraph>
-
+    <s-page heading={`Rules for: ${catalogName}`} back-action-url="/app/catalog-manager">
+      <s-section heading="Step 1: Bulk Variant Types">
+        <s-paragraph>Hide all variants of a certain type (e.g., hide all "Shipper" variants) for this catalog.</s-paragraph>
         <s-stack direction="block" gap="tight" style={{ marginTop: "12px" }}>
           {variantTypes.map((type) => (
             <s-checkbox
@@ -140,40 +123,19 @@ export default function CatalogRules() {
         </s-stack>
       </s-section>
 
-      {/* NEW SECTION FOR SKUs */}
-      <s-section heading="Restricted SKUs (Individual Exceptions)" style={{ marginTop: "24px" }}>
-        <s-paragraph>
-          Paste specific SKUs (e.g. 415319_Bag) separated by commas to hide them even if their type is allowed.
-        </s-paragraph>
-        
+      <s-section heading="Step 2: Restricted SKUs (The Locksmith Migration)" style={{ marginTop: "24px" }}>
+        <s-paragraph>Paste individual SKUs below to hide them. These act as global exceptions across the entire catalog.</s-paragraph>
         <textarea
-          style={{ 
-            width: "100%", 
-            minHeight: "150px", 
-            marginTop: "12px", 
-            padding: "8px",
-            fontFamily: "monospace",
-            borderRadius: "4px",
-            border: "1px solid #ccc" 
-          }}
+          style={{ width: "100%", minHeight: "200px", marginTop: "12px", padding: "12px", fontFamily: "monospace", borderRadius: "6px", border: "1px solid #ccc" }}
           value={skuList}
           onChange={(e) => setSkuList(e.target.value)}
-          placeholder="Enter SKUs separated by commas..."
+          placeholder="Paste SKUs here, separated by commas..."
         />
       </s-section>
 
       <div style={{ marginTop: "24px", display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-        <s-button
-          variant="secondary"
-          onClick={() => navigate("/app/catalog-manager")}
-        >
-          Cancel
-        </s-button>
-        <s-button
-          variant="primary"
-          onClick={handleSave}
-          disabled={isSaving}
-        >
+        <s-button variant="secondary" onClick={() => navigate("/app/catalog-manager")}>Cancel</s-button>
+        <s-button variant="primary" onClick={handleSave} disabled={isSaving}>
           {isSaving ? "Saving..." : "Save Rules"}
         </s-button>
       </div>
