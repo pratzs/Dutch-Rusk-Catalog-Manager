@@ -119,21 +119,32 @@ export default function CatalogOverrides() {
     submit(formData, { method: "post" });
   };
 
+  const handleSearch = () => {
+    navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${searchInput}`);
+  };
+
   return (
-    <s-page heading={`Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
-      <s-section heading="Exceptions per Product">
-        <s-paragraph>
-          Red variants are hidden. {globalHiddenSkus.length > 0 ? "Some are hidden by Master SKU rules." : ""}
-        </s-paragraph>
-        
-        <s-stack direction="inline" gap="base" style={{ marginTop: "12px", alignItems: "flex-end" }}>
+    <s-page heading={`Product Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
+      <s-section heading="Find & Override Variants">
+        {/* Search Bar */}
+        <s-stack direction="inline" gap="base" style={{ marginBottom: "16px", alignItems: "flex-end" }}>
           <div style={{ flex: 1 }}>
-            <s-text-field label="Search Product" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} />
+            <s-text-field label="Search Product Name" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
           </div>
-          <s-button onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${searchInput}`)}>Search</s-button>
+          <s-button onClick={handleSearch}>Search</s-button>
         </s-stack>
 
-        <s-stack direction="block" gap="base" style={{ marginTop: "16px" }}>
+        {/* Variant Type Filters */}
+        <s-stack direction="inline" gap="tight" style={{ marginBottom: "16px", flexWrap: "wrap" }}>
+          <s-text>Filter by Type:</s-text>
+          <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter("all")}>All</s-button>
+          {allVariantTypes.map((type) => (
+            <s-button key={type} variant={variantFilter === type ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter(type)}>{type}</s-button>
+          ))}
+        </s-stack>
+
+        {/* Product List */}
+        <s-stack direction="block" gap="base">
           {filteredProducts.map((product) => {
             const hasOverride = !!overridesMap[product.id];
             const currentHidden = pendingHidden[product.id] || [];
@@ -163,6 +174,12 @@ export default function CatalogOverrides() {
               </s-box>
             );
           })}
+        </s-stack>
+
+        {/* Pagination */}
+        <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
+          <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&before=${pageInfo.startCursor}`)}>← Previous 50</s-button>
+          <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&after=${pageInfo.endCursor}`)}>Next 50 →</s-button>
         </s-stack>
       </s-section>
     </s-page>
