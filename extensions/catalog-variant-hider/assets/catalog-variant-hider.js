@@ -25,7 +25,6 @@
           const isMatch = validTypes.some(type => content.includes(type)) || validIds.some(id => container.innerHTML.includes(id));
 
           if (isMatch) {
-            // Check if there are "safe" variants available (like Bag or Outer)
             const hasOtherOptions = content.includes("Bag") || content.includes("Outer") || container.querySelectorAll('input[type="radio"]:not([style*="none"])').length > 1;
 
             if (!hasOtherOptions) {
@@ -37,19 +36,37 @@
                 btn.style.opacity = "0.5";
               }
 
-              // 2. TRIGGER THE THEME'S NATIVE SOLD OUT BADGE
-              container.querySelectorAll('.badge, .card__badge, .product-badge, .sale-badge, .grid-product__badge').forEach(badge => {
-                badge.textContent = 'Sold out';
-                // Remove the theme's 'sale' classes so it drops the red color
-                badge.classList.remove('badge--sale', 'card__badge--sale', 'sale-badge', 'grid-product__badge--sale');
-                // Add the theme's standard 'sold out' classes
-                badge.classList.add('badge--sold-out', 'card__badge--sold-out', 'sold-out-badge', 'grid-product__badge--sold-out');
-                
-                // Clear any inline styles that might be overriding the theme
-                badge.style.backgroundColor = '';
-                badge.style.color = '';
-                badge.style.borderColor = '';
+              // 2. INJECT NATIVE SIDE-BY-SIDE SOLD OUT BADGE
+              const badges = container.querySelectorAll('.badge, .card__badge, .product-badge, .sale-badge, .grid-product__badge');
+              let badgeParent = null;
+              let templateBadge = null;
+
+              badges.forEach(b => {
+                // Ignore wrappers by ensuring this element doesn't contain other badges inside it
+                if (!b.querySelector('.badge, .card__badge, .product-badge')) {
+                  badgeParent = b.parentElement;
+                  templateBadge = b;
+                }
               });
+
+              if (badgeParent && templateBadge) {
+                // Make sure we haven't already added one
+                if (!badgeParent.textContent.toLowerCase().includes('sold out')) {
+                  const soldOutBadge = templateBadge.cloneNode(true);
+                  soldOutBadge.textContent = 'Sold out';
+                  
+                  // Swap theme sale classes for sold-out classes
+                  soldOutBadge.className = templateBadge.className.replace(/sale/g, 'sold-out').replace(/Sale/g, 'SoldOut');
+                  
+                  // Force the dark grey theme colors to match your screenshot perfectly
+                  soldOutBadge.style.setProperty('background-color', '#4a4a4a', 'important');
+                  soldOutBadge.style.setProperty('color', '#ffffff', 'important');
+                  soldOutBadge.style.setProperty('border-color', '#4a4a4a', 'important');
+                  
+                  // Add it right next to the sale badge
+                  badgeParent.appendChild(soldOutBadge);
+                }
+              }
 
               // 3. AGGRESSIVELY HIDE PRICES & STOCK
               const extras = container.querySelectorAll('label, .inventory, .stock, .quantity, .variant-wrapper, [id^="Inventory"], .price, [class*="price"], [class*="stock"], [class*="inventory"]');
@@ -74,7 +91,7 @@
               });
 
             } else {
-              // MULTI VARIANT - Just hide the Shipper buttons
+              // MULTI VARIANT - Hide Shipper buttons only
               container.querySelectorAll('input, label, option, .swatch-element').forEach(item => {
                 const val = item.value || item.textContent || "";
                 if (validTypes.some(t => val.includes(t))) {
