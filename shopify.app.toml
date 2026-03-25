@@ -1,4 +1,5 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
 client_id = "c19c401d15d011936f4c7db6715514b3"
 name = "dutch-rusk-catalog-manager"
 application_url = "https://dutch-rusk-catalog-manager.onrender.com"
@@ -9,15 +10,22 @@ automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2026-04"
-  [[webhooks.subscriptions]]
-  topics = [ "app/uninstalled" ]
-  uri = "/webhooks/app/uninstalled"
+
   [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
 [access_scopes]
-scopes = "write_metaobject_definitions,write_metaobjects,write_products,read_products"
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_metaobject_definitions,write_metaobjects,read_products,write_products,read_publications,write_publications"
+optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [ "https://dutch-rusk-catalog-manager.onrender.com/api/auth/callback" ]
+redirect_urls = [
+  "https://dutch-rusk-catalog-manager.onrender.com/api/auth/callback"
+]
