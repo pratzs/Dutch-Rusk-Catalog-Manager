@@ -13,21 +13,20 @@ export async function loader({ request }) {
     }, {});
 
     const reportData = {};
-    const validGidRegex = /^gid:\/\/shopify\/Product\/\d+$/;
+    
+    // 1. FILTER: Only allow IDs that are correctly formatted GIDs
+    const validOverrides = overrides.filter(o => 
+      o.productId && 
+      o.productId.startsWith("gid://shopify/Product/")
+    );
 
-    overrides.forEach((o) => {
-      // STRICT REGEX CHECK: Only allow real Product GIDs
-      if (!validGidRegex.test(o.productId)) {
-        console.log(`Skipping invalid ID found in DB: ${o.productId}`);
-        return;
-      }
-
+    validOverrides.forEach((o) => {
       if (!reportData[o.productId]) {
         reportData[o.productId] = {
           productId: o.productId,
           catalogs: [],
           hiddenVariantCount: 0,
-          title: "Product Not Found"
+          title: "Product ID: " + o.productId.split("/").pop() // Fallback title
         };
       }
       
@@ -39,8 +38,7 @@ export async function loader({ request }) {
       reportData[o.productId].hiddenVariantCount += o.hiddenVariantIds.length;
     });
 
-    // Extract keys and ensure NO junk data passed to Shopify
-    const productGids = Object.keys(reportData).filter(id => id.startsWith("gid://")).slice(0, 250); 
+    const productGids = Object.keys(reportData).slice(0, 250); 
     
     if (productGids.length > 0) {
       const response = await admin.graphql(
@@ -52,27 +50,25 @@ export async function loader({ request }) {
         { variables: { ids: productGids } }
       );
       
-      const json = await response.json();
+      const resJson = await response.json();
       
-      // If Shopify still complains, catch it here
-      if (json.errors) {
-        console.error("Shopify GID Error:", json.errors);
-        return { report: [], error: "Shopify rejected one or more Product IDs. Clean up invalid entries in the database." };
+      // 2. CHECK: If Shopify returns any errors, we just skip the titles 
+      // instead of crashing the whole page.
+      if (!resJson.errors && resJson.data?.nodes) {
+        resJson.data.nodes.forEach(node => {
+          if (node && node.id && reportData[node.id]) {
+            reportData[node.id].title = node.title;
+          }
+        });
       }
-
-      const nodes = json.data?.nodes || [];
-      nodes.forEach(node => {
-        if (node && node.id && reportData[node.id]) {
-          reportData[node.id].title = node.title;
-        }
-      });
     }
 
     const formattedReport = Object.values(reportData).sort((a, b) => a.title.localeCompare(b.title));
 
+    // Return a plain object (The safest way in RRv7)
     return { report: formattedReport, error: null };
   } catch (error) {
-    console.error("Audit Loader Error:", error);
-    return { report: [], error: error.message };
+    console.error("Audit Loader Fatal Error:", error);
+    return { report: [], error: "A server error occurred. Check Render logs." };
   }
 }
