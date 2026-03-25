@@ -17,65 +17,65 @@ export async function loader({ request }) {
 
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
-  const fullCatalogId = `gid://shopify/Catalog/${cleanId}`;
-
+  
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
 
-  // --- ATTEMPT 1: Catalog-Specific Fetch ---
-  try {
-    const response = await admin.graphql(
-      `query getCatalogProducts($id: ID!, $query: String) {
-        catalog(id: $id) {
-          publication {
-            catalogProducts(${paginationArgs}, query: $query) {
-              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-              nodes {
-                id
-                title
-                variants(first: 50) { nodes { id title sku } }
+  // --- LOGIC: FIRST TRY B2B, THEN AUTOMATICALLY FALLBACK TO GLOBAL ---
+  // We use a specific check to see if this is likely a B2B catalog ID
+  const isB2BId = catalogId.includes("CompanyLocationCatalog");
+
+  if (isB2BId) {
+    try {
+      const b2bResponse = await admin.graphql(
+        `query getB2BProducts($id: ID!, $query: String) {
+          catalog(id: $id) {
+            publication {
+              catalogProducts(${paginationArgs}, query: $query) {
+                pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+                nodes {
+                  id
+                  title
+                  variants(first: 50) { nodes { id title sku } }
+                }
               }
             }
           }
+        }`,
+        { variables: { id: catalogId, query: search || undefined } }
+      );
+      const b2bJson = await b2bResponse.json();
+      if (!b2bJson.errors) {
+        products = b2bJson.data?.catalog?.publication?.catalogProducts?.nodes || [];
+        pageInfo = b2bJson.data?.catalog?.publication?.catalogProducts?.pageInfo || pageInfo;
+      }
+    } catch (e) {
+      console.log("B2B Fetch failed, moving to standard fetch.");
+    }
+  }
+
+  // --- FALLBACK: FETCH STANDARD PRODUCTS ---
+  // If B2B fetch failed, was skipped (Market Catalog), or returned 0 products
+  if (products.length === 0) {
+    const standardResponse = await admin.graphql(
+      `query allProducts($query: String) {
+        products(${paginationArgs}, query: $query) {
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+          nodes {
+            id
+            title
+            variants(first: 50) { nodes { id title sku } }
+          }
         }
       }`,
-      { variables: { id: fullCatalogId, query: search || undefined } }
+      { variables: { query: search || undefined } }
     );
-
-    const resJson = await response.json();
-    // Only use these products if there are NO errors and we actually got data
-    if (!resJson.errors && resJson.data?.catalog?.publication?.catalogProducts?.nodes) {
-      products = resJson.data.catalog.publication.catalogProducts.nodes;
-      pageInfo = resJson.data.catalog.publication.catalogProducts.pageInfo;
-    }
-  } catch (e) {
-    console.log("Catalog query skipped or failed, moving to fallback.");
+    const standardJson = await standardResponse.json();
+    products = standardJson.data?.products?.nodes || [];
+    pageInfo = standardJson.data?.products?.pageInfo || pageInfo;
   }
 
-  // --- ATTEMPT 2: Global Fallback (If Attempt 1 failed or returned 0) ---
-  if (products.length === 0) {
-    try {
-      const fallbackResponse = await admin.graphql(
-        `query allProducts($query: String) {
-          products(${paginationArgs}, query: $query) {
-            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-            nodes {
-              id
-              title
-              variants(first: 50) { nodes { id title sku } }
-            }
-          }
-        }`,
-        { variables: { query: search || undefined } }
-      );
-      const fallbackData = await fallbackResponse.json();
-      products = fallbackData.data?.products?.nodes || [];
-      pageInfo = fallbackData.data?.products?.pageInfo || pageInfo;
-    } catch (fallbackError) {
-      console.error("Critical: Global fallback failed", fallbackError);
-    }
-  }
-
+  // Fetch overrides and rules
   const [overrides, rule] = await Promise.all([
     prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
     prisma.catalogRule.findUnique({ where: { catalogId: cleanId } }),
