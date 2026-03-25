@@ -16,15 +16,19 @@ export async function loader({ request }) {
       return acc;
     }, {});
 
+    // --- DEBUG INFO ---
+    const rawDbCount = overrides.length;
+    const sampleIds = overrides.slice(0, 5).map(o => o.productId);
+    // ------------------
+
     const reportData = {};
     
     overrides.forEach((o) => {
-      // SKIP the known junk data
-      if (o.productId === 'GLOBAL_MIGRATION') return;
+      if (o.productId === 'GLOBAL_MIGRATION' || !o.productId) return;
 
-      // DATA RECOVERY: If it's a raw number, turn it into a GID
+      // Handle raw numbers or GIDs
       let fullGid = o.productId;
-      if (!o.productId.startsWith("gid://")) {
+      if (!o.productId.toString().startsWith("gid://")) {
         fullGid = `gid://shopify/Product/${o.productId}`;
       }
 
@@ -42,10 +46,9 @@ export async function loader({ request }) {
         reportData[fullGid].catalogs.push(catName);
       }
       
-      reportData[fullGid].hiddenVariantCount += o.hiddenVariantIds.length;
+      reportData[fullGid].hiddenVariantCount += (o.hiddenVariantIds || []).length;
     });
 
-    // Shopify only allows 250 nodes per query
     const productGids = Object.keys(reportData).slice(0, 250); 
     
     if (productGids.length > 0) {
@@ -59,7 +62,6 @@ export async function loader({ request }) {
       );
       
       const resJson = await response.json();
-      
       if (!resJson.errors && resJson.data?.nodes) {
         resJson.data.nodes.forEach(node => {
           if (node && node.id && reportData[node.id]) {
@@ -71,11 +73,47 @@ export async function loader({ request }) {
 
     const formattedReport = Object.values(reportData).sort((a, b) => a.title.localeCompare(b.title));
 
-    return { report: formattedReport, error: null };
+    return { 
+      report: formattedReport, 
+      error: null,
+      debug: { rawDbCount, sampleIds } // Sending debug info to the UI
+    };
   } catch (error) {
     console.error("Audit Loader Fatal Error:", error);
-    return { report: [], error: "A server error occurred while retrieving seeded data." };
+    return { report: [], error: error.message };
   }
+}
+
+export default function AuditReport() {
+  const { report, error, debug } = useLoaderData();
+  const navigate = useNavigate();
+
+  return (
+    <s-page heading="Global Audit Report" back-action-url="/app/catalog-manager">
+      <s-layout>
+        <s-layout-section>
+          
+          {/* DEBUG PANEL */}
+          <s-box padding="base" background="highlight" style={{ marginBottom: "20px" }}>
+            <s-text fontWeight="bold">Database Check:</s-text>
+            <s-text>Raw records in DB: {debug?.rawDbCount || 0}</s-text>
+            <s-text>Sample IDs: {JSON.stringify(debug?.sampleIds)}</s-text>
+          </s-box>
+
+          <s-box padding="base" borderWidth="base" borderRadius="base" background="surface">
+            {/* ... rest of your table UI code from before ... */}
+            <s-block-stack gap="base">
+               <s-text variant="headingMd">Visibility Overview ({report.length} Products Found)</s-text>
+               {/* Insert the same table logic here as we had before */}
+               {report.map(item => (
+                 <div key={item.productId}>{item.title} - {item.catalogs.join(', ')}</div>
+               ))}
+            </s-block-stack>
+          </s-box>
+        </s-layout-section>
+      </s-layout>
+    </s-page>
+  );
 }
 
 export default function AuditReport() {
