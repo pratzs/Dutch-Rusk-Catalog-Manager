@@ -3,7 +3,6 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
 export async function loader({ request }) {
-  // Verifying session with Shopify
   const { admin } = await authenticate.admin(request);
 
   try {
@@ -19,30 +18,34 @@ export async function loader({ request }) {
 
     const reportData = {};
     
-    // 1. FILTER: Only allow IDs that are correctly formatted Shopify Product GIDs
-    const validOverrides = overrides.filter(o => 
-      o.productId && 
-      o.productId.startsWith("gid://shopify/Product/")
-    );
+    overrides.forEach((o) => {
+      // SKIP the known junk data
+      if (o.productId === 'GLOBAL_MIGRATION') return;
 
-    validOverrides.forEach((o) => {
-      if (!reportData[o.productId]) {
-        reportData[o.productId] = {
-          productId: o.productId,
+      // DATA RECOVERY: If it's a raw number, turn it into a GID
+      let fullGid = o.productId;
+      if (!o.productId.startsWith("gid://")) {
+        fullGid = `gid://shopify/Product/${o.productId}`;
+      }
+
+      if (!reportData[fullGid]) {
+        reportData[fullGid] = {
+          productId: fullGid,
           catalogs: [],
           hiddenVariantCount: 0,
-          title: "Product ID: " + o.productId.split("/").pop() // Fallback title
+          title: "Product ID: " + fullGid.split("/").pop()
         };
       }
       
       const catName = catalogMap[o.catalogId] || `Catalog ${o.catalogId}`;
-      if (!reportData[o.productId].catalogs.includes(catName)) {
-        reportData[o.productId].catalogs.push(catName);
+      if (!reportData[fullGid].catalogs.includes(catName)) {
+        reportData[fullGid].catalogs.push(catName);
       }
       
-      reportData[o.productId].hiddenVariantCount += o.hiddenVariantIds.length;
+      reportData[fullGid].hiddenVariantCount += o.hiddenVariantIds.length;
     });
 
+    // Shopify only allows 250 nodes per query
     const productGids = Object.keys(reportData).slice(0, 250); 
     
     if (productGids.length > 0) {
@@ -57,7 +60,6 @@ export async function loader({ request }) {
       
       const resJson = await response.json();
       
-      // Fail-soft: if Shopify returns errors for one ID, still show the rest
       if (!resJson.errors && resJson.data?.nodes) {
         resJson.data.nodes.forEach(node => {
           if (node && node.id && reportData[node.id]) {
@@ -72,7 +74,7 @@ export async function loader({ request }) {
     return { report: formattedReport, error: null };
   } catch (error) {
     console.error("Audit Loader Fatal Error:", error);
-    return { report: [], error: "A server error occurred. Check Render logs." };
+    return { report: [], error: "A server error occurred while retrieving seeded data." };
   }
 }
 
