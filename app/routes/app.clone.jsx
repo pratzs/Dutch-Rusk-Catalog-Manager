@@ -8,7 +8,6 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
   
   try {
-    // Fetch ALL catalogs directly from Shopify so the dropdowns are never empty
     const response = await admin.graphql(`
       query {
         catalogs(first: 50) {
@@ -21,6 +20,12 @@ export async function loader({ request }) {
     `);
 
     const data = await response.json();
+    
+    // Check if Shopify returned an API error
+    if (data.errors) {
+      return { catalogs: [], debugError: JSON.stringify(data.errors) };
+    }
+
     const shopifyCatalogs = data.data?.catalogs?.nodes || [];
 
     // Format them for our database logic (extracting just the numeric ID)
@@ -32,10 +37,10 @@ export async function loader({ request }) {
     // Sort alphabetically so your team can find them easily
     formattedCatalogs.sort((a, b) => a.catalogName.localeCompare(b.catalogName));
 
-    return { catalogs: formattedCatalogs };
+    return { catalogs: formattedCatalogs, debugError: null };
   } catch (error) {
     console.error("Failed to fetch catalogs for clone dropdown:", error);
-    return { catalogs: [] };
+    return { catalogs: [], debugError: error.message };
   }
 }
 
@@ -51,11 +56,9 @@ export async function action({ request }) {
   }
 
   try {
-    // A. Get the rules we want to copy
     const sourceOverrides = await prisma.productOverride.findMany({ where: { catalogId: sourceId } });
     const sourceRule = await prisma.catalogRule.findUnique({ where: { catalogId: sourceId } });
 
-    // B. Copy the Bulk Rules (The Tags)
     if (sourceRule) {
       await prisma.catalogRule.upsert({
         where: { catalogId: targetId },
@@ -72,9 +75,7 @@ export async function action({ request }) {
       });
     }
 
-    // C. Copy the Specific Product Exceptions (The Red Boxes)
     if (sourceOverrides.length > 0) {
-      // Wipe the target clean first so we don't mix old and new rules
       await prisma.productOverride.deleteMany({ where: { catalogId: targetId } });
 
       const newOverrides = sourceOverrides.map(o => ({
@@ -83,7 +84,6 @@ export async function action({ request }) {
         hiddenVariantIds: o.hiddenVariantIds
       }));
 
-      // Insert the cloned data
       await prisma.productOverride.createMany({ data: newOverrides });
     }
 
@@ -96,7 +96,7 @@ export async function action({ request }) {
 
 // 3. FRONTEND: The User Interface
 export default function CloneCatalog() {
-  const { catalogs } = useLoaderData();
+  const { catalogs, debugError } = useLoaderData();
   const actionData = useActionData();
   const submit = useSubmit();
   const navigation = useNavigation();
@@ -133,7 +133,7 @@ export default function CloneCatalog() {
   // Convert Shopify catalogs into Dropdown options
   const catalogOptions = [
     { label: "Select a catalog...", value: "" },
-    ...catalogs.map(c => ({ label: c.catalogName, value: c.catalogId }))
+    ...(catalogs || []).map(c => ({ label: c.catalogName, value: c.catalogId }))
   ];
 
   return (
@@ -147,6 +147,13 @@ export default function CloneCatalog() {
                 Instantly copy all bulk rules and specific product exceptions from an existing setup to another catalog. 
                 Warning: This will overwrite any existing rules on the target catalog.
               </s-text>
+
+              {/* --- ON-SCREEN DEBUGGER --- */}
+              <div style={{ padding: "10px", backgroundColor: "#f4f6f8", borderRadius: "4px", margin: "10px 0" }}>
+                <s-text fontWeight="bold">System Status:</s-text>
+                <s-text>Found {catalogs?.length || 0} catalogs.</s-text>
+                {debugError && <s-text style={{ color: "red", fontWeight: "bold" }}>Error: {debugError}</s-text>}
+              </div>
 
               {actionData?.error && (
                 <s-banner tone="critical">{actionData.error}</s-banner>
