@@ -21,20 +21,17 @@ export async function loader({ request }) {
 
     const data = await response.json();
     
-    // Check if Shopify returned an API error
     if (data.errors) {
       return { catalogs: [], debugError: JSON.stringify(data.errors) };
     }
 
     const shopifyCatalogs = data.data?.catalogs?.nodes || [];
 
-    // Format them for our database logic (extracting just the numeric ID)
     const formattedCatalogs = shopifyCatalogs.map(c => ({
       catalogId: c.id.split("/").pop(), 
       catalogName: c.title
     }));
 
-    // Sort alphabetically so your team can find them easily
     formattedCatalogs.sort((a, b) => a.catalogName.localeCompare(b.catalogName));
 
     return { catalogs: formattedCatalogs, debugError: null };
@@ -130,12 +127,6 @@ export default function CloneCatalog() {
     submit(formData, { method: "post" });
   };
 
-  // Convert Shopify catalogs into Dropdown options
-  const catalogOptions = [
-    { label: "Select a catalog...", value: "" },
-    ...(catalogs || []).map(c => ({ label: c.catalogName, value: c.catalogId }))
-  ];
-
   return (
     <s-page heading="Clone Catalog Rules" back-action-url="/app/catalog-manager">
       <s-layout>
@@ -148,13 +139,6 @@ export default function CloneCatalog() {
                 Warning: This will overwrite any existing rules on the target catalog.
               </s-text>
 
-              {/* --- ON-SCREEN DEBUGGER --- */}
-              <div style={{ padding: "10px", backgroundColor: "#f4f6f8", borderRadius: "4px", margin: "10px 0" }}>
-                <s-text fontWeight="bold">System Status:</s-text>
-                <s-text>Found {catalogs?.length || 0} catalogs.</s-text>
-                {debugError && <s-text style={{ color: "red", fontWeight: "bold" }}>Error: {debugError}</s-text>}
-              </div>
-
               {actionData?.error && (
                 <s-banner tone="critical">{actionData.error}</s-banner>
               )}
@@ -165,22 +149,37 @@ export default function CloneCatalog() {
                 </s-banner>
               )}
 
-              <div style={{ marginTop: "16px", marginBottom: "16px" }}>
-                <s-select 
-                  label="1. Copy rules FROM (Source)" 
-                  options={catalogOptions} 
+              {/* FOOLPROOF STANDARD DROPDOWNS */}
+              <div style={{ marginTop: "16px", marginBottom: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <label style={{ fontWeight: "bold" }}>1. Copy rules FROM (Source)</label>
+                <select 
                   value={source} 
-                  onChange={setSource} 
-                />
+                  onChange={(e) => setSource(e.target.value)}
+                  style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ccc", width: "100%", height: "38px" }}
+                >
+                  <option value="">-- Select a catalog --</option>
+                  {(catalogs || []).map(c => (
+                    <option key={`source-${c.catalogId}`} value={c.catalogId}>
+                      {c.catalogName}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div style={{ marginBottom: "24px" }}>
-                <s-select 
-                  label="2. Apply rules TO (Target)" 
-                  options={catalogOptions} 
+              <div style={{ marginBottom: "24px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <label style={{ fontWeight: "bold" }}>2. Apply rules TO (Target)</label>
+                <select 
                   value={target} 
-                  onChange={setTarget} 
-                />
+                  onChange={(e) => setTarget(e.target.value)}
+                  style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ccc", width: "100%", height: "38px" }}
+                >
+                  <option value="">-- Select a catalog --</option>
+                  {(catalogs || []).map(c => (
+                    <option key={`target-${c.catalogId}`} value={c.catalogId}>
+                      {c.catalogName}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <s-stack direction="inline" gap="base">
