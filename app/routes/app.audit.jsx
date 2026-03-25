@@ -13,9 +13,14 @@ export async function loader({ request }) {
     }, {});
 
     const reportData = {};
+    const validGidRegex = /^gid:\/\/shopify\/Product\/\d+$/;
+
     overrides.forEach((o) => {
-      // SAFETY CHECK: Only process real Shopify Product GIDs
-      if (!o.productId.includes("gid://shopify/Product/")) return;
+      // STRICT REGEX CHECK: Only allow real Product GIDs
+      if (!validGidRegex.test(o.productId)) {
+        console.log(`Skipping invalid ID found in DB: ${o.productId}`);
+        return;
+      }
 
       if (!reportData[o.productId]) {
         reportData[o.productId] = {
@@ -34,8 +39,8 @@ export async function loader({ request }) {
       reportData[o.productId].hiddenVariantCount += o.hiddenVariantIds.length;
     });
 
-    // Only query Shopify for the valid GIDs we found
-    const productGids = Object.keys(reportData).slice(0, 250); 
+    // Extract keys and ensure NO junk data passed to Shopify
+    const productGids = Object.keys(reportData).filter(id => id.startsWith("gid://")).slice(0, 250); 
     
     if (productGids.length > 0) {
       const response = await admin.graphql(
@@ -48,8 +53,14 @@ export async function loader({ request }) {
       );
       
       const json = await response.json();
-      const nodes = json.data?.nodes || [];
       
+      // If Shopify still complains, catch it here
+      if (json.errors) {
+        console.error("Shopify GID Error:", json.errors);
+        return { report: [], error: "Shopify rejected one or more Product IDs. Clean up invalid entries in the database." };
+      }
+
+      const nodes = json.data?.nodes || [];
       nodes.forEach(node => {
         if (node && node.id && reportData[node.id]) {
           reportData[node.id].title = node.title;
