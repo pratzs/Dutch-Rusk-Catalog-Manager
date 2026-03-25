@@ -9,7 +9,6 @@ export async function loader({ request }) {
   const url = new URL(request.url);
   const catalogId = url.searchParams.get("catalogId");
   const catalogName = url.searchParams.get("catalogName");
-  const search = url.searchParams.get("search") || "";
   const after = url.searchParams.get("after") || null;
   const before = url.searchParams.get("before") || null;
 
@@ -18,19 +17,19 @@ export async function loader({ request }) {
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
   
-  // Use the exact ID provided by Shopify (handles both MarketCatalog and CompanyLocationCatalog)
   const fullCatalogId = catalogId.includes("gid://") ? catalogId : `gid://shopify/Catalog/${cleanId}`;
 
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
 
   try {
-    // FIX: Using the correct 'products' field on the Publication object
+    // STRICT FETCH: Only get products from this specific Catalog's Publication.
+    // Removed the 'query' argument because Shopify API rejects it here.
     const response = await admin.graphql(
-      `query getCatalogProducts($id: ID!, $query: String) {
+      `query getCatalogProducts($id: ID!) {
         catalog(id: $id) {
           publication {
-            products(${paginationArgs}, query: $query) {
+            products(${paginationArgs}) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id
@@ -41,7 +40,7 @@ export async function loader({ request }) {
           }
         }
       }`,
-      { variables: { id: fullCatalogId, query: search || undefined } }
+      { variables: { id: fullCatalogId } }
     );
 
     const resJson = await response.json();
@@ -81,7 +80,6 @@ export async function loader({ request }) {
     overridesMap, 
     globalHiddenSkus, 
     hiddenVariantTypes, 
-    search, 
     allVariantTypes: Array.from(allVariantTypes).sort(), 
     pageInfo 
   };
@@ -111,13 +109,15 @@ export async function action({ request }) {
 }
 
 export default function CatalogOverrides() {
-  const { catalogId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, search, allVariantTypes, pageInfo } = useLoaderData();
+  const { catalogId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo } = useLoaderData();
   const navigate = useNavigate();
   const submit = useSubmit();
   const navigation = useNavigation();
   const isSaving = navigation.state === "submitting";
 
   const [pendingHidden, setPendingHidden] = useState({});
+  const [variantFilter, setVariantFilter] = useState("all");
+  const [searchInput, setSearchInput] = useState("");
 
   useEffect(() => {
     const initial = {};
@@ -141,14 +141,24 @@ export default function CatalogOverrides() {
     setPendingHidden(initial);
   }, [products, overridesMap, globalHiddenSkus, hiddenVariantTypes]);
 
-  const [variantFilter, setVariantFilter] = useState("all");
-  const [searchInput, setSearchInput] = useState(search);
-
+  // INSTANT CLIENT-SIDE SEARCH & FILTERING
   const filteredProducts = useMemo(() => {
     if (!products) return [];
-    if (variantFilter === "all") return products;
-    return products.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
-  }, [products, variantFilter]);
+    let filtered = products;
+    
+    // Variant type filter
+    if (variantFilter !== "all") {
+      filtered = filtered.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
+    }
+    
+    // Search text filter
+    if (searchInput.trim() !== "") {
+      const lowerSearch = searchInput.toLowerCase();
+      filtered = filtered.filter((p) => p.title.toLowerCase().includes(lowerSearch));
+    }
+    
+    return filtered;
+  }, [products, variantFilter, searchInput]);
 
   const handleVariantToggle = (productId, variantId) => {
     setPendingHidden((prev) => {
@@ -166,18 +176,22 @@ export default function CatalogOverrides() {
     submit(formData, { method: "post" });
   };
 
-  const handleSearch = () => {
-    navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${searchInput}`);
-  };
-
   return (
     <s-page heading={`Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
       <s-section heading="Manage Visibility Exceptions">
-        <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "flex-end" }}>
+        <s-paragraph>
+          <b>Red background = Hidden.</b> Viewing only products included in this specific catalog.
+        </s-paragraph>
+
+        {/* INSTANT SEARCH BAR - NO MORE SERVER RELOADS */}
+        <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "center" }}>
           <div style={{ flex: 1 }}>
-            <s-text-field label="Search Catalog Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
+            <s-text-field 
+              label="Instant Search Catalog Products" 
+              value={searchInput} 
+              onInput={(e) => setSearchInput(e.target.value)} 
+            />
           </div>
-          <s-button onClick={handleSearch}>Search</s-button>
         </s-stack>
 
         <s-stack direction="inline" gap="tight" style={{ marginBottom: "20px", flexWrap: "wrap" }}>
@@ -190,8 +204,8 @@ export default function CatalogOverrides() {
 
         <s-stack direction="block" gap="base">
           {filteredProducts.length === 0 ? (
-            <s-box padding="base" background="surface">
-              <s-text>No products found assigned to this catalog.</s-text>
+            <s-box padding="base" background="surface" borderWidth="base" borderRadius="base">
+              <s-text>{searchInput ? "No matching products found in this catalog." : "No products have been included in this catalog yet."}</s-text>
             </s-box>
           ) : (
             filteredProducts.map((product) => {
@@ -223,10 +237,10 @@ export default function CatalogOverrides() {
           )}
         </s-stack>
 
-        {filteredProducts.length > 0 && (
+        {products.length > 0 && (
           <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
-            <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
-            <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&after=${pageInfo.endCursor}`)}>Next →</s-button>
+            <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
+            <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&after=${pageInfo.endCursor}`)}>Next →</s-button>
           </s-stack>
         )}
       </s-section>
