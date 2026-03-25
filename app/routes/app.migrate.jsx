@@ -1,4 +1,4 @@
-import { json } from "@react-router/node";
+// REMOVED: import { json } from "@react-router/node";
 import { useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -78,9 +78,10 @@ export const action = async ({ request }) => {
       }
     }
 
-    return json({ success: true, count: createdCount });
+    // Returning a raw object instead of using the json() helper
+    return { success: true, count: createdCount };
   } catch (error) {
-    return json({ success: false, error: error.message });
+    return { success: false, error: error.message };
   }
 };
 
