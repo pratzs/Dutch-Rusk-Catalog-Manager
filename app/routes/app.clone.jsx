@@ -3,17 +3,40 @@ import { useState, useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
-// 1. BACKEND: Fetch available catalogs from your database
+// 1. BACKEND: Fetch available catalogs directly from Shopify
 export async function loader({ request }) {
-  await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   
-  // We fetch catalogs that the app already knows about
-  const savedCatalogs = await prisma.catalogRule.findMany({
-    select: { catalogId: true, catalogName: true },
-    orderBy: { catalogName: 'asc' }
-  });
+  try {
+    // Fetch ALL catalogs directly from Shopify so the dropdowns are never empty
+    const response = await admin.graphql(`
+      query {
+        catalogs(first: 50) {
+          nodes {
+            id
+            title
+          }
+        }
+      }
+    `);
 
-  return { catalogs: savedCatalogs };
+    const data = await response.json();
+    const shopifyCatalogs = data.data?.catalogs?.nodes || [];
+
+    // Format them for our database logic (extracting just the numeric ID)
+    const formattedCatalogs = shopifyCatalogs.map(c => ({
+      catalogId: c.id.split("/").pop(), 
+      catalogName: c.title
+    }));
+
+    // Sort alphabetically so your team can find them easily
+    formattedCatalogs.sort((a, b) => a.catalogName.localeCompare(b.catalogName));
+
+    return { catalogs: formattedCatalogs };
+  } catch (error) {
+    console.error("Failed to fetch catalogs for clone dropdown:", error);
+    return { catalogs: [] };
+  }
 }
 
 // 2. BACKEND: The engine that duplicates the records
@@ -107,7 +130,7 @@ export default function CloneCatalog() {
     submit(formData, { method: "post" });
   };
 
-  // Convert DB catalogs into Shopify Dropdown options
+  // Convert Shopify catalogs into Dropdown options
   const catalogOptions = [
     { label: "Select a catalog...", value: "" },
     ...catalogs.map(c => ({ label: c.catalogName, value: c.catalogId }))
