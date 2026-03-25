@@ -18,64 +18,45 @@ export async function loader({ request }) {
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
   
+  // Use the exact ID provided by Shopify (handles both MarketCatalog and CompanyLocationCatalog)
+  const fullCatalogId = catalogId.includes("gid://") ? catalogId : `gid://shopify/Catalog/${cleanId}`;
+
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
 
-  // --- LOGIC: FIRST TRY B2B, THEN AUTOMATICALLY FALLBACK TO GLOBAL ---
-  // We use a specific check to see if this is likely a B2B catalog ID
-  const isB2BId = catalogId.includes("CompanyLocationCatalog");
-
-  if (isB2BId) {
-    try {
-      const b2bResponse = await admin.graphql(
-        `query getB2BProducts($id: ID!, $query: String) {
-          catalog(id: $id) {
-            publication {
-              catalogProducts(${paginationArgs}, query: $query) {
-                pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-                nodes {
-                  id
-                  title
-                  variants(first: 50) { nodes { id title sku } }
-                }
+  try {
+    // FIX: Using the correct 'products' field on the Publication object
+    const response = await admin.graphql(
+      `query getCatalogProducts($id: ID!, $query: String) {
+        catalog(id: $id) {
+          publication {
+            products(${paginationArgs}, query: $query) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                id
+                title
+                variants(first: 50) { nodes { id title sku } }
               }
             }
           }
-        }`,
-        { variables: { id: catalogId, query: search || undefined } }
-      );
-      const b2bJson = await b2bResponse.json();
-      if (!b2bJson.errors) {
-        products = b2bJson.data?.catalog?.publication?.catalogProducts?.nodes || [];
-        pageInfo = b2bJson.data?.catalog?.publication?.catalogProducts?.pageInfo || pageInfo;
-      }
-    } catch (e) {
-      console.log("B2B Fetch failed, moving to standard fetch.");
-    }
-  }
-
-  // --- FALLBACK: FETCH STANDARD PRODUCTS ---
-  // If B2B fetch failed, was skipped (Market Catalog), or returned 0 products
-  if (products.length === 0) {
-    const standardResponse = await admin.graphql(
-      `query allProducts($query: String) {
-        products(${paginationArgs}, query: $query) {
-          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-          nodes {
-            id
-            title
-            variants(first: 50) { nodes { id title sku } }
-          }
         }
       }`,
-      { variables: { query: search || undefined } }
+      { variables: { id: fullCatalogId, query: search || undefined } }
     );
-    const standardJson = await standardResponse.json();
-    products = standardJson.data?.products?.nodes || [];
-    pageInfo = standardJson.data?.products?.pageInfo || pageInfo;
+
+    const resJson = await response.json();
+    
+    if (resJson.errors) {
+      console.error("GraphQL Error:", resJson.errors);
+    } else {
+      // Correctly mapped to the 'products' connection
+      products = resJson.data?.catalog?.publication?.products?.nodes || [];
+      pageInfo = resJson.data?.catalog?.publication?.products?.pageInfo || pageInfo;
+    }
+  } catch (error) {
+    console.error("Loader Fetch Error:", error);
   }
 
-  // Fetch overrides and rules
   const [overrides, rule] = await Promise.all([
     prisma.productOverride.findMany({ where: { catalogId: cleanId } }),
     prisma.catalogRule.findUnique({ where: { catalogId: cleanId } }),
@@ -194,7 +175,7 @@ export default function CatalogOverrides() {
       <s-section heading="Manage Visibility Exceptions">
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "flex-end" }}>
           <div style={{ flex: 1 }}>
-            <s-text-field label="Search Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
+            <s-text-field label="Search Catalog Products" value={searchInput} onInput={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} />
           </div>
           <s-button onClick={handleSearch}>Search</s-button>
         </s-stack>
@@ -208,38 +189,46 @@ export default function CatalogOverrides() {
         </s-stack>
 
         <s-stack direction="block" gap="base">
-          {filteredProducts.map((product) => {
-            const currentHidden = pendingHidden[product.id] || [];
-            const savedHidden = overridesMap[product.id] || [];
-            const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
+          {filteredProducts.length === 0 ? (
+            <s-box padding="base" background="surface">
+              <s-text>No products found assigned to this catalog.</s-text>
+            </s-box>
+          ) : (
+            filteredProducts.map((product) => {
+              const currentHidden = pendingHidden[product.id] || [];
+              const savedHidden = overridesMap[product.id] || [];
+              const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
 
-            return (
-              <s-box key={product.id} padding="base" borderWidth="base" borderRadius="base" background={overridesMap[product.id] ? "highlight" : "subdued"}>
-                <s-text fontWeight="bold" style={{ marginBottom: "12px", display: "block" }}>{product.title}</s-text>
-                <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
-                  {product.variants.nodes.map((variant) => {
-                    const isHidden = currentHidden.includes(variant.id);
-                    return (
-                      <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
-                        <s-checkbox label={variant.title} checked={isHidden} onInput={() => handleVariantToggle(product.id, variant.id)} />
-                      </s-box>
-                    );
-                  })}
-                </s-stack>
-                {isDirty && (
-                  <div style={{ marginTop: "12px", display: "flex", justifyContent: "flex-end" }}>
-                    <s-button variant="primary" onClick={() => handleSave(product.id)} disabled={isSaving}>Save Override</s-button>
-                  </div>
-                )}
-              </s-box>
-            );
-          })}
+              return (
+                <s-box key={product.id} padding="base" borderWidth="base" borderRadius="base" background={overridesMap[product.id] ? "highlight" : "subdued"}>
+                  <s-text fontWeight="bold" style={{ marginBottom: "12px", display: "block" }}>{product.title}</s-text>
+                  <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
+                    {product.variants.nodes.map((variant) => {
+                      const isHidden = currentHidden.includes(variant.id);
+                      return (
+                        <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
+                          <s-checkbox label={variant.title} checked={isHidden} onInput={() => handleVariantToggle(product.id, variant.id)} />
+                        </s-box>
+                      );
+                    })}
+                  </s-stack>
+                  {isDirty && (
+                    <div style={{ marginTop: "12px", display: "flex", justifyContent: "flex-end" }}>
+                      <s-button variant="primary" onClick={() => handleSave(product.id)} disabled={isSaving}>Save Override</s-button>
+                    </div>
+                  )}
+                </s-box>
+              );
+            })
+          )}
         </s-stack>
 
-        <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
-          <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
-          <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&after=${pageInfo.endCursor}`)}>Next →</s-button>
-        </s-stack>
+        {filteredProducts.length > 0 && (
+          <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
+            <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
+            <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&search=${search}&after=${pageInfo.endCursor}`)}>Next →</s-button>
+          </s-stack>
+        )}
       </s-section>
     </s-page>
   );
