@@ -1,5 +1,4 @@
-import { json } from "@remix-run/node";
-import { useLoaderData, useSubmit, useNavigation, useNavigate, useActionData } from "@remix-run/react";
+import { useLoaderData, useSubmit, useNavigation, useNavigate, useActionData } from "react-router";
 import { useState, useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -14,7 +13,7 @@ export async function loader({ request }) {
     orderBy: { catalogName: 'asc' }
   });
 
-  return json({ catalogs: savedCatalogs });
+  return { catalogs: savedCatalogs };
 }
 
 // 2. BACKEND: The engine that duplicates the records
@@ -25,7 +24,7 @@ export async function action({ request }) {
   const targetId = formData.get("targetId");
 
   if (!sourceId || !targetId || sourceId === targetId) {
-    return json({ error: "Please select two different catalogs." }, { status: 400 });
+    return Response.json({ error: "Please select two different catalogs." }, { status: 400 });
   }
 
   try {
@@ -65,10 +64,10 @@ export async function action({ request }) {
       await prisma.productOverride.createMany({ data: newOverrides });
     }
 
-    return json({ success: true, clonedCount: sourceOverrides.length });
+    return { success: true, clonedCount: sourceOverrides.length };
   } catch (error) {
     console.error("Clone Error:", error);
-    return json({ error: "Failed to clone catalog rules." }, { status: 500 });
+    return Response.json({ error: "Failed to clone catalog rules." }, { status: 500 });
   }
 }
 
@@ -87,7 +86,6 @@ export default function CloneCatalog() {
   useEffect(() => {
     if (actionData?.success) {
       shopify.toast.show("Catalog successfully cloned!");
-      // Optionally reset form
       setSource("");
       setTarget("");
     }
