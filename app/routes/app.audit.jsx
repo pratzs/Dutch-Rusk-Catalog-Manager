@@ -16,7 +16,7 @@ export async function loader({ request }) {
       return acc;
     }, {});
 
-    // --- DEBUG INFO ---
+    // --- DEBUG DATA ---
     const rawDbCount = overrides.length;
     const sampleIds = overrides.slice(0, 5).map(o => o.productId);
     // ------------------
@@ -26,7 +26,7 @@ export async function loader({ request }) {
     overrides.forEach((o) => {
       if (o.productId === 'GLOBAL_MIGRATION' || !o.productId) return;
 
-      // Handle raw numbers or GIDs
+      // DATA RECOVERY: Ensure numeric IDs from seed are treated as GIDs for Shopify
       let fullGid = o.productId;
       if (!o.productId.toString().startsWith("gid://")) {
         fullGid = `gid://shopify/Product/${o.productId}`;
@@ -76,7 +76,7 @@ export async function loader({ request }) {
     return { 
       report: formattedReport, 
       error: null,
-      debug: { rawDbCount, sampleIds } // Sending debug info to the UI
+      debug: { rawDbCount, sampleIds } 
     };
   } catch (error) {
     console.error("Audit Loader Fatal Error:", error);
@@ -86,38 +86,6 @@ export async function loader({ request }) {
 
 export default function AuditReport() {
   const { report, error, debug } = useLoaderData();
-  const navigate = useNavigate();
-
-  return (
-    <s-page heading="Global Audit Report" back-action-url="/app/catalog-manager">
-      <s-layout>
-        <s-layout-section>
-          
-          {/* DEBUG PANEL */}
-          <s-box padding="base" background="highlight" style={{ marginBottom: "20px" }}>
-            <s-text fontWeight="bold">Database Check:</s-text>
-            <s-text>Raw records in DB: {debug?.rawDbCount || 0}</s-text>
-            <s-text>Sample IDs: {JSON.stringify(debug?.sampleIds)}</s-text>
-          </s-box>
-
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="surface">
-            {/* ... rest of your table UI code from before ... */}
-            <s-block-stack gap="base">
-               <s-text variant="headingMd">Visibility Overview ({report.length} Products Found)</s-text>
-               {/* Insert the same table logic here as we had before */}
-               {report.map(item => (
-                 <div key={item.productId}>{item.title} - {item.catalogs.join(', ')}</div>
-               ))}
-            </s-block-stack>
-          </s-box>
-        </s-layout-section>
-      </s-layout>
-    </s-page>
-  );
-}
-
-export default function AuditReport() {
-  const { report, error } = useLoaderData();
   const navigate = useNavigate();
 
   const downloadCSV = () => {
@@ -145,13 +113,22 @@ export default function AuditReport() {
     <s-page heading="Global Audit Report" back-action-url="/app/catalog-manager">
       <s-layout>
         <s-layout-section>
+          {/* DEBUG PANEL - This will tell us if the seed data is actually there */}
+          <s-box padding="base" background="highlight" style={{ marginBottom: "20px", border: "1px solid #e1e3e5" }}>
+            <s-block-stack gap="tight">
+              <s-text fontWeight="bold">Database Status:</s-text>
+              <s-text>Total Raw records in DB: {debug?.rawDbCount || 0}</s-text>
+              <s-text>Sample IDs from DB: {JSON.stringify(debug?.sampleIds)}</s-text>
+            </s-block-stack>
+          </s-box>
+
           <s-box padding="base" borderWidth="base" borderRadius="base" background="surface">
             <s-block-stack gap="base">
               
               <s-stack direction="inline" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
                 <div>
-                  <s-text variant="headingMd" as="h2">Visibility Overview</s-text>
-                  <s-text color="subdued">A bird's-eye view of active visibility restrictions across all catalogs.</s-text>
+                  <s-text variant="headingMd" as="h2">Visibility Overview ({report.length} Products)</s-text>
+                  <s-text color="subdued">Bird's-eye view of all manual overrides and seeded exceptions.</s-text>
                 </div>
                 <s-button variant="primary" tone="success" onClick={downloadCSV} disabled={report.length === 0}>
                   Download CSV
@@ -162,7 +139,7 @@ export default function AuditReport() {
 
               {report.length === 0 ? (
                 <s-box padding="base" background="subdued" borderRadius="base">
-                  <s-text>No active overrides found in the database.</s-text>
+                  <s-text>No active overrides found in the database matching valid Shopify products.</s-text>
                 </s-box>
               ) : (
                 <div style={{ overflowX: "auto" }}>
