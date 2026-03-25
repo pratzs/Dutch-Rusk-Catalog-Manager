@@ -1,10 +1,9 @@
 import { useLoaderData, useNavigate } from "react-router";
-// ADDED: Missing authenticate import
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
 export async function loader({ request }) {
-  // Now authenticate is defined and will work
+  // Verifying session with Shopify
   const { admin } = await authenticate.admin(request);
 
   try {
@@ -20,7 +19,7 @@ export async function loader({ request }) {
 
     const reportData = {};
     
-    // 1. FILTER: Only allow IDs that are correctly formatted GIDs
+    // 1. FILTER: Only allow IDs that are correctly formatted Shopify Product GIDs
     const validOverrides = overrides.filter(o => 
       o.productId && 
       o.productId.startsWith("gid://shopify/Product/")
@@ -58,6 +57,7 @@ export async function loader({ request }) {
       
       const resJson = await response.json();
       
+      // Fail-soft: if Shopify returns errors for one ID, still show the rest
       if (!resJson.errors && resJson.data?.nodes) {
         resJson.data.nodes.forEach(node => {
           if (node && node.id && reportData[node.id]) {
@@ -111,7 +111,7 @@ export default function AuditReport() {
               <s-stack direction="inline" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
                 <div>
                   <s-text variant="headingMd" as="h2">Visibility Overview</s-text>
-                  <s-text color="subdued">A bird's-eye view of active visibility restrictions.</s-text>
+                  <s-text color="subdued">A bird's-eye view of active visibility restrictions across all catalogs.</s-text>
                 </div>
                 <s-button variant="primary" tone="success" onClick={downloadCSV} disabled={report.length === 0}>
                   Download CSV
