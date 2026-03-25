@@ -17,19 +17,18 @@ export async function loader({ request }) {
 
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
-  
   const fullCatalogId = `gid://shopify/Catalog/${cleanId}`;
 
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
 
   try {
-    // Attempt B2B/Market Catalog Fetch with fixed variable usage
+    // 1. Try B2B/Market Catalog Products
     const response = await admin.graphql(
-      `query getCatalogProducts($id: ID!, $searchQuery: String) {
+      `query getCatalogProducts($id: ID!, $query: String) {
         catalog(id: $id) {
           publication {
-            catalogProducts(${paginationArgs}, query: $searchQuery) {
+            catalogProducts(${paginationArgs}, query: $query) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id
@@ -40,18 +39,18 @@ export async function loader({ request }) {
           }
         }
       }`,
-      { variables: { id: fullCatalogId, searchQuery: search || undefined } }
+      { variables: { id: fullCatalogId, query: search || undefined } }
     );
 
     const resJson = await response.json();
-    products = resJson.data?.catalog?.publication?.catalogProducts?.nodes;
+    products = resJson.data?.catalog?.publication?.catalogProducts?.nodes || [];
     pageInfo = resJson.data?.catalog?.publication?.catalogProducts?.pageInfo || pageInfo;
 
-    // FALLBACK: If catalog query returned errors or no products, fetch globally
-    if (!products || products.length === 0) {
+    // 2. ULTIMATE FALLBACK: If 0 products found in catalog, fetch from the main store list
+    if (products.length === 0) {
       const fallbackResponse = await admin.graphql(
-        `query allProducts($searchQuery: String) {
-          products(${paginationArgs}, query: $searchQuery) {
+        `query allProducts($query: String) {
+          products(${paginationArgs}, query: $query) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
@@ -60,14 +59,14 @@ export async function loader({ request }) {
             }
           }
         }`,
-        { variables: { searchQuery: search || undefined } }
+        { variables: { query: search || undefined } }
       );
       const fallbackData = await fallbackResponse.json();
       products = fallbackData.data?.products?.nodes || [];
       pageInfo = fallbackData.data?.products?.pageInfo || pageInfo;
     }
   } catch (error) {
-    console.error("Loader Error Catch:", error);
+    console.error("Loader Fetch Error:", error);
   }
 
   const [overrides, rule] = await Promise.all([
@@ -184,7 +183,7 @@ export default function CatalogOverrides() {
   };
 
   return (
-    <s-page heading={`Product Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
+    <s-page heading={`Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
       <s-section heading="Manage Visibility Exceptions">
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "flex-end" }}>
           <div style={{ flex: 1 }}>
