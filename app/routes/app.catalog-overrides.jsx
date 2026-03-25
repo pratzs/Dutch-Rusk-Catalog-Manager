@@ -7,73 +7,82 @@ import prisma from "../db.server";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
-  const catalogId = url.searchParams.get("catalogId");
+  const originalCatalogId = url.searchParams.get("catalogId");
   const catalogName = url.searchParams.get("catalogName");
   const after = url.searchParams.get("after") || null;
   const before = url.searchParams.get("before") || null;
 
-  if (!catalogId) return redirect("/app/catalog-manager");
+  if (!originalCatalogId) return redirect("/app/catalog-manager");
 
-  const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
+  // Clean ID for Database saves
+  const cleanId = originalCatalogId.includes("/") ? originalCatalogId.split("/").pop() : originalCatalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
   
-  // Normalize the ID for the universal Node fetch
-  const fullCatalogId = catalogId.includes("gid://") ? catalogId : `gid://shopify/Catalog/${cleanId}`;
-
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
   let debugMessage = "";
+  
+  // Keep the active GID intact for future page reloads
+  let activeFullId = originalCatalogId.includes("gid://") ? originalCatalogId : `gid://shopify/Catalog/${cleanId}`;
+  let pubId = null;
 
-  try {
-    // STEP 1: Get the actual Publication ID for this Market Catalog
-    const catResponse = await admin.graphql(
-      `query getCat($id: ID!) {
-        node(id: $id) {
-          ... on Catalog {
-            publication {
-              id
-            }
+  // Helper to safely fetch Publication ID without crashing
+  async function getPubId(gid) {
+    try {
+      const response = await admin.graphql(
+        `query getCat($id: ID!) {
+          node(id: $id) {
+            ... on Catalog { publication { id } }
+            ... on MarketCatalog { publication { id } }
           }
-        }
-      }`,
-      { variables: { id: fullCatalogId } }
-    );
-
-    const catJson = await catResponse.json();
-    const pubId = catJson.data?.node?.publication?.id;
-
-    if (pubId) {
-      // Extract just the numbers for the search query
-      const numericPubId = pubId.split("/").pop();
-      
-      // STEP 2: Use Shopify's native 'publication_id' filter to get ONLY assigned products
-      const prodResponse = await admin.graphql(
-        `query getPubProducts {
-          products(${paginationArgs}, query: "publication_id:${numericPubId}") {
-            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-            nodes {
-              id
-              title
-              variants(first: 50) { nodes { id title sku } }
-            }
-          }
-        }`
+        }`,
+        { variables: { id: gid } }
       );
-      
-      const prodJson = await prodResponse.json();
-      
-      if (prodJson.errors) {
-        debugMessage = "Error fetching products: " + JSON.stringify(prodJson.errors);
-      } else {
-        products = prodJson.data?.products?.nodes || [];
-        pageInfo = prodJson.data?.products?.pageInfo || pageInfo;
-      }
-    } else {
-      debugMessage = "Error: Could not find a Publication assigned to this Market Catalog.";
+      const json = await response.json();
+      if (json.errors) return null;
+      return json.data?.node?.publication?.id || null;
+    } catch (e) {
+      return null;
     }
-  } catch (error) {
-    console.error("Loader Fetch Error:", error);
-    debugMessage = "Exception: " + error.message;
+  }
+
+  // STEP 1: Get Publication ID (Try standard Catalog, fallback to MarketCatalog)
+  pubId = await getPubId(activeFullId);
+  if (!pubId) {
+    activeFullId = `gid://shopify/MarketCatalog/${cleanId}`;
+    pubId = await getPubId(activeFullId);
+  }
+
+  // STEP 2: Strictly fetch products ONLY inside this publication
+  if (pubId) {
+    try {
+      const prodResponse = await admin.graphql(
+        `query getPubProducts($pubId: ID!) {
+          publication(id: $pubId) {
+            products(${paginationArgs}) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                id
+                title
+                variants(first: 50) { nodes { id title sku } }
+              }
+            }
+          }
+        }`,
+        { variables: { pubId } }
+      );
+      const prodJson = await prodResponse.json();
+      if (prodJson.errors) {
+        debugMessage = "Products API Error: " + JSON.stringify(prodJson.errors);
+      } else {
+        products = prodJson.data?.publication?.products?.nodes || [];
+        pageInfo = prodJson.data?.publication?.products?.pageInfo || pageInfo;
+      }
+    } catch (error) {
+      debugMessage = "Product Fetch Catch: " + error.message;
+    }
+  } else {
+    debugMessage = "Could not locate the Publication for this Catalog ID. Ensure products are assigned to this Market in Shopify Settings.";
   }
 
   const [overrides, rule] = await Promise.all([
@@ -94,7 +103,8 @@ export async function loader({ request }) {
   });
 
   return { 
-    catalogId: cleanId, 
+    catalogDbId: cleanId, // For database
+    catalogGid: activeFullId, // MUST use this for UI navigation
     catalogName, 
     products, 
     overridesMap, 
@@ -110,7 +120,7 @@ export async function action({ request }) {
   await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
-  const catalogId = formData.get("catalogId");
+  const catalogId = formData.get("catalogId"); // This receives catalogDbId
   const productId = formData.get("productId");
 
   if (intent === "save") {
@@ -130,7 +140,7 @@ export async function action({ request }) {
 }
 
 export default function CatalogOverrides() {
-  const { catalogId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo, debugMessage } = useLoaderData();
+  const { catalogDbId, catalogGid, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo, debugMessage } = useLoaderData();
   const navigate = useNavigate();
   const submit = useSubmit();
   const navigation = useNavigation();
@@ -162,6 +172,7 @@ export default function CatalogOverrides() {
     setPendingHidden(initial);
   }, [products, overridesMap, globalHiddenSkus, hiddenVariantTypes]);
 
+  // Instant Client-Side Search
   const filteredProducts = useMemo(() => {
     if (!products) return [];
     let filtered = products;
@@ -185,7 +196,7 @@ export default function CatalogOverrides() {
   const handleSave = (productId) => {
     const formData = new FormData();
     formData.append("intent", "save");
-    formData.append("catalogId", catalogId);
+    formData.append("catalogId", catalogDbId); // Save purely with the numeric ID
     formData.append("productId", productId);
     (pendingHidden[productId] || []).forEach((v) => formData.append("hiddenVariantIds", v));
     submit(formData, { method: "post" });
@@ -195,7 +206,7 @@ export default function CatalogOverrides() {
     <s-page heading={`Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
       <s-section heading="Manage Visibility Exceptions">
         <s-paragraph>
-          <b>Red background = Hidden.</b> Viewing only products strictly included in this Market Catalog.
+          <b>Red background = Hidden.</b> Viewing only products strictly included in this Catalog.
         </s-paragraph>
 
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "center" }}>
@@ -204,6 +215,7 @@ export default function CatalogOverrides() {
               label="Instant Search Assigned Products" 
               value={searchInput} 
               onInput={(e) => setSearchInput(e.target.value)} 
+              placeholder="Start typing to filter instantly..."
             />
           </div>
         </s-stack>
@@ -219,9 +231,10 @@ export default function CatalogOverrides() {
         <s-stack direction="block" gap="base">
           {filteredProducts.length === 0 ? (
             <s-box padding="base" background="surface" borderWidth="base" borderRadius="base">
-              <s-text fontWeight="bold">No products found in this specific catalog.</s-text>
-              {/* This prints out exactly why it failed if it fails again */}
-              {debugMessage && <s-text style={{ color: 'red', display: 'block', marginTop: '10px' }}>{debugMessage}</s-text>}
+              <s-text fontWeight="bold">{searchInput ? "No matches for your search." : "No products found in this specific catalog."}</s-text>
+              {debugMessage && !searchInput && (
+                <s-text style={{ color: 'red', display: 'block', marginTop: '10px' }}>Debug: {debugMessage}</s-text>
+              )}
             </s-box>
           ) : (
             filteredProducts.map((product) => {
@@ -255,8 +268,9 @@ export default function CatalogOverrides() {
 
         {products.length > 0 && (
           <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
-            <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
-            <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${catalogId}&catalogName=${catalogName}&after=${pageInfo.endCursor}`)}>Next →</s-button>
+            {/* Navigates safely while retaining the crucial MarketCatalog GID */}
+            <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
+            <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&after=${pageInfo.endCursor}`)}>Next →</s-button>
           </s-stack>
         )}
       </s-section>
