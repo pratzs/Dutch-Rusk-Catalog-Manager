@@ -17,25 +17,21 @@ export async function loader({ request }) {
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
   
+  // Normalize the ID for the universal Node fetch
   const fullCatalogId = catalogId.includes("gid://") ? catalogId : `gid://shopify/Catalog/${cleanId}`;
 
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
+  let debugMessage = "";
 
   try {
-    // STRICT FETCH: Only get products from this specific Catalog's Publication.
-    // Removed the 'query' argument because Shopify API rejects it here.
-    const response = await admin.graphql(
-      `query getCatalogProducts($id: ID!) {
-        catalog(id: $id) {
-          publication {
-            products(${paginationArgs}) {
-              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-              nodes {
-                id
-                title
-                variants(first: 50) { nodes { id title sku } }
-              }
+    // STEP 1: Get the actual Publication ID for this Market Catalog
+    const catResponse = await admin.graphql(
+      `query getCat($id: ID!) {
+        node(id: $id) {
+          ... on Catalog {
+            publication {
+              id
             }
           }
         }
@@ -43,17 +39,41 @@ export async function loader({ request }) {
       { variables: { id: fullCatalogId } }
     );
 
-    const resJson = await response.json();
-    
-    if (resJson.errors) {
-      console.error("GraphQL Error:", resJson.errors);
+    const catJson = await catResponse.json();
+    const pubId = catJson.data?.node?.publication?.id;
+
+    if (pubId) {
+      // Extract just the numbers for the search query
+      const numericPubId = pubId.split("/").pop();
+      
+      // STEP 2: Use Shopify's native 'publication_id' filter to get ONLY assigned products
+      const prodResponse = await admin.graphql(
+        `query getPubProducts {
+          products(${paginationArgs}, query: "publication_id:${numericPubId}") {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes {
+              id
+              title
+              variants(first: 50) { nodes { id title sku } }
+            }
+          }
+        }`
+      );
+      
+      const prodJson = await prodResponse.json();
+      
+      if (prodJson.errors) {
+        debugMessage = "Error fetching products: " + JSON.stringify(prodJson.errors);
+      } else {
+        products = prodJson.data?.products?.nodes || [];
+        pageInfo = prodJson.data?.products?.pageInfo || pageInfo;
+      }
     } else {
-      // Correctly mapped to the 'products' connection
-      products = resJson.data?.catalog?.publication?.products?.nodes || [];
-      pageInfo = resJson.data?.catalog?.publication?.products?.pageInfo || pageInfo;
+      debugMessage = "Error: Could not find a Publication assigned to this Market Catalog.";
     }
   } catch (error) {
     console.error("Loader Fetch Error:", error);
+    debugMessage = "Exception: " + error.message;
   }
 
   const [overrides, rule] = await Promise.all([
@@ -81,7 +101,8 @@ export async function loader({ request }) {
     globalHiddenSkus, 
     hiddenVariantTypes, 
     allVariantTypes: Array.from(allVariantTypes).sort(), 
-    pageInfo 
+    pageInfo,
+    debugMessage
   };
 }
 
@@ -109,7 +130,7 @@ export async function action({ request }) {
 }
 
 export default function CatalogOverrides() {
-  const { catalogId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo } = useLoaderData();
+  const { catalogId, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo, debugMessage } = useLoaderData();
   const navigate = useNavigate();
   const submit = useSubmit();
   const navigation = useNavigation();
@@ -141,22 +162,16 @@ export default function CatalogOverrides() {
     setPendingHidden(initial);
   }, [products, overridesMap, globalHiddenSkus, hiddenVariantTypes]);
 
-  // INSTANT CLIENT-SIDE SEARCH & FILTERING
   const filteredProducts = useMemo(() => {
     if (!products) return [];
     let filtered = products;
-    
-    // Variant type filter
     if (variantFilter !== "all") {
       filtered = filtered.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
     }
-    
-    // Search text filter
     if (searchInput.trim() !== "") {
       const lowerSearch = searchInput.toLowerCase();
       filtered = filtered.filter((p) => p.title.toLowerCase().includes(lowerSearch));
     }
-    
     return filtered;
   }, [products, variantFilter, searchInput]);
 
@@ -180,14 +195,13 @@ export default function CatalogOverrides() {
     <s-page heading={`Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
       <s-section heading="Manage Visibility Exceptions">
         <s-paragraph>
-          <b>Red background = Hidden.</b> Viewing only products included in this specific catalog.
+          <b>Red background = Hidden.</b> Viewing only products strictly included in this Market Catalog.
         </s-paragraph>
 
-        {/* INSTANT SEARCH BAR - NO MORE SERVER RELOADS */}
         <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "center" }}>
           <div style={{ flex: 1 }}>
             <s-text-field 
-              label="Instant Search Catalog Products" 
+              label="Instant Search Assigned Products" 
               value={searchInput} 
               onInput={(e) => setSearchInput(e.target.value)} 
             />
@@ -205,7 +219,9 @@ export default function CatalogOverrides() {
         <s-stack direction="block" gap="base">
           {filteredProducts.length === 0 ? (
             <s-box padding="base" background="surface" borderWidth="base" borderRadius="base">
-              <s-text>{searchInput ? "No matching products found in this catalog." : "No products have been included in this catalog yet."}</s-text>
+              <s-text fontWeight="bold">No products found in this specific catalog.</s-text>
+              {/* This prints out exactly why it failed if it fails again */}
+              {debugMessage && <s-text style={{ color: 'red', display: 'block', marginTop: '10px' }}>{debugMessage}</s-text>}
             </s-box>
           ) : (
             filteredProducts.map((product) => {
