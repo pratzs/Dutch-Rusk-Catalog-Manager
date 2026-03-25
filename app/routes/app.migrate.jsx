@@ -1,5 +1,5 @@
 import { json } from "@react-router/node";
-import { useFetcher } from "@react-router";
+import { useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -11,7 +11,6 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
   
-  // 1. Define your Locksmith mapping logic
   const CATALOG_MAPPING = {
     "teeg": "147677675833",
     "archie-brothers": "147677118777",
@@ -26,14 +25,13 @@ export const action = async ({ request }) => {
 
   const tagRules = [
     { tag: "hide-bag", keyword: "Bag", catalogs: Object.values(CATALOG_MAPPING) },
-    { tag: "hide-block", keyword: "Block", catalogs: ["147677675833"] }, // TEEG only
-    { tag: "hide-each", keyword: "Each", catalogs: ["147677675833"] },   // TEEG only
+    { tag: "hide-block", keyword: "Block", catalogs: ["147677675833"] }, 
+    { tag: "hide-each", keyword: "Each", catalogs: ["147677675833"] },   
     { tag: "hide-packet", keyword: "Packet", catalogs: ["147677675833", "147677118777", "147677217081", "147677741369", "147677806905", "147677774137"] },
     { tag: "hide-shipper", keyword: "Shipper", catalogs: ["147677675833", "147677118777", "147677217081", "147677741369"] }
   ];
 
   try {
-    // 2. Query Shopify for all products with ANY hide tag
     const query = `tag:hide-bag OR tag:hide-block OR tag:hide-each OR tag:hide-packet OR tag:hide-shipper`;
     const response = await admin.graphql(
       `query getProducts($query: String!) {
@@ -57,13 +55,11 @@ export const action = async ({ request }) => {
     const products = resJson.data.products.nodes;
     let createdCount = 0;
 
-    // 3. Process and Update Database
     for (const product of products) {
       const productTags = product.tags.map(t => t.toLowerCase());
 
       for (const rule of tagRules) {
         if (productTags.includes(rule.tag)) {
-          // Find matching variants
           const matchingVariants = product.variants.nodes
             .filter(v => v.title.toLowerCase().includes(rule.keyword.toLowerCase()))
             .map(v => v.id);
@@ -93,22 +89,41 @@ export default function Migrate() {
   const isLoading = fetcher.state !== "idle";
 
   return (
-    <s-page heading="Locksmith Migration Tool">
-      <s-layout>
-        <s-layout-section>
-          <s-card>
-            <s-block-stack gap="base">
-              <s-text>This tool will scan your live Shopify store for products with <b>hide-</b> tags and automatically create visibility rules in your database.</s-text>
+    <ui-page heading="Locksmith Migration Tool">
+      <ui-layout>
+        <ui-layout-section>
+          <ui-card>
+            <div style={{ padding: '20px' }}>
+              <p style={{ marginBottom: '15px' }}>
+                This tool will scan your live Shopify store for products with <b>hide-</b> tags 
+                and automatically create visibility rules in your database.
+              </p>
               <fetcher.Form method="post">
-                <s-button variant="primary" loading={isLoading} submit>Run Live Sync</s-button>
+                <button 
+                   type="submit"
+                   style={{ 
+                     backgroundColor: '#008060', 
+                     color: 'white', 
+                     padding: '10px 20px', 
+                     borderRadius: '5px', 
+                     border: 'none',
+                     cursor: isLoading ? 'not-allowed' : 'pointer'
+                   }}
+                   disabled={isLoading}
+                >
+                  {isLoading ? 'Syncing...' : 'Run Live Sync'}
+                </button>
               </fetcher.Form>
+              
               {fetcher.data?.success && (
-                <s-banner tone="success">Migration Complete! Sync'd {fetcher.data.count} visibility rules.</s-banner>
+                <div style={{ marginTop: '20px', padding: '10px', backgroundColor: '#e3f1df', borderRadius: '5px', color: '#008060' }}>
+                  <strong>Migration Complete!</strong> Sync'd {fetcher.data.count} visibility rules.
+                </div>
               )}
-            </s-block-stack>
-          </s-card>
-        </s-layout-section>
-      </s-layout>
-    </s-page>
+            </div>
+          </ui-card>
+        </ui-layout-section>
+      </ui-layout>
+    </ui-page>
   );
 }
