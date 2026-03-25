@@ -22,8 +22,8 @@ export async function loader({ request }) {
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
 
+  // --- ATTEMPT 1: Catalog-Specific Fetch ---
   try {
-    // 1. Try B2B/Market Catalog Products
     const response = await admin.graphql(
       `query getCatalogProducts($id: ID!, $query: String) {
         catalog(id: $id) {
@@ -43,11 +43,18 @@ export async function loader({ request }) {
     );
 
     const resJson = await response.json();
-    products = resJson.data?.catalog?.publication?.catalogProducts?.nodes || [];
-    pageInfo = resJson.data?.catalog?.publication?.catalogProducts?.pageInfo || pageInfo;
+    // Only use these products if there are NO errors and we actually got data
+    if (!resJson.errors && resJson.data?.catalog?.publication?.catalogProducts?.nodes) {
+      products = resJson.data.catalog.publication.catalogProducts.nodes;
+      pageInfo = resJson.data.catalog.publication.catalogProducts.pageInfo;
+    }
+  } catch (e) {
+    console.log("Catalog query skipped or failed, moving to fallback.");
+  }
 
-    // 2. ULTIMATE FALLBACK: If 0 products found in catalog, fetch from the main store list
-    if (products.length === 0) {
+  // --- ATTEMPT 2: Global Fallback (If Attempt 1 failed or returned 0) ---
+  if (products.length === 0) {
+    try {
       const fallbackResponse = await admin.graphql(
         `query allProducts($query: String) {
           products(${paginationArgs}, query: $query) {
@@ -64,9 +71,9 @@ export async function loader({ request }) {
       const fallbackData = await fallbackResponse.json();
       products = fallbackData.data?.products?.nodes || [];
       pageInfo = fallbackData.data?.products?.pageInfo || pageInfo;
+    } catch (fallbackError) {
+      console.error("Critical: Global fallback failed", fallbackError);
     }
-  } catch (error) {
-    console.error("Loader Fetch Error:", error);
   }
 
   const [overrides, rule] = await Promise.all([
