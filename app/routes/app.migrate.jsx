@@ -1,4 +1,3 @@
-// REMOVED: import { json } from "@react-router/node";
 import { useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -57,7 +56,6 @@ export const action = async ({ request }) => {
 
     for (const product of products) {
       const productTags = product.tags.map(t => t.toLowerCase());
-
       for (const rule of tagRules) {
         if (productTags.includes(rule.tag)) {
           const matchingVariants = product.variants.nodes
@@ -77,8 +75,6 @@ export const action = async ({ request }) => {
         }
       }
     }
-
-    // Returning a raw object instead of using the json() helper
     return { success: true, count: createdCount };
   } catch (error) {
     return { success: false, error: error.message };
@@ -90,41 +86,32 @@ export default function Migrate() {
   const isLoading = fetcher.state !== "idle";
 
   return (
-    <ui-page heading="Locksmith Migration Tool">
-      <ui-layout>
-        <ui-layout-section>
-          <ui-card>
-            <div style={{ padding: '20px' }}>
-              <p style={{ marginBottom: '15px' }}>
-                This tool will scan your live Shopify store for products with <b>hide-</b> tags 
-                and automatically create visibility rules in your database.
-              </p>
-              <fetcher.Form method="post">
-                <button 
-                   type="submit"
-                   style={{ 
-                     backgroundColor: '#008060', 
-                     color: 'white', 
-                     padding: '10px 20px', 
-                     borderRadius: '5px', 
-                     border: 'none',
-                     cursor: isLoading ? 'not-allowed' : 'pointer'
-                   }}
-                   disabled={isLoading}
-                >
-                  {isLoading ? 'Syncing...' : 'Run Live Sync'}
-                </button>
-              </fetcher.Form>
-              
-              {fetcher.data?.success && (
-                <div style={{ marginTop: '20px', padding: '10px', backgroundColor: '#e3f1df', borderRadius: '5px', color: '#008060' }}>
-                  <strong>Migration Complete!</strong> Sync'd {fetcher.data.count} visibility rules.
-                </div>
-              )}
-            </div>
-          </ui-card>
-        </ui-layout-section>
-      </ui-layout>
-    </ui-page>
+    <div style={{ padding: "40px", background: "white", minHeight: "100vh" }}>
+      <h1 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px' }}>Migration Tool</h1>
+      <p style={{ marginBottom: '20px' }}>This tool will scan Shopify for 'hide-' tags and sync them to your database.</p>
+      
+      <fetcher.Form method="post">
+        <button 
+          type="submit" 
+          disabled={isLoading} 
+          style={{ 
+            padding: "12px 24px", 
+            backgroundColor: "#008060", 
+            color: "white", 
+            border: "none", 
+            borderRadius: "4px",
+            cursor: "pointer" 
+          }}
+        >
+          {isLoading ? "Running Sync..." : "Start Live Sync"}
+        </button>
+      </fetcher.Form>
+
+      {fetcher.data?.success && (
+        <div style={{ marginTop: "20px", color: "green", fontWeight: "bold" }}>
+          ✅ Successfully sync'd {fetcher.data.count} visibility rules!
+        </div>
+      )}
+    </div>
   );
 }
