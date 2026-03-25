@@ -14,7 +14,6 @@ export async function loader({ request }) {
 
   if (!originalCatalogId) return redirect("/app/catalog-manager");
 
-  // Clean ID for Database saves
   const cleanId = originalCatalogId.includes("/") ? originalCatalogId.split("/").pop() : originalCatalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
   
@@ -22,11 +21,9 @@ export async function loader({ request }) {
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
   let debugMessage = "";
   
-  // Keep the active GID intact for future page reloads
   let activeFullId = originalCatalogId.includes("gid://") ? originalCatalogId : `gid://shopify/Catalog/${cleanId}`;
   let pubId = null;
 
-  // Helper to safely fetch Publication ID without crashing
   async function getPubId(gid) {
     try {
       const response = await admin.graphql(
@@ -46,14 +43,12 @@ export async function loader({ request }) {
     }
   }
 
-  // STEP 1: Get Publication ID (Try standard Catalog, fallback to MarketCatalog)
   pubId = await getPubId(activeFullId);
   if (!pubId) {
     activeFullId = `gid://shopify/MarketCatalog/${cleanId}`;
     pubId = await getPubId(activeFullId);
   }
 
-  // STEP 2: Strictly fetch products ONLY inside this publication
   if (pubId) {
     try {
       const prodResponse = await admin.graphql(
@@ -103,8 +98,8 @@ export async function loader({ request }) {
   });
 
   return { 
-    catalogDbId: cleanId, // For database
-    catalogGid: activeFullId, // MUST use this for UI navigation
+    catalogDbId: cleanId,
+    catalogGid: activeFullId, 
     catalogName, 
     products, 
     overridesMap, 
@@ -120,10 +115,11 @@ export async function action({ request }) {
   await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
-  const catalogId = formData.get("catalogId"); // This receives catalogDbId
-  const productId = formData.get("productId");
+  const catalogId = formData.get("catalogId");
 
+  // Single Product Save
   if (intent === "save") {
+    const productId = formData.get("productId");
     const hiddenVariantIds = formData.getAll("hiddenVariantIds");
     await prisma.productOverride.upsert({
       where: { catalogId_productId: { catalogId, productId } },
@@ -132,7 +128,24 @@ export async function action({ request }) {
     });
   }
 
+  // Bulk Product Save (New Feature)
+  if (intent === "save_bulk") {
+    const bulkData = JSON.parse(formData.get("bulkData"));
+    const operations = Object.keys(bulkData).map(productId => {
+      const hiddenVariantIds = bulkData[productId];
+      return prisma.productOverride.upsert({
+        where: { catalogId_productId: { catalogId, productId } },
+        update: { hiddenVariantIds },
+        create: { catalogId, productId, hiddenVariantIds },
+      });
+    });
+    
+    // Execute all saves at once in a transaction
+    await prisma.$transaction(operations);
+  }
+
   if (intent === "delete") {
+    const productId = formData.get("productId");
     await prisma.productOverride.deleteMany({ where: { catalogId, productId } });
   }
 
@@ -172,7 +185,6 @@ export default function CatalogOverrides() {
     setPendingHidden(initial);
   }, [products, overridesMap, globalHiddenSkus, hiddenVariantTypes]);
 
-  // Instant Client-Side Search
   const filteredProducts = useMemo(() => {
     if (!products) return [];
     let filtered = products;
@@ -196,11 +208,70 @@ export default function CatalogOverrides() {
   const handleSave = (productId) => {
     const formData = new FormData();
     formData.append("intent", "save");
-    formData.append("catalogId", catalogDbId); // Save purely with the numeric ID
+    formData.append("catalogId", catalogDbId);
     formData.append("productId", productId);
     (pendingHidden[productId] || []).forEach((v) => formData.append("hiddenVariantIds", v));
     submit(formData, { method: "post" });
   };
+
+  // --- NEW BULK ACTIONS ---
+  const handleHideAllVisible = () => {
+    setPendingHidden((prev) => {
+      const next = { ...prev };
+      filteredProducts.forEach((p) => {
+        const allVariantIds = p.variants.nodes.map(v => v.id);
+        next[p.id] = Array.from(new Set([...(next[p.id] || []), ...allVariantIds]));
+      });
+      return next;
+    });
+  };
+
+  const handleShowAllVisible = () => {
+    setPendingHidden((prev) => {
+      const next = { ...prev };
+      filteredProducts.forEach((p) => {
+        const allVariantIds = p.variants.nodes.map(v => v.id);
+        next[p.id] = (next[p.id] || []).filter(id => !allVariantIds.includes(id));
+      });
+      return next;
+    });
+  };
+
+  const handleSaveAllDirty = () => {
+    const payload = {};
+    let dirtyCount = 0;
+
+    filteredProducts.forEach(p => {
+      const currentHidden = pendingHidden[p.id] || [];
+      const savedHidden = overridesMap[p.id] || [];
+      const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
+      
+      if (isDirty) {
+        payload[p.id] = currentHidden;
+        dirtyCount++;
+      }
+    });
+
+    if (dirtyCount === 0) {
+      shopify.toast.show("No changes to save.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("intent", "save_bulk");
+    formData.append("catalogId", catalogDbId);
+    formData.append("bulkData", JSON.stringify(payload));
+    
+    submit(formData, { method: "post" });
+    shopify.toast.show(`Saving ${dirtyCount} products...`);
+  };
+
+  // Calculate if there are unsaved changes on the page
+  const hasUnsavedChanges = filteredProducts.some(p => {
+    const currentHidden = pendingHidden[p.id] || [];
+    const savedHidden = overridesMap[p.id] || [];
+    return JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
+  });
 
   return (
     <s-page heading={`Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
@@ -220,12 +291,27 @@ export default function CatalogOverrides() {
           </div>
         </s-stack>
 
-        <s-stack direction="inline" gap="tight" style={{ marginBottom: "20px", flexWrap: "wrap" }}>
-          <s-text>Filter:</s-text>
-          <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter("all")}>All</s-button>
-          {allVariantTypes.map((type) => (
-            <s-button key={type} variant={variantFilter === type ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter(type)}>{type}</s-button>
-          ))}
+        <s-stack direction="inline" gap="tight" style={{ marginBottom: "20px", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <s-stack direction="inline" gap="tight" style={{ alignItems: "center" }}>
+            <s-text>Filter:</s-text>
+            <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter("all")}>All</s-button>
+            {allVariantTypes.map((type) => (
+              <s-button key={type} variant={variantFilter === type ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter(type)}>{type}</s-button>
+            ))}
+          </s-stack>
+
+          {/* BULK ACTION BUTTONS */}
+          {filteredProducts.length > 0 && (
+            <s-stack direction="inline" gap="tight">
+              <s-button variant="secondary" size="slim" onClick={handleHideAllVisible}>Hide All Visible</s-button>
+              <s-button variant="secondary" size="slim" onClick={handleShowAllVisible}>Show All Visible</s-button>
+              {hasUnsavedChanges && (
+                <s-button variant="primary" size="slim" tone="success" onClick={handleSaveAllDirty} disabled={isSaving}>
+                  {isSaving ? "Saving..." : "Save All Changes"}
+                </s-button>
+              )}
+            </s-stack>
+          )}
         </s-stack>
 
         <s-stack direction="block" gap="base">
@@ -268,9 +354,8 @@ export default function CatalogOverrides() {
 
         {products.length > 0 && (
           <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
-            {/* Navigates safely while retaining the crucial MarketCatalog GID */}
             <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
-            <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&after=${pageInfo.endCursor}`)}>Next →</s-button>
+            <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${catalogName}&after=${pageInfo.endCursor}`)}>Next →</s-button>
           </s-stack>
         )}
       </s-section>
