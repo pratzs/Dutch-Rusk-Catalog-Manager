@@ -36,9 +36,16 @@ export default function CatalogManager() {
   return (
     <s-page heading="Catalog Variant Manager">
       <s-section heading="Your B2B Catalogs">
-        <s-paragraph>
-          Manage visibility rules for your B2B customers. "Manage Rules" sets bulk category blocks, while "Product Overrides" handles specific items.
-        </s-paragraph>
+        {/* ADDED: Stack to put the paragraph and button next to each other */}
+        <s-stack direction="inline" gap="base" style={{ marginBottom: "20px", alignItems: "center", justifyContent: "space-between" }}>
+          <s-paragraph style={{ flex: 1 }}>
+            Manage visibility rules for your B2B customers. "Manage Rules" sets bulk category blocks, while "Product Overrides" handles specific items.
+          </s-paragraph>
+          {/* ADDED: The Clone Rules button */}
+          <s-button variant="primary" onClick={() => navigate("/app/clone")}>
+            Clone Rules
+          </s-button>
+        </s-stack>
 
         <s-stack direction="block" gap="base">
           {catalogs.length === 0 ? (
