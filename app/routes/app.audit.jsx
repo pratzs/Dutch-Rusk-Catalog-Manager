@@ -26,7 +26,6 @@ export async function loader({ request }) {
     overrides.forEach((o) => {
       if (o.productId === 'GLOBAL_MIGRATION' || !o.productId) return;
 
-      // DATA RECOVERY: Ensure numeric IDs from seed are treated as GIDs for Shopify
       let fullGid = o.productId;
       if (!o.productId.toString().startsWith("gid://")) {
         fullGid = `gid://shopify/Product/${o.productId}`;
@@ -36,7 +35,8 @@ export async function loader({ request }) {
         reportData[fullGid] = {
           productId: fullGid,
           catalogs: [],
-          hiddenVariantCount: 0,
+          hiddenVariantIds: [], // Keep track of GIDs for mapping
+          variantNames: "Loading...",
           title: "Product ID: " + fullGid.split("/").pop()
         };
       }
@@ -46,16 +46,30 @@ export async function loader({ request }) {
         reportData[fullGid].catalogs.push(catName);
       }
       
-      reportData[fullGid].hiddenVariantCount += (o.hiddenVariantIds || []).length;
+      // Store variant IDs to match against GraphQL results
+      if (o.hiddenVariantIds) {
+        reportData[fullGid].hiddenVariantIds = [
+          ...new Set([...reportData[fullGid].hiddenVariantIds, ...o.hiddenVariantIds])
+        ];
+      }
     });
 
     const productGids = Object.keys(reportData).slice(0, 250); 
     
     if (productGids.length > 0) {
       const response = await admin.graphql(
-        `query getProductTitles($ids: [ID!]!) {
+        `query getProductDetails($ids: [ID!]!) {
           nodes(ids: $ids) {
-            ... on Product { id title }
+            ... on Product { 
+              id 
+              title 
+              variants(first: 50) {
+                nodes {
+                  id
+                  title
+                }
+              }
+            }
           }
         }`,
         { variables: { ids: productGids } }
@@ -66,6 +80,14 @@ export async function loader({ request }) {
         resJson.data.nodes.forEach(node => {
           if (node && node.id && reportData[node.id]) {
             reportData[node.id].title = node.title;
+            
+            // Map the hidden GIDs to their actual titles (e.g., "Bag", "Shipper")
+            const names = reportData[node.id].hiddenVariantIds.map(hiddenId => {
+              const match = node.variants.nodes.find(v => v.id === hiddenId);
+              return match ? match.title : "Unknown Variant";
+            });
+            
+            reportData[node.id].variantNames = names.length > 0 ? names.join(", ") : "None";
           }
         });
       }
@@ -89,11 +111,11 @@ export default function AuditReport() {
   const navigate = useNavigate();
 
   const downloadCSV = () => {
-    const headers = ["Product Title", "Product ID", "Total Hidden Variants", "Hidden In Catalogs"];
+    const headers = ["Product Title", "Product ID", "Hidden Variant Names", "Hidden In Catalogs"];
     const rows = report.map(item => [
       `"${item.title.replace(/"/g, '""')}"`,
       item.productId.split("/").pop(),
-      item.hiddenVariantCount,
+      `"${item.variantNames.replace(/"/g, '""')}"`,
       `"${item.catalogs.join(", ")}"`
     ]);
 
@@ -113,12 +135,10 @@ export default function AuditReport() {
     <s-page heading="Global Audit Report" back-action-url="/app/catalog-manager">
       <s-layout>
         <s-layout-section>
-          {/* DEBUG PANEL - This will tell us if the seed data is actually there */}
           <s-box padding="base" background="highlight" style={{ marginBottom: "20px", border: "1px solid #e1e3e5" }}>
             <s-block-stack gap="tight">
               <s-text fontWeight="bold">Database Status:</s-text>
               <s-text>Total Raw records in DB: {debug?.rawDbCount || 0}</s-text>
-              <s-text>Sample IDs from DB: {JSON.stringify(debug?.sampleIds)}</s-text>
             </s-block-stack>
           </s-box>
 
@@ -128,7 +148,7 @@ export default function AuditReport() {
               <s-stack direction="inline" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
                 <div>
                   <s-text variant="headingMd" as="h2">Visibility Overview ({report.length} Products)</s-text>
-                  <s-text color="subdued">Bird's-eye view of all manual overrides and seeded exceptions.</s-text>
+                  <s-text color="subdued">Detailed view of hidden variants per catalog.</s-text>
                 </div>
                 <s-button variant="primary" tone="success" onClick={downloadCSV} disabled={report.length === 0}>
                   Download CSV
@@ -139,7 +159,7 @@ export default function AuditReport() {
 
               {report.length === 0 ? (
                 <s-box padding="base" background="subdued" borderRadius="base">
-                  <s-text>No active overrides found in the database matching valid Shopify products.</s-text>
+                  <s-text>No active overrides found in the database.</s-text>
                 </s-box>
               ) : (
                 <div style={{ overflowX: "auto" }}>
@@ -154,11 +174,11 @@ export default function AuditReport() {
                     <tbody>
                       {report.map((item, index) => (
                         <tr key={item.productId} style={{ borderBottom: "1px solid #eee", backgroundColor: index % 2 === 0 ? "#fff" : "#f9fafb" }}>
-                          <td style={{ padding: "12px 8px", fontWeight: "500" }}>{item.title}</td>
+                          <td style={{ padding: "12px 8px", fontWeight: "500", maxWidth: "300px" }}>{item.title}</td>
                           <td style={{ padding: "12px 8px" }}>
-                            <span style={{ background: "#ffeaeb", color: "#bf0711", padding: "4px 8px", borderRadius: "12px", fontSize: "12px", fontWeight: "bold" }}>
-                              {item.hiddenVariantCount} Blocked
-                            </span>
+                            <s-text color="critical" fontWeight="bold">
+                              {item.variantNames}
+                            </s-text>
                           </td>
                           <td style={{ padding: "12px 8px" }}>
                             <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
