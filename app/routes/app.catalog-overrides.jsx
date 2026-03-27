@@ -117,7 +117,6 @@ export async function action({ request }) {
   const intent = formData.get("intent");
   const catalogId = formData.get("catalogId");
 
-  // Single Product Save
   if (intent === "save") {
     const productId = formData.get("productId");
     const hiddenVariantIds = formData.getAll("hiddenVariantIds");
@@ -128,7 +127,6 @@ export async function action({ request }) {
     });
   }
 
-  // Bulk Product Save (New Feature)
   if (intent === "save_bulk") {
     const bulkData = JSON.parse(formData.get("bulkData"));
     const operations = Object.keys(bulkData).map(productId => {
@@ -140,7 +138,6 @@ export async function action({ request }) {
       });
     });
     
-    // Execute all saves at once in a transaction
     await prisma.$transaction(operations);
   }
 
@@ -201,6 +198,7 @@ export default function CatalogOverrides() {
   const handleVariantToggle = (productId, variantId) => {
     setPendingHidden((prev) => {
       const current = prev[productId] || [];
+      // Toggles presence in the hidden array
       return { ...prev, [productId]: current.includes(variantId) ? current.filter((v) => v !== variantId) : [...current, variantId] };
     });
   };
@@ -214,7 +212,6 @@ export default function CatalogOverrides() {
     submit(formData, { method: "post" });
   };
 
-  // --- NEW BULK ACTIONS ---
   const handleHideAllVisible = () => {
     setPendingHidden((prev) => {
       const next = { ...prev };
@@ -231,6 +228,7 @@ export default function CatalogOverrides() {
       const next = { ...prev };
       filteredProducts.forEach((p) => {
         const allVariantIds = p.variants.nodes.map(v => v.id);
+        // Remove all visible variants from the hidden array to show them
         next[p.id] = (next[p.id] || []).filter(id => !allVariantIds.includes(id));
       });
       return next;
@@ -266,7 +264,6 @@ export default function CatalogOverrides() {
     shopify.toast.show(`Saving ${dirtyCount} products...`);
   };
 
-  // Calculate if there are unsaved changes on the page
   const hasUnsavedChanges = filteredProducts.some(p => {
     const currentHidden = pendingHidden[p.id] || [];
     const savedHidden = overridesMap[p.id] || [];
@@ -274,91 +271,113 @@ export default function CatalogOverrides() {
   });
 
   return (
-    <s-page heading={`Overrides: ${catalogName}`} back-action-url="/app/catalog-manager">
-      <s-section heading="Manage Visibility Exceptions">
-        <s-paragraph>
-          <b>Red background = Hidden.</b> Viewing only products strictly included in this Catalog.
-        </s-paragraph>
+    <s-page heading={`Manage Visibility: ${catalogName}`} back-action-url="/app/catalog-manager">
+      <s-layout>
+        <s-layout-section>
+          
+          {/* LAYMAN INSTRUCTIONS PANEL */}
+          <s-box padding="base" background="bg-surface-secondary" borderRadius="base" style={{ marginBottom: '20px', border: '1px solid #e1e3e5' }}>
+            <s-block-stack gap="tight">
+              <s-text variant="headingMd" as="h2">🎯 Product Visibility Rules</s-text>
+              <s-text>
+                Check or uncheck the boxes below to set exactly what sizes this customer is allowed to order.
+              </s-text>
+              <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#e3f1df', borderRadius: '4px' }}>
+                <s-text fontWeight="bold" color="success">✅ Ticked = Product is VISIBLE to this customer.</s-text>
+              </div>
+              <div style={{ marginTop: '5px', padding: '10px', backgroundColor: '#ffeaeb', borderRadius: '4px' }}>
+                <s-text fontWeight="bold" color="critical">⬜ Unticked = Product is HIDDEN (Shows Red).</s-text>
+              </div>
+              <s-text color="subdued" style={{ marginTop: '10px' }}>Use "Hide/Show All Visible" buttons to bulk edit, then click <b>Save All Changes</b>.</s-text>
+            </s-block-stack>
+          </s-box>
 
-        <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "center" }}>
-          <div style={{ flex: 1 }}>
-            <s-text-field 
-              label="Instant Search Assigned Products" 
-              value={searchInput} 
-              onInput={(e) => setSearchInput(e.target.value)} 
-              placeholder="Start typing to filter instantly..."
-            />
-          </div>
-        </s-stack>
+          <s-section heading="Product Catalog">
+            <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "center" }}>
+              <div style={{ flex: 1 }}>
+                <s-text-field 
+                  label="Instant Search Assigned Products" 
+                  value={searchInput} 
+                  onInput={(e) => setSearchInput(e.target.value)} 
+                  placeholder="Start typing to filter instantly..."
+                />
+              </div>
+            </s-stack>
 
-        <s-stack direction="inline" gap="tight" style={{ marginBottom: "20px", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-          <s-stack direction="inline" gap="tight" style={{ alignItems: "center" }}>
-            <s-text>Filter:</s-text>
-            <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter("all")}>All</s-button>
-            {allVariantTypes.map((type) => (
-              <s-button key={type} variant={variantFilter === type ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter(type)}>{type}</s-button>
-            ))}
-          </s-stack>
+            <s-stack direction="inline" gap="tight" style={{ marginBottom: "20px", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+              <s-stack direction="inline" gap="tight" style={{ alignItems: "center" }}>
+                <s-text>Filter:</s-text>
+                <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter("all")}>All</s-button>
+                {allVariantTypes.map((type) => (
+                  <s-button key={type} variant={variantFilter === type ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter(type)}>{type}</s-button>
+                ))}
+              </s-stack>
 
-          {/* BULK ACTION BUTTONS */}
-          {filteredProducts.length > 0 && (
-            <s-stack direction="inline" gap="tight">
-              <s-button variant="secondary" size="slim" onClick={handleHideAllVisible}>Hide All Visible</s-button>
-              <s-button variant="secondary" size="slim" onClick={handleShowAllVisible}>Show All Visible</s-button>
-              {hasUnsavedChanges && (
-                <s-button variant="primary" size="slim" tone="success" onClick={handleSaveAllDirty} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save All Changes"}
-                </s-button>
+              {filteredProducts.length > 0 && (
+                <s-stack direction="inline" gap="tight">
+                  <s-button variant="secondary" size="slim" onClick={handleHideAllVisible}>Hide All Visible</s-button>
+                  <s-button variant="secondary" size="slim" onClick={handleShowAllVisible}>Show All Visible</s-button>
+                  {hasUnsavedChanges && (
+                    <s-button variant="primary" size="slim" tone="success" onClick={handleSaveAllDirty} disabled={isSaving}>
+                      {isSaving ? "Saving..." : "Save All Changes"}
+                    </s-button>
+                  )}
+                </s-stack>
               )}
             </s-stack>
-          )}
-        </s-stack>
 
-        <s-stack direction="block" gap="base">
-          {filteredProducts.length === 0 ? (
-            <s-box padding="base" background="surface" borderWidth="base" borderRadius="base">
-              <s-text fontWeight="bold">{searchInput ? "No matches for your search." : "No products found in this specific catalog."}</s-text>
-              {debugMessage && !searchInput && (
-                <s-text style={{ color: 'red', display: 'block', marginTop: '10px' }}>Debug: {debugMessage}</s-text>
-              )}
-            </s-box>
-          ) : (
-            filteredProducts.map((product) => {
-              const currentHidden = pendingHidden[product.id] || [];
-              const savedHidden = overridesMap[product.id] || [];
-              const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
-
-              return (
-                <s-box key={product.id} padding="base" borderWidth="base" borderRadius="base" background={overridesMap[product.id] ? "highlight" : "subdued"}>
-                  <s-text fontWeight="bold" style={{ marginBottom: "12px", display: "block" }}>{product.title}</s-text>
-                  <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
-                    {product.variants.nodes.map((variant) => {
-                      const isHidden = currentHidden.includes(variant.id);
-                      return (
-                        <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
-                          <s-checkbox label={variant.title} checked={isHidden} onInput={() => handleVariantToggle(product.id, variant.id)} />
-                        </s-box>
-                      );
-                    })}
-                  </s-stack>
-                  {isDirty && (
-                    <div style={{ marginTop: "12px", display: "flex", justifyContent: "flex-end" }}>
-                      <s-button variant="primary" onClick={() => handleSave(product.id)} disabled={isSaving}>Save Override</s-button>
-                    </div>
+            <s-stack direction="block" gap="base">
+              {filteredProducts.length === 0 ? (
+                <s-box padding="base" background="surface" borderWidth="base" borderRadius="base">
+                  <s-text fontWeight="bold">{searchInput ? "No matches for your search." : "No products found in this specific catalog."}</s-text>
+                  {debugMessage && !searchInput && (
+                    <s-text style={{ color: 'red', display: 'block', marginTop: '10px' }}>Debug: {debugMessage}</s-text>
                   )}
                 </s-box>
-              );
-            })
-          )}
-        </s-stack>
+              ) : (
+                filteredProducts.map((product) => {
+                  const currentHidden = pendingHidden[product.id] || [];
+                  const savedHidden = overridesMap[product.id] || [];
+                  const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
 
-        {products.length > 0 && (
-          <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
-            <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
-            <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${catalogName}&after=${pageInfo.endCursor}`)}>Next →</s-button>
-          </s-stack>
-        )}
-      </s-section>
+                  return (
+                    <s-box key={product.id} padding="base" borderWidth="base" borderRadius="base" background={overridesMap[product.id]?.length > 0 ? "highlight" : "subdued"}>
+                      <s-text fontWeight="bold" style={{ marginBottom: "12px", display: "block" }}>{product.title}</s-text>
+                      <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
+                        {product.variants.nodes.map((variant) => {
+                          const isHidden = currentHidden.includes(variant.id);
+                          return (
+                            <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
+                              <s-checkbox 
+                                label={variant.title} 
+                                checked={!isHidden} // ✅ INVERTED: Ticked = Visible
+                                onChange={() => handleVariantToggle(product.id, variant.id)}
+                                onInput={() => handleVariantToggle(product.id, variant.id)} 
+                              />
+                            </s-box>
+                          );
+                        })}
+                      </s-stack>
+                      {isDirty && (
+                        <div style={{ marginTop: "12px", display: "flex", justifyContent: "flex-end" }}>
+                          <s-button variant="primary" onClick={() => handleSave(product.id)} disabled={isSaving}>Save Override</s-button>
+                        </div>
+                      )}
+                    </s-box>
+                  );
+                })
+              )}
+            </s-stack>
+
+            {products.length > 0 && (
+              <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
+                <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
+                <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${catalogName}&after=${pageInfo.endCursor}`)}>Next →</s-button>
+              </s-stack>
+            )}
+          </s-section>
+        </s-layout-section>
+      </s-layout>
     </s-page>
   );
 }
