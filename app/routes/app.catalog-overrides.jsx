@@ -1,6 +1,6 @@
 import { redirect } from "react-router";
 import { useLoaderData, useNavigate, useSubmit, useNavigation } from "react-router";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -157,13 +157,14 @@ export default function CatalogOverrides() {
   const isSaving = navigation.state === "submitting";
 
   const [pendingHidden, setPendingHidden] = useState({});
+  const initialHidden = useRef({});
   const [variantFilter, setVariantFilter] = useState("all");
   const [searchInput, setSearchInput] = useState("");
 
   useEffect(() => {
     const initial = {};
     if (products) {
-      products.forEach((p) => { 
+      products.forEach((p) => {
         const manual = overridesMap[p.id] || [];
         const fromMaster = p.variants.nodes
           .filter(v => {
@@ -171,14 +172,15 @@ export default function CatalogOverrides() {
             return globalHiddenSkus.some(gs => gs.trim().toUpperCase() === variantSku);
           })
           .map(v => v.id);
-        
+
         const bulkType = p.variants.nodes
           .filter(v => hiddenVariantTypes.some(t => v.title.toLowerCase().includes(t.toLowerCase())))
           .map(v => v.id);
-        
-        initial[p.id] = Array.from(new Set([...manual, ...fromMaster, ...bulkType])); 
+
+        initial[p.id] = Array.from(new Set([...manual, ...fromMaster, ...bulkType]));
       });
     }
+    initialHidden.current = initial;
     setPendingHidden(initial);
   }, [products, overridesMap, globalHiddenSkus, hiddenVariantTypes]);
 
@@ -241,9 +243,9 @@ export default function CatalogOverrides() {
 
     filteredProducts.forEach(p => {
       const currentHidden = pendingHidden[p.id] || [];
-      const savedHidden = overridesMap[p.id] || [];
-      const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
-      
+      const baseHidden = initialHidden.current[p.id] || [];
+      const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
+
       if (isDirty) {
         payload[p.id] = currentHidden;
         dirtyCount++;
@@ -266,8 +268,8 @@ export default function CatalogOverrides() {
 
   const hasUnsavedChanges = filteredProducts.some(p => {
     const currentHidden = pendingHidden[p.id] || [];
-    const savedHidden = overridesMap[p.id] || [];
-    return JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
+    const baseHidden = initialHidden.current[p.id] || [];
+    return JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
   });
 
   return (
@@ -337,8 +339,8 @@ export default function CatalogOverrides() {
               ) : (
                 filteredProducts.map((product) => {
                   const currentHidden = pendingHidden[product.id] || [];
-                  const savedHidden = overridesMap[product.id] || [];
-                  const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...savedHidden].sort());
+                  const baseHidden = initialHidden.current[product.id] || [];
+                  const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
 
                   return (
                     <s-box key={product.id} padding="base" borderWidth="base" borderRadius="base" background={overridesMap[product.id]?.length > 0 ? "highlight" : "subdued"}>
