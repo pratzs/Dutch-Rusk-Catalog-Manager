@@ -2,13 +2,11 @@
 import prisma from "../db.server";
 
 export async function loader({ request }) {
-  const origin = request.headers.get("Origin") || "*";
-
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
-        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
       },
@@ -25,9 +23,9 @@ export async function loader({ request }) {
 
   const responseHeaders = {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "no-store", 
+    "Cache-Control": "no-store",
   };
 
   if (!catalogId) {

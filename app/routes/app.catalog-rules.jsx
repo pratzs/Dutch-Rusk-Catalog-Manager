@@ -14,9 +14,6 @@ export async function loader({ request }) {
   const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
   const rule = await prisma.catalogRule.findUnique({ where: { catalogId: cleanId } });
 
-  // Simplified: only fetching Shipper, Bag, Block, etc.
-  const variantTypes = ["Shipper", "Bag", "Block", "Packet", "Each", "Outer"];
-
   return {
     catalogId: cleanId,
     catalogName,
@@ -33,7 +30,7 @@ export async function action({ request }) {
 
   await prisma.catalogRule.upsert({
     where: { catalogId },
-    update: { hiddenVariantTypes, catalogName, hiddenVariantIds: [] },
+    update: { hiddenVariantTypes, catalogName },
     create: { catalogId, catalogName, hiddenVariantTypes, hiddenVariantIds: [] },
   });
 

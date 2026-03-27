@@ -2,12 +2,41 @@ import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
+// Titles that identify Shopify system channels, not B2B catalogs
+const SYSTEM_CHANNEL_KEYWORDS = [
+  "channel catalog",
+  "point of sale",
+  "hydrogen",
+  "graphiql",
+  "online store",
+  "buy button",
+  "facebook",
+  "instagram",
+  "google",
+  "pinterest",
+];
+
+function isSystemChannel(title) {
+  const lower = title.toLowerCase();
+  return SYSTEM_CHANNEL_KEYWORDS.some(kw => lower.includes(kw));
+}
+
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const after = url.searchParams.get("after") || null;
+  const before = url.searchParams.get("before") || null;
+
+  const paginationArgs = before
+    ? `last: 50, before: "${before}"`
+    : after
+    ? `first: 50, after: "${after}"`
+    : `first: 50`;
 
   const response = await admin.graphql(`
     query {
-      catalogs(first: 50) {
+      catalogs(${paginationArgs}) {
+        pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
         nodes {
           id
           title
@@ -18,18 +47,12 @@ export async function loader({ request }) {
   `);
 
   const data = await response.json();
-  
-  // SAFE FILTERING: Exclude known Shopify system channels by checking the title
-  // This avoids the 500 error caused by the unsupported 'type' field in some API versions
-  const catalogs = data.data.catalogs.nodes.filter(
-    (cat) => {
-      const title = cat.title.toLowerCase();
-      return !title.includes("channel catalog") && 
-             !title.includes("point of sale") && 
-             !title.includes("hydrogen") && 
-             !title.includes("graphiql");
-    }
-  );
+  const allNodes = data.data.catalogs.nodes;
+  const pageInfo = data.data.catalogs.pageInfo;
+
+  // SAFE FILTERING: Exclude known Shopify system channels by title keywords.
+  // The 'type' field caused a 500 error in this API version, so title-matching is used.
+  const catalogs = allNodes.filter(cat => !isSystemChannel(cat.title));
 
   const rules = await prisma.catalogRule.findMany();
   const rulesMap = {};
@@ -37,19 +60,19 @@ export async function loader({ request }) {
     rulesMap[r.catalogId] = r;
   });
 
-  return { catalogs, rulesMap };
+  return { catalogs, rulesMap, pageInfo };
 }
 
 export default function CatalogManager() {
-  const { catalogs, rulesMap } = useLoaderData();
+  const { catalogs, rulesMap, pageInfo } = useLoaderData();
   const navigate = useNavigate();
 
   return (
     <s-page heading="B2B Catalog Manager">
       <s-layout>
         <s-layout-section>
-          
-          {/* NEW: Layman Instructions Panel */}
+
+          {/* Layman Instructions Panel */}
           <s-box padding="base" background="bg-surface-secondary" borderRadius="base" style={{ marginBottom: '20px', border: '1px solid #e1e3e5' }}>
             <s-block-stack gap="tight">
               <s-text variant="headingMd" as="h2">📖 How to use this tool</s-text>
@@ -137,6 +160,26 @@ export default function CatalogManager() {
               })
             )}
           </s-stack>
+
+          {(pageInfo.hasNextPage || pageInfo.hasPreviousPage) && (
+            <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
+              <s-button
+                variant="secondary"
+                disabled={!pageInfo.hasPreviousPage}
+                onClick={() => navigate(`/app/catalog-manager?before=${pageInfo.startCursor}`)}
+              >
+                ← Previous
+              </s-button>
+              <s-button
+                variant="secondary"
+                disabled={!pageInfo.hasNextPage}
+                onClick={() => navigate(`/app/catalog-manager?after=${pageInfo.endCursor}`)}
+              >
+                Next →
+              </s-button>
+            </s-stack>
+          )}
+
         </s-layout-section>
       </s-layout>
     </s-page>

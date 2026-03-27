@@ -18,9 +18,10 @@
         if (isProcessing) return;
         isProcessing = true;
 
-        const containers = document.querySelectorAll('.product, .product-single, .card, .grid__item, .product-section');
+        const containers = document.querySelectorAll('.product, .product-single, .card, .grid__item, .product-section, [data-product-id], .product-item, .product__info-container');
 
         containers.forEach(container => {
+          container.setAttribute('data-cvh-processed', '1');
           const content = container.textContent || "";
           
           // 1. Grab the selected SKU dynamically from Ignite's native elements

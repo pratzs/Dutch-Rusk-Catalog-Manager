@@ -59,7 +59,7 @@ export async function loader({ request }) {
               nodes {
                 id
                 title
-                variants(first: 50) { nodes { id title sku } }
+                variants(first: 250) { nodes { id title sku } }
               }
             }
           }
@@ -258,7 +258,7 @@ export default function CatalogOverrides() {
     const payload = {};
     let dirtyCount = 0;
 
-    filteredProducts.forEach(p => {
+    products.forEach(p => {
       const currentHidden = pendingHidden[p.id] || [];
       const baseHidden = initialHidden.current[p.id] || [];
       const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
@@ -284,7 +284,7 @@ export default function CatalogOverrides() {
     shopify.toast.show(`Saving ${dirtyCount} products...`);
   };
 
-  const hasUnsavedChanges = filteredProducts.some(p => {
+  const hasUnsavedChanges = products.some(p => {
     const currentHidden = pendingHidden[p.id] || [];
     const baseHidden = initialHidden.current[p.id] || [];
     return JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
@@ -390,8 +390,14 @@ export default function CatalogOverrides() {
 
             {products.length > 0 && (
               <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
-                <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`)}>← Previous</s-button>
-                <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${catalogName}&after=${pageInfo.endCursor}`)}>Next →</s-button>
+                <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => {
+                  if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
+                  navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`);
+                }}>← Previous</s-button>
+                <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => {
+                  if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
+                  navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&after=${pageInfo.endCursor}`);
+                }}>Next →</s-button>
               </s-stack>
             )}
           </s-section>
