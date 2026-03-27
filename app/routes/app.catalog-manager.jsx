@@ -54,17 +54,22 @@ export async function loader({ request }) {
   // The 'type' field caused a 500 error in this API version, so title-matching is used.
   const catalogs = allNodes.filter(cat => !isSystemChannel(cat.title));
 
-  const rules = await prisma.catalogRule.findMany();
-  const rulesMap = {};
-  rules.forEach((r) => {
-    rulesMap[r.catalogId] = r;
-  });
+  const [rules, overrideCounts] = await Promise.all([
+    prisma.catalogRule.findMany(),
+    prisma.productOverride.groupBy({ by: ["catalogId"], _count: { catalogId: true } }),
+  ]);
 
-  return { catalogs, rulesMap, pageInfo };
+  const rulesMap = {};
+  rules.forEach((r) => { rulesMap[r.catalogId] = r; });
+
+  const overrideCountMap = {};
+  overrideCounts.forEach((o) => { overrideCountMap[o.catalogId] = o._count.catalogId; });
+
+  return { catalogs, rulesMap, overrideCountMap, pageInfo };
 }
 
 export default function CatalogManager() {
-  const { catalogs, rulesMap, pageInfo } = useLoaderData();
+  const { catalogs, rulesMap, overrideCountMap, pageInfo } = useLoaderData();
   const navigate = useNavigate();
 
   return (
@@ -108,49 +113,48 @@ export default function CatalogManager() {
               </s-box>
             ) : (
               catalogs.map((catalog) => {
-                const rule = rulesMap[catalog.id.split("/").pop()];
-                const hiddenTypes = rule ? rule.hiddenVariantTypes : [];
-                const hiddenSkusCount = rule?.hiddenVariantIds?.length || 0;
+                const cleanId = catalog.id.split("/").pop();
+                const rule = rulesMap[cleanId];
+                const hiddenTypes = rule?.hiddenVariantTypes || [];
+                const overrideCount = overrideCountMap[cleanId] || 0;
+                const isConfigured = hiddenTypes.length > 0 || overrideCount > 0;
 
                 return (
-                  <s-box
-                    key={catalog.id}
-                    padding="base"
-                    borderWidth="base"
-                    borderRadius="base"
-                    background="subdued"
-                  >
+                  <s-box key={catalog.id} padding="base" borderWidth="base" borderRadius="base" background="subdued">
                     <s-stack direction="inline" gap="base" align="center">
                       <s-stack direction="block" gap="extraTight" style={{ flex: 1 }}>
-                        <s-text fontWeight="bold">{catalog.title}</s-text>
-                        <s-text tone="subdued">
-                          {hiddenTypes.length > 0 ? `Types Blocked: ${hiddenTypes.join(", ")}` : "No bulk types hidden"}
-                          {hiddenSkusCount > 0 && (
-                            <span style={{ marginLeft: '8px', color: '#bf0711', fontWeight: '600' }}>
-                              • {hiddenSkusCount} SKU Exceptions active
+                        <s-stack direction="inline" gap="tight" align="center">
+                          <s-text fontWeight="bold">{catalog.title}</s-text>
+                          {!isConfigured && (
+                            <span style={{ fontSize: '11px', background: '#f1f1f1', color: '#6d7175', padding: '2px 8px', borderRadius: '12px', fontWeight: '500' }}>
+                              Not configured
                             </span>
                           )}
-                        </s-text>
+                        </s-stack>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                          {hiddenTypes.length > 0 ? (
+                            hiddenTypes.map((t) => (
+                              <span key={t} style={{ fontSize: '12px', background: '#ffeaeb', color: '#d72c0d', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>
+                                🚫 {t}
+                              </span>
+                            ))
+                          ) : (
+                            <span style={{ fontSize: '12px', color: '#6d7175' }}>No pack types blocked</span>
+                          )}
+                          {overrideCount > 0 && (
+                            <span style={{ fontSize: '12px', background: '#fff3cd', color: '#856404', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>
+                              ✏️ {overrideCount} product exception{overrideCount !== 1 ? 's' : ''}
+                            </span>
+                          )}
+                        </div>
                       </s-stack>
                       <s-stack direction="inline" gap="tight">
-                        <s-button
-                          variant="secondary"
-                          onClick={() =>
-                            navigate(
-                              `/app/catalog-rules?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`
-                            )
-                          }
-                        >
+                        <s-button variant="secondary"
+                          onClick={() => navigate(`/app/catalog-rules?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`)}>
                           Manage Rules
                         </s-button>
-                        <s-button
-                          variant="secondary"
-                          onClick={() =>
-                            navigate(
-                              `/app/catalog-overrides?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`
-                            )
-                          }
-                        >
+                        <s-button variant="secondary"
+                          onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`)}>
                           Product Overrides
                         </s-button>
                       </s-stack>

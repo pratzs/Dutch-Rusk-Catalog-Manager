@@ -8,7 +8,7 @@ export async function loader({ request }) {
   try {
     const [overrides, catalogs] = await Promise.all([
       prisma.productOverride.findMany(),
-      prisma.catalogRule.findMany()
+      prisma.catalogRule.findMany(),
     ]);
 
     const catalogMap = catalogs.reduce((acc, cat) => {
@@ -16,15 +16,10 @@ export async function loader({ request }) {
       return acc;
     }, {});
 
-    // --- DEBUG DATA ---
-    const rawDbCount = overrides.length;
-    const sampleIds = overrides.slice(0, 5).map(o => o.productId);
-    // ------------------
-
     const reportData = {};
-    
+
     overrides.forEach((o) => {
-      if (o.productId === 'GLOBAL_MIGRATION' || !o.productId) return;
+      if (o.productId === "GLOBAL_MIGRATION" || !o.productId) return;
 
       let fullGid = o.productId;
       if (!o.productId.toString().startsWith("gid://")) {
@@ -35,159 +30,197 @@ export async function loader({ request }) {
         reportData[fullGid] = {
           productId: fullGid,
           catalogs: [],
-          hiddenVariantIds: [], // Keep track of GIDs for mapping
+          hiddenVariantIds: [],
           variantNames: "Loading...",
-          title: "Product ID: " + fullGid.split("/").pop()
+          title: "Product ID: " + fullGid.split("/").pop(),
         };
       }
-      
+
       const catName = catalogMap[o.catalogId] || `Catalog ${o.catalogId}`;
       if (!reportData[fullGid].catalogs.includes(catName)) {
         reportData[fullGid].catalogs.push(catName);
       }
-      
-      // Store variant IDs to match against GraphQL results
+
       if (o.hiddenVariantIds) {
         reportData[fullGid].hiddenVariantIds = [
-          ...new Set([...reportData[fullGid].hiddenVariantIds, ...o.hiddenVariantIds])
+          ...new Set([...reportData[fullGid].hiddenVariantIds, ...o.hiddenVariantIds]),
         ];
       }
     });
 
-    const productGids = Object.keys(reportData).slice(0, 250); 
-    
+    const productGids = Object.keys(reportData).slice(0, 250);
+
     if (productGids.length > 0) {
       const response = await admin.graphql(
         `query getProductDetails($ids: [ID!]!) {
           nodes(ids: $ids) {
-            ... on Product { 
-              id 
-              title 
-              variants(first: 50) {
-                nodes {
-                  id
-                  title
-                }
+            ... on Product {
+              id
+              title
+              variants(first: 250) {
+                nodes { id title }
               }
             }
           }
         }`,
         { variables: { ids: productGids } }
       );
-      
+
       const resJson = await response.json();
       if (!resJson.errors && resJson.data?.nodes) {
-        resJson.data.nodes.forEach(node => {
+        resJson.data.nodes.forEach((node) => {
           if (node && node.id && reportData[node.id]) {
             reportData[node.id].title = node.title;
-            
-            // Map the hidden GIDs to their actual titles (e.g., "Bag", "Shipper")
-            const names = reportData[node.id].hiddenVariantIds.map(hiddenId => {
-              const match = node.variants.nodes.find(v => v.id === hiddenId);
-              return match ? match.title : "Unknown Variant";
-            });
-            
+            const names = reportData[node.id].hiddenVariantIds.map((hiddenId) => {
+              const match = node.variants.nodes.find((v) => v.id === hiddenId);
+              return match ? match.title : null;
+            }).filter(Boolean);
             reportData[node.id].variantNames = names.length > 0 ? names.join(", ") : "None";
           }
         });
       }
     }
 
-    const formattedReport = Object.values(reportData).sort((a, b) => a.title.localeCompare(b.title));
+    const formattedReport = Object.values(reportData).sort((a, b) =>
+      a.title.localeCompare(b.title)
+    );
 
-    return { 
-      report: formattedReport, 
-      error: null,
-      debug: { rawDbCount, sampleIds } 
-    };
+    return { report: formattedReport, error: null };
   } catch (error) {
-    console.error("Audit Loader Fatal Error:", error);
+    console.error("Audit Loader Error:", error);
     return { report: [], error: error.message };
   }
 }
 
 export default function AuditReport() {
-  const { report, error, debug } = useLoaderData();
+  const { report, error } = useLoaderData();
   const navigate = useNavigate();
 
   const downloadCSV = () => {
-    const headers = ["Product Title", "Product ID", "Hidden Variant Names", "Hidden In Catalogs"];
-    const rows = report.map(item => [
+    const headers = ["Product Title", "Product ID", "Hidden Variants", "Restricted Customer Accounts"];
+    const rows = report.map((item) => [
       `"${item.title.replace(/"/g, '""')}"`,
       item.productId.split("/").pop(),
       `"${item.variantNames.replace(/"/g, '""')}"`,
-      `"${item.catalogs.join(", ")}"`
+      `"${item.catalogs.join(", ")}"`,
     ]);
 
-    const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const csvContent = [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-    
     const link = document.createElement("a");
     link.href = url;
-    link.setAttribute("download", `Worthy_Visibility_Audit_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute(
+      "download",
+      `Dutch_Rusk_Visibility_Audit_${new Date().toISOString().split("T")[0]}.csv`
+    );
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   return (
-    <s-page heading="Global Audit Report" back-action-url="/app/catalog-manager">
+    <s-page heading="Visibility Audit Report" back-action-url="/app/catalog-manager">
       <s-layout>
         <s-layout-section>
-          <s-box padding="base" background="highlight" style={{ marginBottom: "20px", border: "1px solid #e1e3e5" }}>
+
+          {/* Intro panel */}
+          <s-box padding="base" background="bg-surface-secondary" borderRadius="base"
+            style={{ marginBottom: '20px', border: '1px solid #e1e3e5' }}>
             <s-block-stack gap="tight">
-              <s-text fontWeight="bold">Database Status:</s-text>
-              <s-text>Total Raw records in DB: {debug?.rawDbCount || 0}</s-text>
+              <s-text variant="headingMd" as="h2">📋 What is this report?</s-text>
+              <s-text>
+                This shows every product that has <b>custom visibility rules</b> applied —
+                including which pack sizes are hidden and which customer accounts are affected.
+              </s-text>
+              <s-text tone="subdued">
+                Note: Products hidden by blanket pack-type rules (e.g. "hide all Shippers") are not
+                listed here unless they also have a product-level override.
+              </s-text>
             </s-block-stack>
           </s-box>
 
           <s-box padding="base" borderWidth="base" borderRadius="base" background="surface">
             <s-block-stack gap="base">
-              
-              <s-stack direction="inline" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
-                  <s-text variant="headingMd" as="h2">Visibility Overview ({report.length} Products)</s-text>
-                  <s-text color="subdued">Detailed view of hidden variants per catalog.</s-text>
+                  <div style={{ fontSize: '16px', fontWeight: '700' }}>
+                    {report.length} Product{report.length !== 1 ? 's' : ''} with Custom Rules
+                  </div>
+                  <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>
+                    Sorted A–Z by product name
+                  </div>
                 </div>
-                <s-button variant="primary" tone="success" onClick={downloadCSV} disabled={report.length === 0}>
-                  Download CSV
+                <s-button variant="primary" onClick={downloadCSV} disabled={report.length === 0}>
+                  ⬇ Download CSV
                 </s-button>
-              </s-stack>
+              </div>
 
-              {error && <s-banner tone="critical">{error}</s-banner>}
+              {error && (
+                <div style={{ padding: '12px', background: '#fff4f4', border: '1px solid #ffd2d2', borderRadius: '6px', color: '#d72c0d' }}>
+                  <b>Error loading report:</b> {error}
+                </div>
+              )}
 
-              {report.length === 0 ? (
-                <s-box padding="base" background="subdued" borderRadius="base">
-                  <s-text>No active overrides found in the database.</s-text>
-                </s-box>
+              {report.length === 0 && !error ? (
+                <div style={{ textAlign: 'center', padding: '40px', color: '#6d7175' }}>
+                  <div style={{ fontSize: '40px', marginBottom: '12px' }}>✅</div>
+                  <div style={{ fontWeight: '600', fontSize: '16px' }}>No custom product rules found</div>
+                  <div style={{ marginTop: '6px', fontSize: '14px' }}>
+                    All visibility is controlled by blanket pack-type rules. Head to the Catalog Manager to configure product-level overrides.
+                  </div>
+                </div>
               ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
                     <thead>
-                      <tr style={{ borderBottom: "2px solid #ccc" }}>
-                        <th style={{ padding: "12px 8px" }}>Product Title</th>
-                        <th style={{ padding: "12px 8px" }}>Hidden Variants</th>
-                        <th style={{ padding: "12px 8px" }}>Restricted Catalogs</th>
+                      <tr style={{ borderBottom: '2px solid #c9cccf', background: '#f6f6f7' }}>
+                        <th style={{ padding: '12px 14px', fontWeight: '600' }}>Product</th>
+                        <th style={{ padding: '12px 14px', fontWeight: '600' }}>Hidden Pack Sizes</th>
+                        <th style={{ padding: '12px 14px', fontWeight: '600' }}>Affected Customer Accounts</th>
                       </tr>
                     </thead>
                     <tbody>
                       {report.map((item, index) => (
-                        <tr key={item.productId} style={{ borderBottom: "1px solid #eee", backgroundColor: index % 2 === 0 ? "#fff" : "#f9fafb" }}>
-                          <td style={{ padding: "12px 8px", fontWeight: "500", maxWidth: "300px" }}>{item.title}</td>
-                          <td style={{ padding: "12px 8px" }}>
-                            <s-text color="critical" fontWeight="bold">
-                              {item.variantNames}
-                            </s-text>
+                        <tr
+                          key={item.productId}
+                          style={{
+                            borderBottom: '1px solid #e1e3e5',
+                            background: index % 2 === 0 ? '#fff' : '#fafbfb',
+                          }}
+                        >
+                          <td style={{ padding: '12px 14px', fontWeight: '500', maxWidth: '280px' }}>
+                            {item.title}
                           </td>
-                          <td style={{ padding: "12px 8px" }}>
-                            <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
-                              {item.catalogs.map(cat => (
-                                <span key={cat} style={{ background: "#e4e5e7", padding: "4px 8px", borderRadius: "4px", fontSize: "12px" }}>
+                          <td style={{ padding: '12px 14px' }}>
+                            {item.variantNames && item.variantNames !== "None" ? (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                {item.variantNames.split(", ").map((v) => (
+                                  <span key={v} style={{
+                                    background: '#ffeaeb', color: '#d72c0d',
+                                    padding: '2px 8px', borderRadius: '12px',
+                                    fontSize: '12px', fontWeight: '600',
+                                  }}>
+                                    {v}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span style={{ color: '#6d7175', fontStyle: 'italic' }}>None saved</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '12px 14px' }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              {item.catalogs.map((cat) => (
+                                <span key={cat} style={{
+                                  background: '#e4e5e7', padding: '2px 8px',
+                                  borderRadius: '12px', fontSize: '12px', fontWeight: '500',
+                                }}>
                                   {cat}
                                 </span>
                               ))}
-                            </s-stack>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -195,6 +228,7 @@ export default function AuditReport() {
                   </table>
                 </div>
               )}
+
             </s-block-stack>
           </s-box>
         </s-layout-section>

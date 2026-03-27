@@ -290,106 +290,189 @@ export default function CatalogOverrides() {
     return JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
   });
 
+  const hiddenCount = products.reduce((acc, p) => acc + (pendingHidden[p.id] || []).length, 0);
+  const dirtyCount = products.filter(p => {
+    const cur = pendingHidden[p.id] || [];
+    const base = initialHidden.current[p.id] || [];
+    return JSON.stringify([...cur].sort()) !== JSON.stringify([...base].sort());
+  }).length;
+
   return (
-    <s-page heading={`Manage Visibility: ${catalogName}`} back-action-url="/app/catalog-manager">
+    <s-page heading={`Product Visibility: ${catalogName}`} back-action-url="/app/catalog-manager">
       <s-layout>
         <s-layout-section>
-          
-          {/* LAYMAN INSTRUCTIONS PANEL */}
-          <s-box padding="base" background="bg-surface-secondary" borderRadius="base" style={{ marginBottom: '20px', border: '1px solid #e1e3e5' }}>
+
+          {/* Instructions */}
+          <s-box padding="base" background="bg-surface-secondary" borderRadius="base"
+            style={{ marginBottom: '20px', border: '1px solid #e1e3e5' }}>
             <s-block-stack gap="tight">
-              <s-text variant="headingMd" as="h2">🎯 Product Visibility Rules</s-text>
+              <s-text variant="headingMd" as="h2">🎯 How to use this page</s-text>
               <s-text>
-                Check or uncheck the boxes below to set exactly what sizes this customer is allowed to order.
+                Each box below is a pack size this customer can order. <b>Tick = Visible. Untick = Hidden.</b>
               </s-text>
-              <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#e3f1df', borderRadius: '4px' }}>
-                <s-text fontWeight="bold" color="success">✅ Ticked = Product is VISIBLE to this customer.</s-text>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '8px', flexWrap: 'wrap' }}>
+                <div style={{ padding: '8px 14px', background: '#e3f1df', borderRadius: '6px', fontSize: '13px', fontWeight: '600', color: '#008060' }}>
+                  ✅ Ticked = Customer CAN order this size
+                </div>
+                <div style={{ padding: '8px 14px', background: '#ffeaeb', borderRadius: '6px', fontSize: '13px', fontWeight: '600', color: '#d72c0d' }}>
+                  ⬜ Unticked = Customer CANNOT order this size (shown in red)
+                </div>
               </div>
-              <div style={{ marginTop: '5px', padding: '10px', backgroundColor: '#ffeaeb', borderRadius: '4px' }}>
-                <s-text fontWeight="bold" color="critical">⬜ Unticked = Product is HIDDEN (Shows Red).</s-text>
-              </div>
-              <s-text color="subdued" style={{ marginTop: '10px' }}>Use "Hide/Show All Visible" buttons to bulk edit, then click <b>Save All Changes</b>.</s-text>
+              <s-text tone="subdued" style={{ marginTop: '4px' }}>
+                Use <b>Hide All / Show All</b> to bulk change, then hit <b>Save All Changes</b> to apply.
+              </s-text>
             </s-block-stack>
           </s-box>
 
-          <s-section heading="Product Catalog">
-            <s-stack direction="inline" gap="base" style={{ margin: "16px 0", alignItems: "center" }}>
-              <div style={{ flex: 1 }}>
-                <s-text-field 
-                  label="Instant Search Assigned Products" 
-                  value={searchInput} 
-                  onInput={(e) => setSearchInput(e.target.value)} 
-                  placeholder="Start typing to filter instantly..."
-                />
-              </div>
-            </s-stack>
+          {/* Sticky save bar */}
+          {hasUnsavedChanges && (
+            <div style={{
+              position: 'sticky', top: 0, zIndex: 100,
+              background: '#1a1a2e', color: '#fff',
+              padding: '12px 20px', borderRadius: '8px', marginBottom: '16px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+            }}>
+              <span style={{ fontSize: '14px' }}>
+                ✏️ <b>{dirtyCount} product{dirtyCount !== 1 ? 's' : ''}</b> with unsaved changes
+              </span>
+              <s-button variant="primary" tone="success" onClick={handleSaveAllDirty} disabled={isSaving}>
+                {isSaving ? "Saving..." : "💾 Save All Changes"}
+              </s-button>
+            </div>
+          )}
 
-            <s-stack direction="inline" gap="tight" style={{ marginBottom: "20px", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-              <s-stack direction="inline" gap="tight" style={{ alignItems: "center" }}>
-                <s-text>Filter:</s-text>
+          <s-section heading={`Products in this Catalog (${products.length})`}>
+
+            {/* Search + filters */}
+            <div style={{ marginBottom: '16px' }}>
+              <s-text-field
+                label="Search products"
+                value={searchInput}
+                onInput={(e) => setSearchInput(e.target.value)}
+                placeholder="Type a product name to filter..."
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: '13px', color: '#6d7175' }}>Filter by pack type:</span>
                 <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter("all")}>All</s-button>
                 {allVariantTypes.map((type) => (
                   <s-button key={type} variant={variantFilter === type ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter(type)}>{type}</s-button>
                 ))}
-              </s-stack>
-
+              </div>
               {filteredProducts.length > 0 && (
-                <s-stack direction="inline" gap="tight">
-                  <s-button variant="secondary" size="slim" onClick={handleHideAllVisible}>Hide All Visible</s-button>
-                  <s-button variant="secondary" size="slim" onClick={handleShowAllVisible}>Show All Visible</s-button>
-                  {hasUnsavedChanges && (
-                    <s-button variant="primary" size="slim" tone="success" onClick={handleSaveAllDirty} disabled={isSaving}>
-                      {isSaving ? "Saving..." : "Save All Changes"}
-                    </s-button>
-                  )}
-                </s-stack>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <s-button variant="secondary" size="slim" onClick={handleHideAllVisible}>Hide All</s-button>
+                  <s-button variant="secondary" size="slim" onClick={handleShowAllVisible}>Show All</s-button>
+                </div>
               )}
-            </s-stack>
+            </div>
 
+            {/* Product cards */}
             <s-stack direction="block" gap="base">
               {filteredProducts.length === 0 ? (
-                <s-box padding="base" background="surface" borderWidth="base" borderRadius="base">
-                  <s-text fontWeight="bold">{searchInput ? "No matches for your search." : "No products found in this specific catalog."}</s-text>
-                  {debugMessage && !searchInput && (
-                    <s-text style={{ color: 'red', display: 'block', marginTop: '10px' }}>Debug: {debugMessage}</s-text>
+                <div style={{ textAlign: 'center', padding: '40px', border: '1px solid #e1e3e5', borderRadius: '8px', color: '#6d7175' }}>
+                  {searchInput ? (
+                    <>
+                      <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔍</div>
+                      <div style={{ fontWeight: '600' }}>No products match "{searchInput}"</div>
+                      <div style={{ fontSize: '13px', marginTop: '4px' }}>Try a different search term or clear the filter.</div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: '32px', marginBottom: '8px' }}>📦</div>
+                      <div style={{ fontWeight: '600' }}>No products found in this catalog</div>
+                      <div style={{ fontSize: '13px', marginTop: '4px' }}>
+                        {debugMessage || "Make sure products are assigned to this customer in Shopify B2B settings."}
+                      </div>
+                    </>
                   )}
-                </s-box>
+                </div>
               ) : (
                 filteredProducts.map((product) => {
                   const currentHidden = pendingHidden[product.id] || [];
                   const baseHidden = initialHidden.current[product.id] || [];
                   const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
+                  const hasCustomRule = overridesMap[product.id]?.length > 0;
+                  const allHidden = product.variants.nodes.every(v => currentHidden.includes(v.id));
+                  const someHidden = product.variants.nodes.some(v => currentHidden.includes(v.id));
 
                   return (
-                    <s-box key={product.id} padding="base" borderWidth="base" borderRadius="base" background={overridesMap[product.id]?.length > 0 ? "highlight" : "subdued"}>
-                      <s-text fontWeight="bold" style={{ marginBottom: "12px", display: "block" }}>{product.title}</s-text>
-                      <s-stack direction="inline" gap="tight" style={{ flexWrap: "wrap" }}>
+                    <div key={product.id} style={{
+                      border: `1px solid ${isDirty ? '#f59e0b' : hasCustomRule ? '#d72c0d' : '#e1e3e5'}`,
+                      borderRadius: '8px',
+                      padding: '16px',
+                      background: allHidden ? '#fff4f4' : isDirty ? '#fffbeb' : '#fff',
+                    }}>
+                      {/* Product header */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                        <div>
+                          <div style={{ fontWeight: '700', fontSize: '15px' }}>{product.title}</div>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                            {allHidden && (
+                              <span style={{ fontSize: '11px', background: '#d72c0d', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>All hidden</span>
+                            )}
+                            {!allHidden && someHidden && (
+                              <span style={{ fontSize: '11px', background: '#ffeaeb', color: '#d72c0d', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>Partial restriction</span>
+                            )}
+                            {hasCustomRule && !isDirty && (
+                              <span style={{ fontSize: '11px', background: '#fff3cd', color: '#856404', padding: '2px 8px', borderRadius: '12px', fontWeight: '500' }}>Custom rule saved</span>
+                            )}
+                            {isDirty && (
+                              <span style={{ fontSize: '11px', background: '#f59e0b', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>Unsaved changes</span>
+                            )}
+                          </div>
+                        </div>
+                        {isDirty && (
+                          <s-button variant="primary" size="slim" onClick={() => handleSave(product.id)} disabled={isSaving}>
+                            Save
+                          </s-button>
+                        )}
+                      </div>
+
+                      {/* Variant checkboxes */}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                         {product.variants.nodes.map((variant) => {
                           const isHidden = currentHidden.includes(variant.id);
                           return (
-                            <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
-                              <s-checkbox 
-                                label={variant.title} 
-                                checked={!isHidden} // Ticked = Visible
-                                onInput={() => handleVariantToggle(product.id, variant.id)} // Removed the duplicate onChange
+                            <div
+                              key={variant.id}
+                              onClick={() => handleVariantToggle(product.id, variant.id)}
+                              style={{
+                                padding: '8px 12px',
+                                border: `1px solid ${isHidden ? '#d72c0d' : '#c9cccf'}`,
+                                borderRadius: '6px',
+                                background: isHidden ? '#ffeaeb' : '#f6f6f7',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontSize: '13px',
+                                fontWeight: isHidden ? '600' : '400',
+                                color: isHidden ? '#d72c0d' : '#1a1a2e',
+                              }}
+                            >
+                              <s-checkbox
+                                label={variant.title}
+                                checked={!isHidden}
+                                onInput={() => handleVariantToggle(product.id, variant.id)}
+                                onClick={(e) => e.stopPropagation()}
                               />
-                            </s-box>
+                            </div>
                           );
                         })}
-                      </s-stack>
-                      {isDirty && (
-                        <div style={{ marginTop: "12px", display: "flex", justifyContent: "flex-end" }}>
-                          <s-button variant="primary" onClick={() => handleSave(product.id)} disabled={isSaving}>Save Override</s-button>
-                        </div>
-                      )}
-                    </s-box>
+                      </div>
+                    </div>
                   );
                 })
               )}
             </s-stack>
 
-            {products.length > 0 && (
-              <s-stack direction="inline" gap="base" style={{ marginTop: "24px", justifyContent: "space-between" }}>
+            {/* Pagination */}
+            {products.length > 0 && (pageInfo.hasNextPage || pageInfo.hasPreviousPage) && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '24px' }}>
                 <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => {
                   if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
                   navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`);
@@ -398,7 +481,7 @@ export default function CatalogOverrides() {
                   if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
                   navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&after=${pageInfo.endCursor}`);
                 }}>Next →</s-button>
-              </s-stack>
+              </div>
             )}
           </s-section>
         </s-layout-section>

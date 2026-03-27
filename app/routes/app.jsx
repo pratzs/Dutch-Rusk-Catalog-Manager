@@ -18,6 +18,8 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/catalog-manager">Catalog Manager</s-link>
+        <s-link href="/app/audit">Audit Report</s-link>
+        <s-link href="/app/clone">Copy Rules</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>
