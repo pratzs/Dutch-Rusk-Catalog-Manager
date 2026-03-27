@@ -197,6 +197,19 @@ export default function CatalogOverrides() {
     return filtered;
   }, [products, variantFilter, searchInput]);
 
+  // Returns variant IDs already covered by bulk rules (types + master SKUs).
+  // These should never be saved as product-level overrides.
+  const getBulkHiddenIds = (product) => {
+    return product.variants.nodes
+      .filter(v => {
+        const sku = (v.sku || "").trim().toUpperCase();
+        const byType = hiddenVariantTypes.some(t => v.title.toLowerCase().includes(t.toLowerCase()));
+        const byMaster = globalHiddenSkus.some(gs => gs.trim().toUpperCase() === sku);
+        return byType || byMaster;
+      })
+      .map(v => v.id);
+  };
+
   const handleVariantToggle = (productId, variantId) => {
     setPendingHidden((prev) => {
       const current = prev[productId] || [];
@@ -206,11 +219,15 @@ export default function CatalogOverrides() {
   };
 
   const handleSave = (productId) => {
+    const product = products.find(p => p.id === productId);
+    const bulkHiddenIds = product ? getBulkHiddenIds(product) : [];
+    const manualOnly = (pendingHidden[productId] || []).filter(id => !bulkHiddenIds.includes(id));
+
     const formData = new FormData();
     formData.append("intent", "save");
     formData.append("catalogId", catalogDbId);
     formData.append("productId", productId);
-    (pendingHidden[productId] || []).forEach((v) => formData.append("hiddenVariantIds", v));
+    manualOnly.forEach((v) => formData.append("hiddenVariantIds", v));
     submit(formData, { method: "post" });
   };
 
@@ -247,7 +264,8 @@ export default function CatalogOverrides() {
       const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
 
       if (isDirty) {
-        payload[p.id] = currentHidden;
+        const bulkHiddenIds = getBulkHiddenIds(p);
+        payload[p.id] = currentHidden.filter(id => !bulkHiddenIds.includes(id));
         dirtyCount++;
       }
     });
