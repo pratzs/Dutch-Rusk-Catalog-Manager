@@ -12,7 +12,6 @@ export async function loader({ request }) {
           id
           title
           status
-          type # Added to identify Sales Channels
         }
       }
     }
@@ -20,9 +19,16 @@ export async function loader({ request }) {
 
   const data = await response.json();
   
-  // NEGATIVE FILTER: Keep everything EXCEPT Sales Channels (APP)
+  // SAFE FILTERING: Exclude known Shopify system channels by checking the title
+  // This avoids the 500 error caused by the unsupported 'type' field in some API versions
   const catalogs = data.data.catalogs.nodes.filter(
-    (cat) => cat.type !== 'APP'
+    (cat) => {
+      const title = cat.title.toLowerCase();
+      return !title.includes("channel catalog") && 
+             !title.includes("point of sale") && 
+             !title.includes("hydrogen") && 
+             !title.includes("graphiql");
+    }
   );
 
   const rules = await prisma.catalogRule.findMany();
