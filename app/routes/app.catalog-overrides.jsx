@@ -350,9 +350,8 @@ export default function CatalogOverrides() {
                             <s-box key={variant.id} padding="tight" borderWidth="base" borderRadius="base" background={isHidden ? "critical-subdued" : "surface"}>
                               <s-checkbox 
                                 label={variant.title} 
-                                checked={!isHidden} // ✅ INVERTED: Ticked = Visible
-                                onChange={() => handleVariantToggle(product.id, variant.id)}
-                                onInput={() => handleVariantToggle(product.id, variant.id)} 
+                                checked={!isHidden} // Ticked = Visible
+                                onInput={() => handleVariantToggle(product.id, variant.id)} // Removed the duplicate onChange
                               />
                             </s-box>
                           );
