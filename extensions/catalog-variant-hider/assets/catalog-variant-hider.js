@@ -10,9 +10,12 @@
     const res = await fetch(`${APP_URL}/api/catalog-rules?catalogId=${catalogId}&productId=${productId || ''}`);
     const rules = await res.json();
 
-    if (rules.hiddenVariantTypes?.length > 0 || rules.hiddenVariantIds?.length > 0) {
-      const validTypes = rules.hiddenVariantTypes || [];
-      const validIds = rules.hiddenVariantIds || [];
+    // When a product-level override exists, it is authoritative.
+    // Blanket hiddenVariantTypes must NOT apply — only the explicit hiddenVariantIds list counts.
+    const validTypes = rules.hasOverride ? [] : (rules.hiddenVariantTypes || []);
+    const validIds = rules.hiddenVariantIds || [];
+
+    if (validTypes.length > 0 || validIds.length > 0) {
 
       const applyRules = () => {
         if (isProcessing) return;
