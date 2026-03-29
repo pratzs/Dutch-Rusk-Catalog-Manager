@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Catalog shelves / grid lines (orange accent) -->
+  <rect x="96" y="176" width="320" height="20" rx="10" fill="#FF6B35" opacity="0.9"/>
+  <rect x="96" y="246" width="240" height="20" rx="10" fill="#FF6B35" opacity="0.6"/>
+  <rect x="96" y="316" width="280" height="20" rx="10" fill="#FF6B35" opacity="0.4"/>
+
+  <!-- "DR" monogram -->
+  <!-- D -->
+  <text x="96" y="150" font-family="Georgia, serif" font-size="110" font-weight="700" fill="#ffffff" opacity="0.15">DR</text>
+
+  <!-- Tick / checkmark accent (bottom right) -->
+  <circle cx="392" cy="376" r="56" fill="#FF6B35"/>
+  <polyline points="366,376 386,398 420,356" stroke="#ffffff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

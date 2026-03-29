@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "c19c401d15d011936f4c7db6715514b3"
-name = "dutch-rusk-catalog-manager"
+name = "Dutch Rusk Catalog Manager"
 application_url = "https://dutch-rusk-catalog-manager.onrender.com"
 embedded = true
 
