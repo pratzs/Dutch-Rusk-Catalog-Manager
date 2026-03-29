@@ -152,7 +152,7 @@ export default function AuditReport() {
                     Sorted A–Z by product name
                   </div>
                 </div>
-                <s-button variant="primary" onClick={downloadCSV} disabled={report.length === 0}>
+                <s-button variant="primary" onClick={downloadCSV} disabled={report.length === 0 || undefined}>
                   ⬇ Download CSV
                 </s-button>
               </div>

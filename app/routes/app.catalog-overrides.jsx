@@ -336,7 +336,7 @@ export default function CatalogOverrides() {
               <span style={{ fontSize: '14px' }}>
                 ✏️ <b>{dirtyCount} product{dirtyCount !== 1 ? 's' : ''}</b> with unsaved changes
               </span>
-              <s-button variant="primary" tone="success" onClick={handleSaveAllDirty} disabled={isSaving}>
+              <s-button variant="primary" tone="success" onClick={handleSaveAllDirty} disabled={isSaving || undefined}>
                 {isSaving ? "Saving..." : "💾 Save All Changes"}
               </s-button>
             </div>
@@ -426,7 +426,7 @@ export default function CatalogOverrides() {
                           </div>
                         </div>
                         {isDirty && (
-                          <s-button variant="primary" size="slim" onClick={() => handleSave(product.id)} disabled={isSaving}>
+                          <s-button variant="primary" size="slim" onClick={() => handleSave(product.id)} disabled={isSaving || undefined}>
                             Save
                           </s-button>
                         )}
@@ -473,11 +473,11 @@ export default function CatalogOverrides() {
             {/* Pagination */}
             {products.length > 0 && (pageInfo.hasNextPage || pageInfo.hasPreviousPage) && (
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '24px' }}>
-                <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage} onClick={() => {
+                <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage || undefined} onClick={() => {
                   if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
                   navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`);
                 }}>← Previous</s-button>
-                <s-button variant="secondary" disabled={!pageInfo.hasNextPage} onClick={() => {
+                <s-button variant="secondary" disabled={!pageInfo.hasNextPage || undefined} onClick={() => {
                   if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
                   navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&after=${pageInfo.endCursor}`);
                 }}>Next →</s-button>
