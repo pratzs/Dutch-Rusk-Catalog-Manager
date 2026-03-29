@@ -17,9 +17,10 @@ export async function loader({ request }) {
   let catalogId = url.searchParams.get("catalogId");
   let productId = url.searchParams.get("productId");
 
-  // NORMALIZE: Extract only the numeric ID from ANY GID format
+  // NORMALIZE catalogId only — DB stores catalog IDs as numeric strings.
+  // productId must NOT be normalized — DB stores it as a full GID (gid://shopify/Product/xxx)
+  // because that is what the admin app sends when saving overrides.
   if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
-  if (productId && productId.includes("/")) productId = productId.split("/").pop();
 
   const responseHeaders = {
     "Content-Type": "application/json",
@@ -46,10 +47,15 @@ export async function loader({ request }) {
     });
   }
 
+  // Normalize variant IDs to numeric — DB stores full GIDs (gid://shopify/ProductVariant/xxx)
+  // but Shopify theme HTML only contains the numeric part (e.g. value="12345678").
+  const rawVariantIds = override ? override.hiddenVariantIds : [];
+  const hiddenVariantIds = rawVariantIds.map(id => id.includes("/") ? id.split("/").pop() : id);
+
   return new Response(
     JSON.stringify({
       hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],
-      hiddenVariantIds: override ? override.hiddenVariantIds : [],
+      hiddenVariantIds,
       hasOverride: !!override,
     }),
     { status: 200, headers: responseHeaders }
