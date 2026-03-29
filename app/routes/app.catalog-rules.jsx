@@ -156,7 +156,7 @@ export default function CatalogRules() {
           {/* Actions */}
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px' }}>
             <s-button onClick={() => navigate("/app/catalog-manager")}>Cancel</s-button>
-            <s-button variant="primary" onClick={handleSave} disabled={isSaving}>
+            <s-button variant="primary" onClick={handleSave} disabled={isSaving || undefined}>
               {isSaving ? "Saving..." : "Save Rules"}
             </s-button>
           </div>
