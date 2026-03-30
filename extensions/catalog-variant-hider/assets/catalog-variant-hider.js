@@ -1,128 +1,203 @@
 (function () {
   const APP_URL = "https://dutch-rusk-catalog-manager.onrender.com";
-  let isProcessing = false;
+  const rulesCache = {};
 
-  async function init() {
-    const el = document.getElementById('catalog-variant-hider-data') || document.querySelector("[data-catalog-id]");
-    if (!el) return;
+  // ── API ──────────────────────────────────────────────────────────────────
+  async function fetchRules(catalogId, productId) {
+    const key = `${catalogId}::${productId || ""}`;
+    if (rulesCache[key]) return rulesCache[key];
+    try {
+      const pid = productId ? encodeURIComponent(productId) : "";
+      const res = await fetch(
+        `${APP_URL}/api/catalog-rules?catalogId=${encodeURIComponent(catalogId)}&productId=${pid}`
+      );
+      const data = await res.json();
+      rulesCache[key] = data;
+      return data;
+    } catch (_) {
+      return { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
+    }
+  }
 
-    const { catalogId, productId } = el.dataset;
-    const res = await fetch(`${APP_URL}/api/catalog-rules?catalogId=${catalogId}&productId=${productId || ''}`);
-    const rules = await res.json();
-
-    // When a product-level override exists, it is authoritative.
-    // Blanket hiddenVariantTypes must NOT apply — only the explicit hiddenVariantIds list counts.
+  // ── Apply rules to a single container ───────────────────────────────────
+  function applyRulesToContainer(container, rules) {
+    // When an override exists it is fully authoritative — blanket type rules are suppressed.
     const validTypes = rules.hasOverride ? [] : (rules.hiddenVariantTypes || []);
-    const validIds = rules.hiddenVariantIds || [];
+    const validIds   = rules.hiddenVariantIds || [];
 
-    if (validTypes.length > 0 || validIds.length > 0) {
+    if (validTypes.length === 0 && validIds.length === 0) return;
 
-      const applyRules = () => {
-        if (isProcessing) return;
-        isProcessing = true;
+    container.setAttribute("data-cvh-processed", "1");
+    const content = container.textContent || "";
 
-        const containers = document.querySelectorAll('.product, .product-single, .card, .grid__item, .product-section, [data-product-id], .product-item, .product__info-container');
+    // SKU-based check (product page selected variant)
+    const currentSkuEl = container.querySelector(".product__sku, [data-sku]");
+    const currentSku   = currentSkuEl ? currentSkuEl.textContent.trim() : "";
+    const isForbiddenSkuSelected = validIds.includes(currentSku);
 
-        containers.forEach(container => {
-          container.setAttribute('data-cvh-processed', '1');
-          const content = container.textContent || "";
-          
-          // 1. Grab the selected SKU dynamically from Ignite's native elements
-          const currentSkuElement = container.querySelector('.product__sku, [data-sku]');
-          const currentSku = currentSkuElement ? currentSkuElement.textContent.trim() : "";
-          
-          const isForbiddenSkuSelected = validIds.includes(currentSku);
+    // Targeted variant-input check (radio buttons / select options only — NOT innerHTML)
+    const variantInputMatch = validIds.some(id =>
+      Array.from(container.querySelectorAll('input[type="radio"], option'))
+        .some(el => el.value === id)
+    );
 
-          // 2. Add SKU matching to the main logic
-          const isMatch = validTypes.some(type => content.includes(type)) || isForbiddenSkuSelected || validIds.some(id => container.innerHTML.includes(id));
+    const isMatch =
+      validTypes.some(t => content.includes(t)) ||
+      isForbiddenSkuSelected ||
+      variantInputMatch;
 
-          if (isMatch) {
-            const hasOtherOptions = content.includes("Bag") || content.includes("Outer") || container.querySelectorAll('input[type="radio"]:not([style*="none"])').length > 1;
+    if (!isMatch) return;
 
-            // 3. FORCE disable if they land on a forbidden SKU exception
-            if (!hasOtherOptions || isForbiddenSkuSelected) {
-              
-              // A. UPDATE BUTTONS
-              const btn = container.querySelector('button[name="add"], .add-to-cart, [type="submit"]');
-              if (btn) {
-                btn.disabled = true;
-                btn.textContent = window.location.pathname.includes('/products/') ? "Sold out" : "Back soon";
-                btn.style.opacity = "0.5";
-              }
+    // Determine if this container has multiple purchasable options
+    const visibleRadios = container.querySelectorAll('input[type="radio"]:not([style*="none"])');
+    const hasOtherOptions = visibleRadios.length > 1;
 
-              // B. INJECT NATIVE SIDE-BY-SIDE SOLD OUT BADGE
-              const badges = container.querySelectorAll('.badge, .card__badge, .product-badge, .sale-badge, .grid-product__badge');
-              let badgeParent = null;
-              let templateBadge = null;
+    if (!hasOtherOptions || isForbiddenSkuSelected) {
+      // ── Disable the whole product ──────────────────────────────────────
 
-              badges.forEach(b => {
-                if (!b.querySelector('.badge, .card__badge, .product-badge')) {
-                  badgeParent = b.parentElement;
-                  templateBadge = b;
-                }
-              });
+      // A. Buy button
+      const btn = container.querySelector('button[name="add"], .add-to-cart, [type="submit"]');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = window.location.pathname.includes("/products/")
+          ? "Sold out"
+          : "Back soon";
+        btn.style.opacity = "0.5";
+      }
 
-              if (badgeParent && templateBadge) {
-                if (!badgeParent.textContent.toLowerCase().includes('sold out')) {
-                  const soldOutBadge = templateBadge.cloneNode(true);
-                  soldOutBadge.textContent = 'Sold out';
-                  soldOutBadge.className = templateBadge.className.replace(/sale/g, 'sold-out').replace(/Sale/g, 'SoldOut');
-                  soldOutBadge.style.setProperty('background-color', '#4a4a4a', 'important');
-                  soldOutBadge.style.setProperty('color', '#ffffff', 'important');
-                  soldOutBadge.style.setProperty('border-color', '#4a4a4a', 'important');
-                  badgeParent.appendChild(soldOutBadge);
-                }
-              }
+      // B. Sold-out badge (clone nearest existing badge)
+      const badges = container.querySelectorAll(
+        ".badge, .card__badge, .product-badge, .sale-badge, .grid-product__badge"
+      );
+      let badgeParent = null, templateBadge = null;
+      badges.forEach(b => {
+        if (!b.querySelector(".badge, .card__badge, .product-badge")) {
+          badgeParent   = b.parentElement;
+          templateBadge = b;
+        }
+      });
+      if (badgeParent && templateBadge &&
+          !badgeParent.textContent.toLowerCase().includes("sold out")) {
+        const soldOutBadge = templateBadge.cloneNode(true);
+        soldOutBadge.textContent = "Sold out";
+        soldOutBadge.className   = templateBadge.className
+          .replace(/sale/g,  "sold-out")
+          .replace(/Sale/g, "SoldOut");
+        soldOutBadge.style.setProperty("background-color", "#4a4a4a", "important");
+        soldOutBadge.style.setProperty("color",            "#ffffff", "important");
+        soldOutBadge.style.setProperty("border-color",    "#4a4a4a", "important");
+        badgeParent.appendChild(soldOutBadge);
+      }
 
-              // C. AGGRESSIVELY HIDE PRICES & STOCK
-              const extras = container.querySelectorAll('label, .inventory, .stock, .quantity, .variant-wrapper, [id^="Inventory"], .price, [class*="price"], [class*="stock"], [class*="inventory"]');
-              
-              extras.forEach(item => {
-                const itemText = (item.textContent || "").toLowerCase();
-                const validTypesLower = validTypes.map(t => t.toLowerCase());
-                const classStr = (typeof item.className === 'string') ? item.className.toLowerCase() : "";
-
-                if (
-                  validTypesLower.some(t => itemText.includes(t)) || 
-                  itemText.includes("pack size") || 
-                  itemText.includes("in stock") || 
-                  itemText.includes("stock") ||
-                  item.closest('.quantity') ||
-                  classStr.includes('price') ||
-                  classStr.includes('stock') ||
-                  classStr.includes('inventory')
-                ) {
-                  item.style.setProperty('display', 'none', 'important');
-                }
-              });
-
-            } else {
-              // MULTI VARIANT - Hide restricted buttons only
-              container.querySelectorAll('input, label, option, .swatch-element').forEach(item => {
-                const val = item.value || item.textContent || "";
-                if (validTypes.some(t => val.includes(t)) || validIds.some(id => val.includes(id))) {
-                  item.style.setProperty('display', 'none', 'important');
-                  const wrap = item.closest('.swatch-element, .variant-input, li');
-                  if (wrap && !wrap.classList.contains('grid__item')) {
-                    wrap.style.setProperty('display', 'none', 'important');
-                  }
-                }
-              });
-            }
-          }
-        });
-
-        setTimeout(() => { isProcessing = false; }, 100);
-      };
-
-      applyRules();
-      
-      const observer = new MutationObserver((mutations) => {
-        const shouldTrigger = mutations.some(m => !m.target.closest || !m.target.closest('[data-cvh-processed]'));
-        if (shouldTrigger) applyRules();
+      // C. Hide price / stock / quantity
+      const extras = container.querySelectorAll(
+        'label, .inventory, .stock, .quantity, .variant-wrapper, [id^="Inventory"], .price, [class*="price"], [class*="stock"], [class*="inventory"]'
+      );
+      const validTypesLower = validTypes.map(t => t.toLowerCase());
+      extras.forEach(item => {
+        const itemText = (item.textContent || "").toLowerCase();
+        const classStr = typeof item.className === "string" ? item.className.toLowerCase() : "";
+        if (
+          validTypesLower.some(t => itemText.includes(t)) ||
+          itemText.includes("pack size") ||
+          itemText.includes("in stock") ||
+          itemText.includes("stock") ||
+          item.closest(".quantity") ||
+          classStr.includes("price") ||
+          classStr.includes("stock") ||
+          classStr.includes("inventory")
+        ) {
+          item.style.setProperty("display", "none", "important");
+        }
       });
 
-      observer.observe(document.body, { childList: true, subtree: true });
+    } else {
+      // ── Multi-variant: hide only the restricted options ────────────────
+      container.querySelectorAll("input, label, option, .swatch-element").forEach(item => {
+        const val = item.value || item.textContent || "";
+        if (
+          validTypes.some(t => val.includes(t)) ||
+          validIds.some(id => val.includes(id))
+        ) {
+          item.style.setProperty("display", "none", "important");
+          const wrap = item.closest(".swatch-element, .variant-input, li");
+          if (wrap && !wrap.classList.contains("grid__item")) {
+            wrap.style.setProperty("display", "none", "important");
+          }
+        }
+      });
+    }
+  }
+
+  // ── Bootstrap ────────────────────────────────────────────────────────────
+  async function init() {
+    const el =
+      document.getElementById("catalog-variant-hider-data") ||
+      document.querySelector("[data-catalog-id]");
+    if (!el) return;
+
+    const catalogId      = el.dataset.catalogId;
+    const singleProductId = el.dataset.productId || null;
+
+    if (singleProductId) {
+      // ══ PRODUCT PAGE — single product, single fetch ═══════════════════
+      const rules = await fetchRules(catalogId, singleProductId);
+      const validTypes = rules.hasOverride ? [] : (rules.hiddenVariantTypes || []);
+      const validIds   = rules.hiddenVariantIds || [];
+      if (validTypes.length === 0 && validIds.length === 0) return;
+
+      const SELECTORS =
+        ".product, .product-single, .card, .grid__item, .product-section, " +
+        "[data-product-id], .product-item, .product__info-container";
+
+      let busy = false;
+      const applyAll = () => {
+        if (busy) return;
+        busy = true;
+        document.querySelectorAll(SELECTORS).forEach(c => applyRulesToContainer(c, rules));
+        setTimeout(() => { busy = false; }, 100);
+      };
+
+      applyAll();
+      new MutationObserver(mutations => {
+        if (mutations.some(m => !m.target.closest || !m.target.closest("[data-cvh-processed]")))
+          applyAll();
+      }).observe(document.body, { childList: true, subtree: true });
+
+    } else {
+      // ══ COLLECTION PAGE — per-product fetching ════════════════════════
+      // Prefer containers that explicitly declare their product ID.
+      // Ignite (and most Shopify themes) sets data-product-id on grid items.
+      const productContainers = Array.from(
+        document.querySelectorAll("[data-product-id]")
+      );
+
+      if (productContainers.length > 0) {
+        // Fetch rules for every product in parallel (results are cached).
+        await Promise.all(
+          productContainers.map(async container => {
+            let pid = container.dataset.productId || "";
+            // Themes output numeric IDs; convert to full GID for the API.
+            if (pid && !pid.includes("/")) {
+              pid = `gid://shopify/Product/${pid}`;
+            }
+            const rules = await fetchRules(catalogId, pid);
+            applyRulesToContainer(container, rules);
+          })
+        );
+      } else {
+        // Fallback: no product IDs discoverable — apply blanket type rules only.
+        // Individual product overrides cannot be applied without a product ID.
+        const rules = await fetchRules(catalogId, "");
+        const validTypes = rules.hiddenVariantTypes || [];
+        if (validTypes.length === 0) return;
+
+        document
+          .querySelectorAll(
+            ".product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container"
+          )
+          .forEach(c => applyRulesToContainer(c, rules));
+      }
     }
   }
 

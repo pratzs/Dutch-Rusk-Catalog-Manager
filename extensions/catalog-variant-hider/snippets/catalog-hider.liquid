@@ -1,3 +1,8 @@
+{% comment %}
+  Only inject hiding logic for active B2B customers.
+  Retail visitors and customers removed from all catalogs see everything.
+{% endcomment %}
+{% if customer and customer.b2b? %}
 <div
   id="catalog-variant-hider-data"
   data-catalog-id="gid://shopify/AppCatalog/147677315385"
@@ -8,3 +13,4 @@
   aria-hidden="true"
 ></div>
 <script src="{{ 'catalog-variant-hider.js' | asset_url }}"></script>
+{% endif %}
