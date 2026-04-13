@@ -1,15 +1,25 @@
 (function () {
-  const APP_URL = "https://dutch-rusk-catalog-manager.onrender.com";
+  // APP_URL and locationId are injected by the Liquid snippet via data attributes —
+  // never hardcoded here so the app can be redeployed without touching this file.
+  const _el = document.getElementById("catalog-variant-hider-data");
+  const APP_URL = (_el && _el.dataset.appUrl) || "https://dutch-rusk-catalog-manager.onrender.com";
+  const LOCATION_ID = (_el && _el.dataset.locationId) ? decodeURIComponent(_el.dataset.locationId) : null;
+
   const rulesCache = {};
 
   // ── API ──────────────────────────────────────────────────────────────────
-  async function fetchRules(catalogId, productId) {
-    const key = `${catalogId}::${productId || ""}`;
+  // Sends locationId (company location GID) so the API can resolve the correct catalog.
+  // Falls back to catalogId param if locationId is unavailable.
+  async function fetchRules(locationId, productId) {
+    const key = `${locationId}::${productId || ""}`;
     if (rulesCache[key]) return rulesCache[key];
     try {
       const pid = productId ? encodeURIComponent(productId) : "";
+      const locParam = locationId
+        ? `locationId=${encodeURIComponent(locationId)}`
+        : "";
       const res = await fetch(
-        `${APP_URL}/api/catalog-rules?catalogId=${encodeURIComponent(catalogId)}&productId=${pid}`
+        `${APP_URL}/api/catalog-rules?${locParam}&productId=${pid}`
       );
       const data = await res.json();
       rulesCache[key] = data;
@@ -133,15 +143,18 @@
   async function init() {
     const el =
       document.getElementById("catalog-variant-hider-data") ||
-      document.querySelector("[data-catalog-id]");
+      document.querySelector("[data-location-id]");
     if (!el) return;
 
-    const catalogId      = el.dataset.catalogId;
+    // Use the customer's company location GID so the API can resolve the correct catalog.
+    const locationId      = LOCATION_ID;
     const singleProductId = el.dataset.productId || null;
+
+    if (!locationId) return; // No B2B location available — nothing to hide.
 
     if (singleProductId) {
       // ══ PRODUCT PAGE — single product, single fetch ═══════════════════
-      const rules = await fetchRules(catalogId, singleProductId);
+      const rules = await fetchRules(locationId, singleProductId);
       const validTypes = rules.hasOverride ? [] : (rules.hiddenVariantTypes || []);
       const validIds   = rules.hiddenVariantIds || [];
       if (validTypes.length === 0 && validIds.length === 0) return;
@@ -181,14 +194,14 @@
             if (pid && !pid.includes("/")) {
               pid = `gid://shopify/Product/${pid}`;
             }
-            const rules = await fetchRules(catalogId, pid);
+            const rules = await fetchRules(locationId, pid);
             applyRulesToContainer(container, rules);
           })
         );
       } else {
         // Fallback: no product IDs discoverable — apply blanket type rules only.
         // Individual product overrides cannot be applied without a product ID.
-        const rules = await fetchRules(catalogId, "");
+        const rules = await fetchRules(locationId, "");
         const validTypes = rules.hiddenVariantTypes || [];
         if (validTypes.length === 0) return;
 

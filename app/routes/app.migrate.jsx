@@ -9,7 +9,7 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
-  
+
   const CATALOG_MAPPING = {
     "teeg": "147677675833",
     "archie-brothers": "147677118777",
@@ -19,55 +19,68 @@ export const action = async ({ request }) => {
     "alexander-marketing": "147677086009",
     "xtreme-wairau": "147677741369",
     "zone-bowling-henderson": "147677774137",
-    "zone-bowling-manukau": "147677806905"
+    "zone-bowling-manukau": "147677806905",
   };
 
   const tagRules = [
-    { tag: "hide-bag", keyword: "Bag", catalogs: Object.values(CATALOG_MAPPING) },
-    { tag: "hide-block", keyword: "Block", catalogs: ["147677675833"] }, 
-    { tag: "hide-each", keyword: "Each", catalogs: ["147677675833"] },   
-    { tag: "hide-packet", keyword: "Packet", catalogs: ["147677675833", "147677118777", "147677217081", "147677741369", "147677806905", "147677774137"] },
-    { tag: "hide-shipper", keyword: "Shipper", catalogs: ["147677675833", "147677118777", "147677217081", "147677741369"] }
+    { tag: "hide-bag",     keyword: "Bag",     catalogs: Object.values(CATALOG_MAPPING) },
+    { tag: "hide-block",   keyword: "Block",   catalogs: ["147677675833"] },
+    { tag: "hide-each",    keyword: "Each",    catalogs: ["147677675833"] },
+    { tag: "hide-packet",  keyword: "Packet",  catalogs: ["147677675833", "147677118777", "147677217081", "147677741369", "147677806905", "147677774137"] },
+    { tag: "hide-shipper", keyword: "Shipper", catalogs: ["147677675833", "147677118777", "147677217081", "147677741369"] },
   ];
 
   try {
-    const query = `tag:hide-bag OR tag:hide-block OR tag:hide-each OR tag:hide-packet OR tag:hide-shipper`;
-    const response = await admin.graphql(
-      `query getProducts($query: String!) {
-        products(first: 250, query: $query) {
-          nodes {
-            id
-            tags
-            variants(first: 100) {
-              nodes {
-                id
-                title
+    const tagQuery = `tag:hide-bag OR tag:hide-block OR tag:hide-each OR tag:hide-packet OR tag:hide-shipper`;
+
+    // Paginate through ALL matching products — not just the first 250.
+    let allProducts = [];
+    let cursor = null;
+    let hasNextPage = true;
+
+    while (hasNextPage) {
+      const afterArg = cursor ? `, after: "${cursor}"` : "";
+      const response = await admin.graphql(
+        `query getProducts($query: String!) {
+          products(first: 250, query: $query${afterArg}) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              tags
+              variants(first: 100) {
+                nodes { id title }
               }
             }
           }
-        }
-      }`,
-      { variables: { query } }
-    );
+        }`,
+        { variables: { query: tagQuery } }
+      );
 
-    const resJson = await response.json();
-    const products = resJson.data.products.nodes;
+      const resJson = await response.json();
+      if (resJson.errors) throw new Error(JSON.stringify(resJson.errors));
+
+      const page = resJson.data.products;
+      allProducts = allProducts.concat(page.nodes);
+      hasNextPage = page.pageInfo.hasNextPage;
+      cursor = page.pageInfo.endCursor;
+    }
+
     let createdCount = 0;
 
-    for (const product of products) {
-      const productTags = product.tags.map(t => t.toLowerCase());
+    for (const product of allProducts) {
+      const productTags = product.tags.map((t) => t.toLowerCase());
       for (const rule of tagRules) {
         if (productTags.includes(rule.tag)) {
           const matchingVariants = product.variants.nodes
-            .filter(v => v.title.toLowerCase().includes(rule.keyword.toLowerCase()))
-            .map(v => v.id);
+            .filter((v) => v.title.toLowerCase().includes(rule.keyword.toLowerCase()))
+            .map((v) => v.id);
 
           if (matchingVariants.length > 0) {
             for (const catalogId of rule.catalogs) {
               await prisma.productOverride.upsert({
                 where: { catalogId_productId: { catalogId, productId: product.id } },
                 update: { hiddenVariantIds: matchingVariants },
-                create: { catalogId, productId: product.id, hiddenVariantIds: matchingVariants }
+                create: { catalogId, productId: product.id, hiddenVariantIds: matchingVariants },
               });
               createdCount++;
             }
@@ -75,7 +88,8 @@ export const action = async ({ request }) => {
         }
       }
     }
-    return { success: true, count: createdCount };
+
+    return { success: true, count: createdCount, total: allProducts.length };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -84,34 +98,68 @@ export const action = async ({ request }) => {
 export default function Migrate() {
   const fetcher = useFetcher();
   const isLoading = fetcher.state !== "idle";
+  const result = fetcher.data;
 
   return (
-    <div style={{ padding: "40px", background: "white", minHeight: "100vh" }}>
-      <h1 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px' }}>Migration Tool</h1>
-      <p style={{ marginBottom: '20px' }}>This tool will scan Shopify for 'hide-' tags and sync them to your database.</p>
-      
-      <fetcher.Form method="post">
-        <button 
-          type="submit" 
-          disabled={isLoading} 
-          style={{ 
-            padding: "12px 24px", 
-            backgroundColor: "#008060", 
-            color: "white", 
-            border: "none", 
-            borderRadius: "4px",
-            cursor: "pointer" 
-          }}
-        >
-          {isLoading ? "Running Sync..." : "Start Live Sync"}
-        </button>
-      </fetcher.Form>
+    <s-page heading="Migration Tool" back-action-url="/app/catalog-manager">
+      <s-layout>
+        <s-layout-section>
 
-      {fetcher.data?.success && (
-        <div style={{ marginTop: "20px", color: "green", fontWeight: "bold" }}>
-          ✅ Successfully sync'd {fetcher.data.count} visibility rules!
-        </div>
-      )}
-    </div>
+          {/* Info banner */}
+          <s-box padding="base" background="bg-surface-secondary" borderRadius="base"
+            style={{ marginBottom: "20px", border: "1px solid #e1e3e5" }}>
+            <s-block-stack gap="tight">
+              <s-text variant="headingMd" as="h2">🔄 Tag-to-Override Sync</s-text>
+              <s-text>
+                Scans <b>all</b> Shopify products tagged with <code>hide-bag</code>,{" "}
+                <code>hide-block</code>, <code>hide-each</code>, <code>hide-packet</code>, or{" "}
+                <code>hide-shipper</code> and writes the corresponding visibility rules to the database.
+              </s-text>
+              <div style={{ marginTop: "6px", padding: "10px 12px", background: "#fff4f4", border: "1px solid #ffd2d2", borderRadius: "6px" }}>
+                <s-text color="critical">
+                  ⚠️ <b>This will overwrite existing product overrides</b> for any product that has a
+                  hide-* tag. Run this only when syncing from the legacy tagging system.
+                </s-text>
+              </div>
+            </s-block-stack>
+          </s-box>
+
+          {/* Result: success */}
+          {result?.success && (
+            <div style={{ marginBottom: "16px", padding: "16px", background: "#f1f8f5", border: "1px solid #95c9b4", borderRadius: "8px" }}>
+              <s-text variant="headingMd" as="h3" style={{ color: "#008060" }}>✅ Sync complete</s-text>
+              <s-text>
+                Scanned <b>{result.total}</b> product{result.total !== 1 ? "s" : ""} — wrote{" "}
+                <b>{result.count}</b> visibility rule{result.count !== 1 ? "s" : ""} to the database.
+              </s-text>
+            </div>
+          )}
+
+          {/* Result: error */}
+          {result?.success === false && (
+            <div style={{ marginBottom: "16px", padding: "16px", background: "#fff4f4", border: "1px solid #ffd2d2", borderRadius: "8px" }}>
+              <s-text variant="headingMd" as="h3" style={{ color: "#d72c0d" }}>❌ Sync failed</s-text>
+              <s-text color="critical">{result.error}</s-text>
+            </div>
+          )}
+
+          {/* Action */}
+          <s-box padding="base" borderWidth="base" borderRadius="base" background="surface">
+            <s-block-stack gap="base">
+              <s-text>
+                Click the button below to start the sync. Large stores may take a minute or two while
+                all pages of products are fetched.
+              </s-text>
+              <fetcher.Form method="post">
+                <s-button variant="primary" type="submit" disabled={isLoading || undefined}>
+                  {isLoading ? "Running sync…" : "Start Live Sync"}
+                </s-button>
+              </fetcher.Form>
+            </s-block-stack>
+          </s-box>
+
+        </s-layout-section>
+      </s-layout>
+    </s-page>
   );
 }

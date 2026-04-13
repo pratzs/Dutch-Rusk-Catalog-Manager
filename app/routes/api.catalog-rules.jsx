@@ -1,44 +1,45 @@
 // app/routes/api.catalog-rules.jsx
+// Public API called by the storefront theme extension.
+// Accepts either ?catalogId=<numeric> OR ?locationId=<companyLocationGid>
+// so the snippet can pass the customer's company location ID directly.
 import prisma from "../db.server";
 
-export async function loader({ request }) {
-  if (request.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }
+const CORS_HEADERS = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Cache-Control": "no-store",
+};
 
+export async function loader({ request }) {
   const url = new URL(request.url);
   let catalogId = url.searchParams.get("catalogId");
-  let productId = url.searchParams.get("productId");
+  let locationId = url.searchParams.get("locationId");
+  const productId = url.searchParams.get("productId");
 
-  // NORMALIZE catalogId only — DB stores catalog IDs as numeric strings.
-  // productId must NOT be normalized — DB stores it as a full GID (gid://shopify/Product/xxx)
-  // because that is what the admin app sends when saving overrides.
-  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
-
-  const responseHeaders = {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "no-store",
-  };
-
-  if (!catalogId) {
-    return new Response(JSON.stringify({ error: "Missing catalogId" }), {
-      status: 400,
-      headers: responseHeaders,
+  // Resolve catalogId from locationId when the snippet sends a company location GID.
+  if (!catalogId && locationId) {
+    // Normalize — some themes may strip the GID prefix and pass just the numeric part.
+    if (!locationId.includes("/")) {
+      locationId = `gid://shopify/CompanyLocation/${locationId}`;
+    }
+    const mapping = await prisma.locationCatalogMap.findUnique({
+      where: { locationGid: locationId },
     });
+    if (mapping) catalogId = mapping.catalogId;
   }
 
-  const rule = await prisma.catalogRule.findUnique({
-    where: { catalogId },
-  });
+  // Normalize catalogId — DB stores numeric strings, snippets may pass full GIDs.
+  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
+
+  if (!catalogId) {
+    return new Response(
+      JSON.stringify({ error: "Missing catalogId or locationId" }),
+      { status: 400, headers: CORS_HEADERS }
+    );
+  }
+
+  const rule = await prisma.catalogRule.findUnique({ where: { catalogId } });
 
   let override = null;
   if (productId) {
@@ -47,10 +48,11 @@ export async function loader({ request }) {
     });
   }
 
-  // Normalize variant IDs to numeric — DB stores full GIDs (gid://shopify/ProductVariant/xxx)
-  // but Shopify theme HTML only contains the numeric part (e.g. value="12345678").
+  // Normalize variant IDs to numeric — DB stores full GIDs but theme HTML uses numeric values.
   const rawVariantIds = override ? override.hiddenVariantIds : [];
-  const hiddenVariantIds = rawVariantIds.map(id => id.includes("/") ? id.split("/").pop() : id);
+  const hiddenVariantIds = rawVariantIds.map((id) =>
+    id.includes("/") ? id.split("/").pop() : id
+  );
 
   return new Response(
     JSON.stringify({
@@ -58,6 +60,6 @@ export async function loader({ request }) {
       hiddenVariantIds,
       hasOverride: !!override,
     }),
-    { status: 200, headers: responseHeaders }
+    { status: 200, headers: CORS_HEADERS }
   );
 }

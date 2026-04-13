@@ -49,3 +49,14 @@ model ProductOverride {
 
   @@unique([catalogId, productId])
 }
+
+// Maps a Shopify CompanyLocation GID to the numeric catalog ID stored in CatalogRule.
+// Populated by the catalog manager loader so the storefront extension can look up
+// the correct catalog for a given logged-in B2B customer.
+model LocationCatalogMap {
+  id          String   @id @default(cuid())
+  locationGid String   @unique
+  catalogId   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

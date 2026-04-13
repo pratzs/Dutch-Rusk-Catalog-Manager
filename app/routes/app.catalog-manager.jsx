@@ -33,6 +33,8 @@ export async function loader({ request }) {
     ? `first: 50, after: "${after}"`
     : `first: 50`;
 
+  // Fetch catalogs — also request companyLocations via inline fragment.
+  // If the API doesn't support CompanyLocationCatalog the fragment is simply ignored.
   const response = await admin.graphql(`
     query {
       catalogs(${paginationArgs}) {
@@ -41,6 +43,11 @@ export async function loader({ request }) {
           id
           title
           status
+          ... on CompanyLocationCatalog {
+            companyLocations(first: 50) {
+              nodes { id }
+            }
+          }
         }
       }
     }
@@ -64,6 +71,28 @@ export async function loader({ request }) {
 
   const overrideCountMap = {};
   overrideCounts.forEach((o) => { overrideCountMap[o.catalogId] = o._count.catalogId; });
+
+  // Persist location→catalog mappings so the storefront extension API can look them up
+  // without needing admin auth. Errors here are non-fatal — we just skip the sync.
+  try {
+    const locationUpserts = [];
+    for (const cat of allNodes) {
+      const catalogId = cat.id.split("/").pop();
+      const locations = cat.companyLocations?.nodes ?? [];
+      for (const loc of locations) {
+        locationUpserts.push(
+          prisma.locationCatalogMap.upsert({
+            where: { locationGid: loc.id },
+            update: { catalogId },
+            create: { locationGid: loc.id, catalogId },
+          })
+        );
+      }
+    }
+    if (locationUpserts.length > 0) await Promise.all(locationUpserts);
+  } catch (_) {
+    // GraphQL version may not support companyLocations on catalogs — safe to ignore.
+  }
 
   return { catalogs, rulesMap, overrideCountMap, pageInfo };
 }

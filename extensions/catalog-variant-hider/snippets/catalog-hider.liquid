@@ -1,16 +1,20 @@
 {% comment %}
   Only inject hiding logic for active B2B customers.
-  Retail visitors and customers removed from all catalogs see everything.
+  Retail visitors and customers not assigned to any catalog see everything.
+
+  Variables expected from the block (via render tag):
+    app_url  — base URL of the deployed Catalog Manager app, e.g. https://your-app.onrender.com
 {% endcomment %}
 {% if customer and customer.b2b? %}
 <div
   id="catalog-variant-hider-data"
-  data-catalog-id="gid://shopify/AppCatalog/147677315385"
+  data-app-url="{{ app_url | default: 'https://dutch-rusk-catalog-manager.onrender.com' | strip_newlines }}"
+  data-location-id="{{ customer.company_location.id | url_encode }}"
   {% if product %}
     data-product-id="gid://shopify/Product/{{ product.id }}"
   {% endif %}
   style="display:none;"
   aria-hidden="true"
 ></div>
-<script src="{{ 'catalog-variant-hider.js' | asset_url }}"></script>
+<script src="{{ 'catalog-variant-hider.js' | asset_url }}" defer></script>
 {% endif %}

@@ -1,9 +1,17 @@
-{% render 'catalog-hider' %}
+{% render 'catalog-hider', app_url: block.settings.app_url %}
 
 {% schema %}
 {
   "name": "Catalog Hider V2",
   "target": "body",
-  "settings": []
+  "settings": [
+    {
+      "type": "text",
+      "id": "app_url",
+      "label": "App URL",
+      "default": "https://dutch-rusk-catalog-manager.onrender.com",
+      "info": "The base URL of your deployed Catalog Manager app (no trailing slash). Update this if the app moves to a new host."
+    }
+  ]
 }
 {% endschema %}

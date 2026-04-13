@@ -1,5 +1,5 @@
 import { redirect } from "react-router";
-import { useLoaderData, useNavigate, useSubmit, useNavigation } from "react-router";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -16,11 +16,11 @@ export async function loader({ request }) {
 
   const cleanId = originalCatalogId.includes("/") ? originalCatalogId.split("/").pop() : originalCatalogId;
   const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
-  
+
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
   let debugMessage = "";
-  
+
   let activeFullId = originalCatalogId.includes("gid://") ? originalCatalogId : `gid://shopify/Catalog/${cleanId}`;
   let pubId = null;
 
@@ -97,17 +97,17 @@ export async function loader({ request }) {
     });
   });
 
-  return { 
+  return {
     catalogDbId: cleanId,
-    catalogGid: activeFullId, 
-    catalogName, 
-    products, 
-    overridesMap, 
-    globalHiddenSkus, 
-    hiddenVariantTypes, 
-    allVariantTypes: Array.from(allVariantTypes).sort(), 
+    catalogGid: activeFullId,
+    catalogName,
+    products,
+    overridesMap,
+    globalHiddenSkus,
+    hiddenVariantTypes,
+    allVariantTypes: Array.from(allVariantTypes).sort(),
     pageInfo,
-    debugMessage
+    debugMessage,
   };
 }
 
@@ -125,11 +125,12 @@ export async function action({ request }) {
       update: { hiddenVariantIds },
       create: { catalogId, productId, hiddenVariantIds },
     });
+    return { ok: true, intent: "save", productId };
   }
 
   if (intent === "save_bulk") {
     const bulkData = JSON.parse(formData.get("bulkData"));
-    const operations = Object.keys(bulkData).map(productId => {
+    const operations = Object.keys(bulkData).map((productId) => {
       const hiddenVariantIds = bulkData[productId];
       return prisma.productOverride.upsert({
         where: { catalogId_productId: { catalogId, productId } },
@@ -137,29 +138,43 @@ export async function action({ request }) {
         create: { catalogId, productId, hiddenVariantIds },
       });
     });
-    
     await prisma.$transaction(operations);
+    return { ok: true, intent: "save_bulk" };
   }
 
   if (intent === "delete") {
     const productId = formData.get("productId");
     await prisma.productOverride.deleteMany({ where: { catalogId, productId } });
+    return { ok: true, intent: "delete", productId };
   }
 
-  return null;
+  return { ok: false };
 }
 
 export default function CatalogOverrides() {
-  const { catalogDbId, catalogGid, catalogName, products, overridesMap, globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo, debugMessage } = useLoaderData();
+  const {
+    catalogDbId, catalogGid, catalogName, products, overridesMap,
+    globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo, debugMessage,
+  } = useLoaderData();
+
   const navigate = useNavigate();
-  const submit = useSubmit();
-  const navigation = useNavigation();
-  const isSaving = navigation.state === "submitting";
+
+  // Two separate fetchers so single-save and bulk-save loading states are independent.
+  const saveFetcher = useFetcher();
+  const bulkFetcher = useFetcher();
+
+  const isSingleSaving = saveFetcher.state !== "idle";
+  const isBulkSaving = bulkFetcher.state !== "idle";
 
   const [pendingHidden, setPendingHidden] = useState({});
   const initialHidden = useRef({});
   const [variantFilter, setVariantFilter] = useState("all");
   const [searchInput, setSearchInput] = useState("");
+
+  // Track which single productId is mid-save so we can mark it done when fetcher settles.
+  const singleSaveRef = useRef(null);
+  // Track the payload of the last bulk save so we can update initialHidden when it settles.
+  const bulkSavePayloadRef = useRef(null);
 
   useEffect(() => {
     const initial = {};
@@ -167,22 +182,46 @@ export default function CatalogOverrides() {
       products.forEach((p) => {
         const manual = overridesMap[p.id] || [];
         const fromMaster = p.variants.nodes
-          .filter(v => {
+          .filter((v) => {
             const variantSku = (v.sku || "").trim().toUpperCase();
-            return globalHiddenSkus.some(gs => gs.trim().toUpperCase() === variantSku);
+            return globalHiddenSkus.some((gs) => gs.trim().toUpperCase() === variantSku);
           })
-          .map(v => v.id);
-
+          .map((v) => v.id);
         const bulkType = p.variants.nodes
-          .filter(v => hiddenVariantTypes.some(t => v.title.toLowerCase().includes(t.toLowerCase())))
-          .map(v => v.id);
-
+          .filter((v) => hiddenVariantTypes.some((t) => v.title.toLowerCase().includes(t.toLowerCase())))
+          .map((v) => v.id);
         initial[p.id] = Array.from(new Set([...manual, ...fromMaster, ...bulkType]));
       });
     }
     initialHidden.current = initial;
     setPendingHidden(initial);
   }, [products, overridesMap, globalHiddenSkus, hiddenVariantTypes]);
+
+  // When a single-product save completes, sync initialHidden and show toast.
+  useEffect(() => {
+    if (saveFetcher.state === "idle" && saveFetcher.data?.ok && singleSaveRef.current) {
+      const { productId, hidden } = singleSaveRef.current;
+      initialHidden.current = { ...initialHidden.current, [productId]: hidden };
+      singleSaveRef.current = null;
+      shopify.toast.show("Saved!");
+    }
+  }, [saveFetcher.state, saveFetcher.data]);
+
+  // When a bulk save completes, sync initialHidden for every saved product and show toast.
+  useEffect(() => {
+    if (bulkFetcher.state === "idle" && bulkFetcher.data?.ok && bulkSavePayloadRef.current) {
+      const payload = bulkSavePayloadRef.current;
+      const next = { ...initialHidden.current };
+      Object.entries(payload).forEach(([productId, hiddenIds]) => {
+        next[productId] = hiddenIds;
+      });
+      initialHidden.current = next;
+      bulkSavePayloadRef.current = null;
+      shopify.toast.show("All changes saved!");
+      // Force re-render so dirty badges clear immediately.
+      setPendingHidden((prev) => ({ ...prev }));
+    }
+  }, [bulkFetcher.state, bulkFetcher.data]);
 
   const filteredProducts = useMemo(() => {
     if (!products) return [];
@@ -197,46 +236,52 @@ export default function CatalogOverrides() {
     return filtered;
   }, [products, variantFilter, searchInput]);
 
-  // Returns variant IDs already covered by bulk rules (types + master SKUs).
-  // These should never be saved as product-level overrides.
-  const getBulkHiddenIds = (product) => {
-    return product.variants.nodes
-      .filter(v => {
+  // Variant IDs already covered by blanket rules — excluded from manual overrides.
+  const getBulkHiddenIds = (product) =>
+    product.variants.nodes
+      .filter((v) => {
         const sku = (v.sku || "").trim().toUpperCase();
-        const byType = hiddenVariantTypes.some(t => v.title.toLowerCase().includes(t.toLowerCase()));
-        const byMaster = globalHiddenSkus.some(gs => gs.trim().toUpperCase() === sku);
-        return byType || byMaster;
+        return (
+          hiddenVariantTypes.some((t) => v.title.toLowerCase().includes(t.toLowerCase())) ||
+          globalHiddenSkus.some((gs) => gs.trim().toUpperCase() === sku)
+        );
       })
-      .map(v => v.id);
-  };
+      .map((v) => v.id);
 
   const handleVariantToggle = (productId, variantId) => {
     setPendingHidden((prev) => {
       const current = prev[productId] || [];
-      // Toggles presence in the hidden array
-      return { ...prev, [productId]: current.includes(variantId) ? current.filter((v) => v !== variantId) : [...current, variantId] };
+      return {
+        ...prev,
+        [productId]: current.includes(variantId)
+          ? current.filter((v) => v !== variantId)
+          : [...current, variantId],
+      };
     });
   };
 
   const handleSave = (productId) => {
-    const product = products.find(p => p.id === productId);
+    const product = products.find((p) => p.id === productId);
     const bulkHiddenIds = product ? getBulkHiddenIds(product) : [];
-    const manualOnly = (pendingHidden[productId] || []).filter(id => !bulkHiddenIds.includes(id));
+    const manualOnly = (pendingHidden[productId] || []).filter((id) => !bulkHiddenIds.includes(id));
+
+    // Snapshot what we're saving so the effect can sync initialHidden when done.
+    singleSaveRef.current = { productId, hidden: manualOnly };
 
     const formData = new FormData();
     formData.append("intent", "save");
     formData.append("catalogId", catalogDbId);
     formData.append("productId", productId);
     manualOnly.forEach((v) => formData.append("hiddenVariantIds", v));
-    submit(formData, { method: "post" });
+    saveFetcher.submit(formData, { method: "post" });
   };
 
   const handleHideAllVisible = () => {
     setPendingHidden((prev) => {
       const next = { ...prev };
       filteredProducts.forEach((p) => {
-        const allVariantIds = p.variants.nodes.map(v => v.id);
-        next[p.id] = Array.from(new Set([...(next[p.id] || []), ...allVariantIds]));
+        const allIds = p.variants.nodes.map((v) => v.id);
+        next[p.id] = Array.from(new Set([...(next[p.id] || []), ...allIds]));
       });
       return next;
     });
@@ -246,9 +291,8 @@ export default function CatalogOverrides() {
     setPendingHidden((prev) => {
       const next = { ...prev };
       filteredProducts.forEach((p) => {
-        const allVariantIds = p.variants.nodes.map(v => v.id);
-        // Remove all visible variants from the hidden array to show them
-        next[p.id] = (next[p.id] || []).filter(id => !allVariantIds.includes(id));
+        const allIds = p.variants.nodes.map((v) => v.id);
+        next[p.id] = (next[p.id] || []).filter((id) => !allIds.includes(id));
       });
       return next;
     });
@@ -258,14 +302,15 @@ export default function CatalogOverrides() {
     const payload = {};
     let dirtyCount = 0;
 
-    products.forEach(p => {
+    products.forEach((p) => {
       const currentHidden = pendingHidden[p.id] || [];
       const baseHidden = initialHidden.current[p.id] || [];
-      const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
+      const isDirty =
+        JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
 
       if (isDirty) {
         const bulkHiddenIds = getBulkHiddenIds(p);
-        payload[p.id] = currentHidden.filter(id => !bulkHiddenIds.includes(id));
+        payload[p.id] = currentHidden.filter((id) => !bulkHiddenIds.includes(id));
         dirtyCount++;
       }
     });
@@ -275,23 +320,24 @@ export default function CatalogOverrides() {
       return;
     }
 
+    // Snapshot payload so the effect can sync initialHidden when the fetcher settles.
+    bulkSavePayloadRef.current = payload;
+
     const formData = new FormData();
     formData.append("intent", "save_bulk");
     formData.append("catalogId", catalogDbId);
     formData.append("bulkData", JSON.stringify(payload));
-    
-    submit(formData, { method: "post" });
-    shopify.toast.show(`Saving ${dirtyCount} products...`);
+    bulkFetcher.submit(formData, { method: "post" });
+    shopify.toast.show(`Saving ${dirtyCount} product${dirtyCount !== 1 ? "s" : ""}…`);
   };
 
-  const hasUnsavedChanges = products.some(p => {
-    const currentHidden = pendingHidden[p.id] || [];
-    const baseHidden = initialHidden.current[p.id] || [];
-    return JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
+  const hasUnsavedChanges = products.some((p) => {
+    const cur = pendingHidden[p.id] || [];
+    const base = initialHidden.current[p.id] || [];
+    return JSON.stringify([...cur].sort()) !== JSON.stringify([...base].sort());
   });
 
-  const hiddenCount = products.reduce((acc, p) => acc + (pendingHidden[p.id] || []).length, 0);
-  const dirtyCount = products.filter(p => {
+  const dirtyCount = products.filter((p) => {
     const cur = pendingHidden[p.id] || [];
     const base = initialHidden.current[p.id] || [];
     return JSON.stringify([...cur].sort()) !== JSON.stringify([...base].sort());
@@ -304,21 +350,21 @@ export default function CatalogOverrides() {
 
           {/* Instructions */}
           <s-box padding="base" background="bg-surface-secondary" borderRadius="base"
-            style={{ marginBottom: '20px', border: '1px solid #e1e3e5' }}>
+            style={{ marginBottom: "20px", border: "1px solid #e1e3e5" }}>
             <s-block-stack gap="tight">
               <s-text variant="headingMd" as="h2">🎯 How to use this page</s-text>
               <s-text>
                 Each box below is a pack size this customer can order. <b>Tick = Visible. Untick = Hidden.</b>
               </s-text>
-              <div style={{ display: 'flex', gap: '10px', marginTop: '8px', flexWrap: 'wrap' }}>
-                <div style={{ padding: '8px 14px', background: '#e3f1df', borderRadius: '6px', fontSize: '13px', fontWeight: '600', color: '#008060' }}>
+              <div style={{ display: "flex", gap: "10px", marginTop: "8px", flexWrap: "wrap" }}>
+                <div style={{ padding: "8px 14px", background: "#e3f1df", borderRadius: "6px", fontSize: "13px", fontWeight: "600", color: "#008060" }}>
                   ✅ Ticked = Customer CAN order this size
                 </div>
-                <div style={{ padding: '8px 14px', background: '#ffeaeb', borderRadius: '6px', fontSize: '13px', fontWeight: '600', color: '#d72c0d' }}>
+                <div style={{ padding: "8px 14px", background: "#ffeaeb", borderRadius: "6px", fontSize: "13px", fontWeight: "600", color: "#d72c0d" }}>
                   ⬜ Unticked = Customer CANNOT order this size (shown in red)
                 </div>
               </div>
-              <s-text tone="subdued" style={{ marginTop: '4px' }}>
+              <s-text tone="subdued" style={{ marginTop: "4px" }}>
                 Use <b>Hide All / Show All</b> to bulk change, then hit <b>Save All Changes</b> to apply.
               </s-text>
             </s-block-stack>
@@ -327,25 +373,26 @@ export default function CatalogOverrides() {
           {/* Sticky save bar */}
           {hasUnsavedChanges && (
             <div style={{
-              position: 'sticky', top: 0, zIndex: 100,
-              background: '#1a1a2e', color: '#fff',
-              padding: '12px 20px', borderRadius: '8px', marginBottom: '16px',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+              position: "sticky", top: 0, zIndex: 100,
+              background: "#1a1a2e", color: "#fff",
+              padding: "12px 20px", borderRadius: "8px", marginBottom: "16px",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
             }}>
-              <span style={{ fontSize: '14px' }}>
-                ✏️ <b>{dirtyCount} product{dirtyCount !== 1 ? 's' : ''}</b> with unsaved changes
+              <span style={{ fontSize: "14px" }}>
+                ✏️ <b>{dirtyCount} product{dirtyCount !== 1 ? "s" : ""}</b> with unsaved changes
               </span>
-              <s-button variant="primary" tone="success" onClick={handleSaveAllDirty} disabled={isSaving || undefined}>
-                {isSaving ? "Saving..." : "💾 Save All Changes"}
+              <s-button variant="primary" tone="success" onClick={handleSaveAllDirty}
+                disabled={isBulkSaving || undefined}>
+                {isBulkSaving ? "Saving…" : "💾 Save All Changes"}
               </s-button>
             </div>
           )}
 
           <s-section heading={`Products in this Catalog (${products.length})`}>
 
-            {/* Search + filters */}
-            <div style={{ marginBottom: '16px' }}>
+            {/* Search */}
+            <div style={{ marginBottom: "16px" }}>
               <s-text-field
                 label="Search products"
                 value={searchInput}
@@ -354,16 +401,19 @@ export default function CatalogOverrides() {
               />
             </div>
 
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                <span style={{ fontSize: '13px', color: '#6d7175' }}>Filter by pack type:</span>
-                <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter("all")}>All</s-button>
+            {/* Filters + bulk toggles */}
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: "13px", color: "#6d7175" }}>Filter by pack type:</span>
+                <s-button variant={variantFilter === "all" ? "primary" : "secondary"} size="slim"
+                  onClick={() => setVariantFilter("all")}>All</s-button>
                 {allVariantTypes.map((type) => (
-                  <s-button key={type} variant={variantFilter === type ? "primary" : "secondary"} size="slim" onClick={() => setVariantFilter(type)}>{type}</s-button>
+                  <s-button key={type} variant={variantFilter === type ? "primary" : "secondary"}
+                    size="slim" onClick={() => setVariantFilter(type)}>{type}</s-button>
                 ))}
               </div>
               {filteredProducts.length > 0 && (
-                <div style={{ display: 'flex', gap: '6px' }}>
+                <div style={{ display: "flex", gap: "6px" }}>
                   <s-button variant="secondary" size="slim" onClick={handleHideAllVisible}>Hide All</s-button>
                   <s-button variant="secondary" size="slim" onClick={handleShowAllVisible}>Show All</s-button>
                 </div>
@@ -373,18 +423,18 @@ export default function CatalogOverrides() {
             {/* Product cards */}
             <s-stack direction="block" gap="base">
               {filteredProducts.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '40px', border: '1px solid #e1e3e5', borderRadius: '8px', color: '#6d7175' }}>
+                <div style={{ textAlign: "center", padding: "40px", border: "1px solid #e1e3e5", borderRadius: "8px", color: "#6d7175" }}>
                   {searchInput ? (
                     <>
-                      <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔍</div>
-                      <div style={{ fontWeight: '600' }}>No products match "{searchInput}"</div>
-                      <div style={{ fontSize: '13px', marginTop: '4px' }}>Try a different search term or clear the filter.</div>
+                      <div style={{ fontSize: "32px", marginBottom: "8px" }}>🔍</div>
+                      <div style={{ fontWeight: "600" }}>No products match "{searchInput}"</div>
+                      <div style={{ fontSize: "13px", marginTop: "4px" }}>Try a different search term or clear the filter.</div>
                     </>
                   ) : (
                     <>
-                      <div style={{ fontSize: '32px', marginBottom: '8px' }}>📦</div>
-                      <div style={{ fontWeight: '600' }}>No products found in this catalog</div>
-                      <div style={{ fontSize: '13px', marginTop: '4px' }}>
+                      <div style={{ fontSize: "32px", marginBottom: "8px" }}>📦</div>
+                      <div style={{ fontWeight: "600" }}>No products found in this catalog</div>
+                      <div style={{ fontSize: "13px", marginTop: "4px" }}>
                         {debugMessage || "Make sure products are assigned to this customer in Shopify B2B settings."}
                       </div>
                     </>
@@ -394,46 +444,51 @@ export default function CatalogOverrides() {
                 filteredProducts.map((product) => {
                   const currentHidden = pendingHidden[product.id] || [];
                   const baseHidden = initialHidden.current[product.id] || [];
-                  const isDirty = JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
+                  const isDirty =
+                    JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
                   const hasCustomRule = overridesMap[product.id]?.length > 0;
-                  const allHidden = product.variants.nodes.every(v => currentHidden.includes(v.id));
-                  const someHidden = product.variants.nodes.some(v => currentHidden.includes(v.id));
+                  const allHidden = product.variants.nodes.every((v) => currentHidden.includes(v.id));
+                  const someHidden = product.variants.nodes.some((v) => currentHidden.includes(v.id));
+                  // Is THIS specific product's single-save in flight?
+                  const isSavingThis =
+                    isSingleSaving && singleSaveRef.current?.productId === product.id;
 
                   return (
                     <div key={product.id} style={{
-                      border: `1px solid ${isDirty ? '#f59e0b' : hasCustomRule ? '#d72c0d' : '#e1e3e5'}`,
-                      borderRadius: '8px',
-                      padding: '16px',
-                      background: allHidden ? '#fff4f4' : isDirty ? '#fffbeb' : '#fff',
+                      border: `1px solid ${isDirty ? "#f59e0b" : hasCustomRule ? "#d72c0d" : "#e1e3e5"}`,
+                      borderRadius: "8px", padding: "16px",
+                      background: allHidden ? "#fff4f4" : isDirty ? "#fffbeb" : "#fff",
                     }}>
-                      {/* Product header */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                      {/* Header */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px", flexWrap: "wrap", gap: "8px" }}>
                         <div>
-                          <div style={{ fontWeight: '700', fontSize: '15px' }}>{product.title}</div>
-                          <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                          <div style={{ fontWeight: "700", fontSize: "15px" }}>{product.title}</div>
+                          <div style={{ display: "flex", gap: "6px", marginTop: "4px", flexWrap: "wrap" }}>
                             {allHidden && (
-                              <span style={{ fontSize: '11px', background: '#d72c0d', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>All hidden</span>
+                              <span style={{ fontSize: "11px", background: "#d72c0d", color: "#fff", padding: "2px 8px", borderRadius: "12px", fontWeight: "600" }}>All hidden</span>
                             )}
                             {!allHidden && someHidden && (
-                              <span style={{ fontSize: '11px', background: '#ffeaeb', color: '#d72c0d', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>Partial restriction</span>
+                              <span style={{ fontSize: "11px", background: "#ffeaeb", color: "#d72c0d", padding: "2px 8px", borderRadius: "12px", fontWeight: "600" }}>Partial restriction</span>
                             )}
                             {hasCustomRule && !isDirty && (
-                              <span style={{ fontSize: '11px', background: '#fff3cd', color: '#856404', padding: '2px 8px', borderRadius: '12px', fontWeight: '500' }}>Custom rule saved</span>
+                              <span style={{ fontSize: "11px", background: "#fff3cd", color: "#856404", padding: "2px 8px", borderRadius: "12px", fontWeight: "500" }}>Custom rule saved</span>
                             )}
                             {isDirty && (
-                              <span style={{ fontSize: '11px', background: '#f59e0b', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>Unsaved changes</span>
+                              <span style={{ fontSize: "11px", background: "#f59e0b", color: "#fff", padding: "2px 8px", borderRadius: "12px", fontWeight: "600" }}>Unsaved changes</span>
                             )}
                           </div>
                         </div>
                         {isDirty && (
-                          <s-button variant="primary" size="slim" onClick={() => handleSave(product.id)} disabled={isSaving || undefined}>
-                            Save
+                          <s-button variant="primary" size="slim"
+                            onClick={() => handleSave(product.id)}
+                            disabled={isSavingThis || undefined}>
+                            {isSavingThis ? "Saving…" : "Save"}
                           </s-button>
                         )}
                       </div>
 
                       {/* Variant checkboxes */}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                         {product.variants.nodes.map((variant) => {
                           const isHidden = currentHidden.includes(variant.id);
                           return (
@@ -441,24 +496,24 @@ export default function CatalogOverrides() {
                               key={variant.id}
                               onClick={() => handleVariantToggle(product.id, variant.id)}
                               style={{
-                                padding: '8px 12px',
-                                border: `1px solid ${isHidden ? '#d72c0d' : '#c9cccf'}`,
-                                borderRadius: '6px',
-                                background: isHidden ? '#ffeaeb' : '#f6f6f7',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                fontSize: '13px',
-                                fontWeight: isHidden ? '600' : '400',
-                                color: isHidden ? '#d72c0d' : '#1a1a2e',
+                                padding: "8px 12px",
+                                border: `1px solid ${isHidden ? "#d72c0d" : "#c9cccf"}`,
+                                borderRadius: "6px",
+                                background: isHidden ? "#ffeaeb" : "#f6f6f7",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                fontSize: "13px",
+                                fontWeight: isHidden ? "600" : "400",
+                                color: isHidden ? "#d72c0d" : "#1a1a2e",
                               }}
                             >
                               <s-checkbox
                                 label={variant.title}
                                 checked={!isHidden}
-                                onInput={() => handleVariantToggle(product.id, variant.id)}
                                 onClick={(e) => e.stopPropagation()}
+                                onInput={() => handleVariantToggle(product.id, variant.id)}
                               />
                             </div>
                           );
@@ -472,15 +527,17 @@ export default function CatalogOverrides() {
 
             {/* Pagination */}
             {products.length > 0 && (pageInfo.hasNextPage || pageInfo.hasPreviousPage) && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '24px' }}>
-                <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage || undefined} onClick={() => {
-                  if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
-                  navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`);
-                }}>← Previous</s-button>
-                <s-button variant="secondary" disabled={!pageInfo.hasNextPage || undefined} onClick={() => {
-                  if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
-                  navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&after=${pageInfo.endCursor}`);
-                }}>Next →</s-button>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "24px" }}>
+                <s-button variant="secondary" disabled={!pageInfo.hasPreviousPage || undefined}
+                  onClick={() => {
+                    if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
+                    navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&before=${pageInfo.startCursor}`);
+                  }}>← Previous</s-button>
+                <s-button variant="secondary" disabled={!pageInfo.hasNextPage || undefined}
+                  onClick={() => {
+                    if (hasUnsavedChanges && !window.confirm("You have unsaved changes. Leave this page and lose them?")) return;
+                    navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogGid)}&catalogName=${encodeURIComponent(catalogName)}&after=${pageInfo.endCursor}`);
+                  }}>Next →</s-button>
               </div>
             )}
           </s-section>
