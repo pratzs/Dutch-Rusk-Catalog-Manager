@@ -33,8 +33,7 @@ export async function loader({ request }) {
     ? `first: 50, after: "${after}"`
     : `first: 50`;
 
-  // Fetch catalogs — also request companyLocations via inline fragment.
-  // If the API doesn't support CompanyLocationCatalog the fragment is simply ignored.
+  // Main catalog fetch — plain fields only to avoid API version issues.
   const response = await admin.graphql(`
     query {
       catalogs(${paginationArgs}) {
@@ -43,11 +42,6 @@ export async function loader({ request }) {
           id
           title
           status
-          ... on CompanyLocationCatalog {
-            companyLocations(first: 50) {
-              nodes { id }
-            }
-          }
         }
       }
     }
@@ -72,26 +66,44 @@ export async function loader({ request }) {
   const overrideCountMap = {};
   overrideCounts.forEach((o) => { overrideCountMap[o.catalogId] = o._count.catalogId; });
 
-  // Persist location→catalog mappings so the storefront extension API can look them up
-  // without needing admin auth. Errors here are non-fatal — we just skip the sync.
+  // Attempt to sync company location → catalog mappings for the storefront extension.
+  // This query uses an inline fragment that may not be supported by all API versions,
+  // so it runs in a fully isolated try/catch and never blocks the page load.
   try {
-    const locationUpserts = [];
-    for (const cat of allNodes) {
-      const catalogId = cat.id.split("/").pop();
-      const locations = cat.companyLocations?.nodes ?? [];
-      for (const loc of locations) {
-        locationUpserts.push(
-          prisma.locationCatalogMap.upsert({
-            where: { locationGid: loc.id },
-            update: { catalogId },
-            create: { locationGid: loc.id, catalogId },
-          })
-        );
+    const locResponse = await admin.graphql(`
+      query {
+        catalogs(first: 250) {
+          nodes {
+            id
+            ... on CompanyLocationCatalog {
+              companyLocations(first: 50) {
+                nodes { id }
+              }
+            }
+          }
+        }
       }
+    `);
+    const locData = await locResponse.json();
+    if (!locData.errors) {
+      const locationUpserts = [];
+      for (const cat of locData.data.catalogs.nodes) {
+        const catalogId = cat.id.split("/").pop();
+        const locations = cat.companyLocations?.nodes ?? [];
+        for (const loc of locations) {
+          locationUpserts.push(
+            prisma.locationCatalogMap.upsert({
+              where: { locationGid: loc.id },
+              update: { catalogId },
+              create: { locationGid: loc.id, catalogId },
+            })
+          );
+        }
+      }
+      if (locationUpserts.length > 0) await Promise.all(locationUpserts);
     }
-    if (locationUpserts.length > 0) await Promise.all(locationUpserts);
   } catch (_) {
-    // GraphQL version may not support companyLocations on catalogs — safe to ignore.
+    // Silently skip — location sync is best-effort only.
   }
 
   return { catalogs, rulesMap, overrideCountMap, pageInfo };
