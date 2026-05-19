@@ -110,15 +110,31 @@
     } else {
       // ── All options blocked (or forbidden SKU selected): disable product ──
 
-      // A. Buy button
-      const btn = container.querySelector('button[name="add"], .add-to-cart, [type="submit"]');
+      // A. Buy button — cast a wide net to catch quick-add buttons,
+      //    standard add-to-cart forms, and link-style cart buttons.
+      //    Always say "Back soon" (never "Sold out").
+      const btn = container.querySelector(
+        'button[name="add"], button[type="submit"], ' +
+        '.add-to-cart, .btn-cart, .quick-add__submit, ' +
+        '[class*="add-to-cart"], [class*="cart-btn"], [class*="addtocart"], ' +
+        'form[action*="/cart/add"] button, a.btn[href*="/cart"]'
+      );
       if (btn) {
-        btn.disabled     = true;
-        btn.textContent  = window.location.pathname.includes("/products/") ? "Sold out" : "Back soon";
+        btn.disabled    = true;
+        btn.textContent = "Back soon";
         btn.style.opacity = "0.5";
+        btn.style.setProperty("pointer-events", "none", "important");
       }
 
-      // B. Sold-out badge (clone nearest existing badge)
+      // A2. Quantity selector — always hide it when no variant is orderable.
+      //     Covers Dawn (.quantity), Broadcast (.qty), and generic patterns.
+      container.querySelectorAll(
+        '.quantity, .qty, .quantity-selector, ' +
+        '[class*="quantity"]:not([class*="price"]), ' +
+        'input[name="quantity"], [id*="quantity"]'
+      ).forEach(el => el.style.setProperty("display", "none", "important"));
+
+      // B. "Back soon" badge (replaces any sale/promo badge).
       const badges = container.querySelectorAll(
         ".badge, .card__badge, .product-badge, .sale-badge, .grid-product__badge"
       );
@@ -130,21 +146,22 @@
         }
       });
       if (badgeParent && templateBadge &&
-          !badgeParent.textContent.toLowerCase().includes("sold out")) {
-        const soldOutBadge = templateBadge.cloneNode(true);
-        soldOutBadge.textContent = "Sold out";
-        soldOutBadge.className   = templateBadge.className
-          .replace(/sale/g,  "sold-out")
-          .replace(/Sale/g, "SoldOut");
-        soldOutBadge.style.setProperty("background-color", "#4a4a4a", "important");
-        soldOutBadge.style.setProperty("color",            "#ffffff", "important");
-        soldOutBadge.style.setProperty("border-color",    "#4a4a4a", "important");
-        badgeParent.appendChild(soldOutBadge);
+          !badgeParent.textContent.toLowerCase().includes("back soon")) {
+        const backSoonBadge = templateBadge.cloneNode(true);
+        backSoonBadge.textContent = "Back soon";
+        backSoonBadge.className   = templateBadge.className
+          .replace(/sale/g,  "back-soon")
+          .replace(/Sale/g, "BackSoon");
+        backSoonBadge.style.setProperty("background-color", "#4a4a4a", "important");
+        backSoonBadge.style.setProperty("color",            "#ffffff", "important");
+        backSoonBadge.style.setProperty("border-color",    "#4a4a4a", "important");
+        badgeParent.appendChild(backSoonBadge);
       }
 
-      // C. Hide price / stock / quantity
+      // C. Hide stock / inventory labels.
       const extras = container.querySelectorAll(
-        'label, .inventory, .stock, .quantity, .variant-wrapper, [id^="Inventory"], .price, [class*="price"], [class*="stock"], [class*="inventory"]'
+        '.inventory, .stock, .variant-wrapper, [id^="Inventory"], ' +
+        '[class*="stock"], [class*="inventory"]'
       );
       const validTypesLower = validTypes.map(t => t.toLowerCase());
       extras.forEach(item => {
@@ -152,11 +169,8 @@
         const classStr = typeof item.className === "string" ? item.className.toLowerCase() : "";
         if (
           validTypesLower.some(t => itemText.includes(t)) ||
-          itemText.includes("pack size") ||
           itemText.includes("in stock") ||
           itemText.includes("stock") ||
-          item.closest(".quantity") ||
-          classStr.includes("price") ||
           classStr.includes("stock") ||
           classStr.includes("inventory")
         ) {
