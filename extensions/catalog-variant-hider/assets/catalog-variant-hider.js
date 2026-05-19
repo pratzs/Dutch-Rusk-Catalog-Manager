@@ -51,18 +51,24 @@
     // Intentionally ignore inline style="display:none" here — many themes
     // CSS-hide radio inputs and show styled <label> buttons instead, so
     // :not([style*="none"]) would wrongly return 0 and disable the product.
+    // Also include [data-variant-title] hidden inputs injected by the Liquid snippet —
+    // collection cards often have no radio/option elements, so this is the only
+    // signal that tells us which variant(s) the card represents.
     const allVariantEls = Array.from(
-      container.querySelectorAll('input[type="radio"], option')
+      container.querySelectorAll('input[type="radio"], option, [data-variant-title]')
     );
 
+    // Priority: dataset.variantTitle > tagName-specific fallback.
     // For <option> elements el.value is often a Shopify numeric variant ID, NOT the
     // human-readable option label.  Always prefer textContent for options so we match
     // "Shipper (12 Outer)" instead of "39087234562".
     // For radio inputs el.value IS the option label (e.g. "Outer"), so use it first.
-    const elText = (el) =>
-      el.tagName === "OPTION"
+    const elText = (el) => {
+      if (el.dataset && el.dataset.variantTitle) return el.dataset.variantTitle.trim();
+      return el.tagName === "OPTION"
         ? (el.textContent || el.value || "").trim()
         : (el.value || el.textContent || "").trim();
+    };
 
     const isBlockedEl = (el) => {
       const val = elText(el);
