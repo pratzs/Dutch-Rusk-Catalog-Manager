@@ -180,17 +180,23 @@ export default function CatalogOverrides() {
     const initial = {};
     if (products) {
       products.forEach((p) => {
-        const manual = overridesMap[p.id] || [];
-        const fromMaster = p.variants.nodes
-          .filter((v) => {
-            const variantSku = (v.sku || "").trim().toUpperCase();
-            return globalHiddenSkus.some((gs) => gs.trim().toUpperCase() === variantSku);
-          })
-          .map((v) => v.id);
-        const bulkType = p.variants.nodes
-          .filter((v) => hiddenVariantTypes.some((t) => v.title.toLowerCase().includes(t.toLowerCase())))
-          .map((v) => v.id);
-        initial[p.id] = Array.from(new Set([...manual, ...fromMaster, ...bulkType]));
+        if (overridesMap[p.id] !== undefined) {
+          // Override exists — it is the complete source of truth for this product.
+          // Do NOT merge blanket rules on top; the override fully controls visibility.
+          initial[p.id] = overridesMap[p.id] || [];
+        } else {
+          // No override — compute the effective hidden state from blanket rules.
+          const fromMaster = p.variants.nodes
+            .filter((v) => {
+              const variantSku = (v.sku || "").trim().toUpperCase();
+              return globalHiddenSkus.some((gs) => gs.trim().toUpperCase() === variantSku);
+            })
+            .map((v) => v.id);
+          const bulkType = p.variants.nodes
+            .filter((v) => hiddenVariantTypes.some((t) => v.title.toLowerCase().includes(t.toLowerCase())))
+            .map((v) => v.id);
+          initial[p.id] = Array.from(new Set([...fromMaster, ...bulkType]));
+        }
       });
     }
     initialHidden.current = initial;
@@ -261,18 +267,19 @@ export default function CatalogOverrides() {
   };
 
   const handleSave = (productId) => {
-    const product = products.find((p) => p.id === productId);
-    const bulkHiddenIds = product ? getBulkHiddenIds(product) : [];
-    const manualOnly = (pendingHidden[productId] || []).filter((id) => !bulkHiddenIds.includes(id));
+    // Save the COMPLETE current hidden state for this product.
+    // The override record is the full source of truth — it overrides blanket rules entirely,
+    // which is what allows explicitly showing a normally-blocked type (e.g. Shipper) for
+    // a specific product.
+    const allHiddenForProduct = pendingHidden[productId] || [];
 
-    // Snapshot what we're saving so the effect can sync initialHidden when done.
-    singleSaveRef.current = { productId, hidden: manualOnly };
+    singleSaveRef.current = { productId, hidden: allHiddenForProduct };
 
     const formData = new FormData();
     formData.append("intent", "save");
     formData.append("catalogId", catalogDbId);
     formData.append("productId", productId);
-    manualOnly.forEach((v) => formData.append("hiddenVariantIds", v));
+    allHiddenForProduct.forEach((v) => formData.append("hiddenVariantIds", v));
     saveFetcher.submit(formData, { method: "post" });
   };
 
@@ -309,8 +316,7 @@ export default function CatalogOverrides() {
         JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
 
       if (isDirty) {
-        const bulkHiddenIds = getBulkHiddenIds(p);
-        payload[p.id] = currentHidden.filter((id) => !bulkHiddenIds.includes(id));
+        payload[p.id] = currentHidden; // complete list — override takes full control
         dirtyCount++;
       }
     });
@@ -446,7 +452,7 @@ export default function CatalogOverrides() {
                   const baseHidden = initialHidden.current[product.id] || [];
                   const isDirty =
                     JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
-                  const hasCustomRule = overridesMap[product.id]?.length > 0;
+                  const hasCustomRule = overridesMap[product.id] !== undefined;
                   const allHidden = product.variants.nodes.every((v) => currentHidden.includes(v.id));
                   const someHidden = product.variants.nodes.some((v) => currentHidden.includes(v.id));
                   // Is THIS specific product's single-save in flight?

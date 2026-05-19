@@ -126,17 +126,26 @@ export async function loader({ request }) {
     });
   }
 
-  // Normalize variant IDs to numeric — DB stores full GIDs but theme HTML uses numeric values.
-  const rawVariantIds = override ? override.hiddenVariantIds : [];
-  const hiddenVariantIds = rawVariantIds.map((id) =>
-    id.includes("/") ? id.split("/").pop() : id
-  );
+  if (override) {
+    // A product-level override is the COMPLETE list of hidden variants for this product.
+    // Blanket hiddenVariantTypes are intentionally NOT applied — the override takes full
+    // control, which is what allows showing a normally-blocked type (e.g. Shipper) for
+    // a specific product.
+    const hiddenVariantIds = (override.hiddenVariantIds || []).map((id) =>
+      id.includes("/") ? id.split("/").pop() : id
+    );
+    return new Response(
+      JSON.stringify({ hiddenVariantTypes: [], hiddenVariantIds, hasOverride: true }),
+      { status: 200, headers: CORS_HEADERS }
+    );
+  }
 
+  // No product-level override — apply the catalog's blanket pack type rules.
   return new Response(
     JSON.stringify({
       hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],
-      hiddenVariantIds,
-      hasOverride: !!override,
+      hiddenVariantIds: [],
+      hasOverride: false,
     }),
     { status: 200, headers: CORS_HEADERS }
   );
