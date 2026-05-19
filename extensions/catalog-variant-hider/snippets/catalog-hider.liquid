@@ -11,12 +11,14 @@
     the session). Fall back to iterating customer.company.locations so we still get a
     location ID even when the session has no active location selected.
   {%- endcomment -%}
+  {%- comment -%} Try every available B2B location source in order {%- endcomment -%}
   {%- assign cvh_location_id = customer.company_location.id -%}
   {%- if cvh_location_id == blank -%}
+    {%- assign cvh_location_id = cart.company_location.id -%}
+  {%- endif -%}
+  {%- if cvh_location_id == blank -%}
     {%- for loc in customer.company.locations -%}
-      {%- if cvh_location_id == blank -%}
-        {%- assign cvh_location_id = loc.id -%}
-      {%- endif -%}
+      {%- if cvh_location_id == blank -%}{%- assign cvh_location_id = loc.id -%}{%- endif -%}
     {%- endfor -%}
   {%- endif -%}
 <div
@@ -26,6 +28,9 @@
   {% if product %}
     data-product-id="gid://shopify/Product/{{ product.id }}"
   {% endif %}
+  data-dbg-cust-loc="{{ customer.company_location.id }}"
+  data-dbg-cart-loc="{{ cart.company_location.id }}"
+  data-dbg-cust-id="{{ customer.id }}"
   style="display:none;"
   aria-hidden="true"
 ></div>

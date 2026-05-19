@@ -150,12 +150,29 @@
     const locationId      = LOCATION_ID;
     const singleProductId = el.dataset.productId || null;
 
+    // Log all debug attributes so we can see what Liquid provided
     console.log("[CVH] ✅ Running | locationId:", locationId, "| productId:", singleProductId);
-    if (!locationId) { console.log("[CVH] ❌ No locationId — customer may not have a company location"); return; }
+    console.log("[CVH] debug attrs:", {
+      custLoc:  el.dataset.dbgCustLoc  || "(empty)",
+      cartLoc:  el.dataset.dbgCartLoc  || "(empty)",
+      custId:   el.dataset.dbgCustId   || "(empty)",
+    });
+
+    // Last-resort: if Liquid gave us nothing, try /cart.js (B2B cart carries company_location)
+    let resolvedLocationId = locationId;
+    if (!resolvedLocationId) {
+      try {
+        const cartData = await (await fetch("/cart.js")).json();
+        resolvedLocationId = cartData?.company_location?.id || null;
+        if (resolvedLocationId) console.log("[CVH] Got locationId from cart.js:", resolvedLocationId);
+      } catch (_) {}
+    }
+
+    if (!resolvedLocationId) { console.log("[CVH] ❌ No locationId from any source — cannot resolve catalog"); return; }
 
     if (singleProductId) {
       // ══ PRODUCT PAGE — single product, single fetch ═══════════════════
-      const rules = await fetchRules(locationId, singleProductId);
+      const rules = await fetchRules(resolvedLocationId, singleProductId);
       console.log("[CVH] Product page rules:", rules);
       const validTypes = rules.hiddenVariantTypes || [];
       const validIds   = rules.hiddenVariantIds || [];
@@ -205,7 +222,7 @@
             if (pid && !pid.includes("/")) {
               pid = `gid://shopify/Product/${pid}`;
             }
-            const rules = await fetchRules(locationId, pid);
+            const rules = await fetchRules(resolvedLocationId, pid);
             console.log("[CVH] Rules for", pid, "→", rules);
             applyRulesToContainer(container, rules);
           })
@@ -213,7 +230,7 @@
       } else {
         // Fallback: no product IDs discoverable — apply blanket type rules only.
         // Individual product overrides cannot be applied without a product ID.
-        const rules = await fetchRules(locationId, "");
+        const rules = await fetchRules(resolvedLocationId, "");
         const validTypes = rules.hiddenVariantTypes || [];
         if (validTypes.length === 0) return;
 
