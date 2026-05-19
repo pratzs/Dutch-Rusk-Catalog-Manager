@@ -6,10 +6,23 @@
     app_url  — base URL of the deployed Catalog Manager app, e.g. https://your-app.onrender.com
 {% endcomment %}
 {% if customer and customer.b2b? %}
+  {%- comment -%}
+    Try customer.company_location.id first (set when Shopify has an active location on
+    the session). Fall back to iterating customer.company.locations so we still get a
+    location ID even when the session has no active location selected.
+  {%- endcomment -%}
+  {%- assign cvh_location_id = customer.company_location.id -%}
+  {%- if cvh_location_id == blank -%}
+    {%- for loc in customer.company.locations -%}
+      {%- if cvh_location_id == blank -%}
+        {%- assign cvh_location_id = loc.id -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
 <div
   id="catalog-variant-hider-data"
   data-app-url="{{ app_url | default: 'https://dutch-rusk-catalog-manager.onrender.com' | strip_newlines }}"
-  data-location-id="{{ customer.company_location.id | url_encode }}"
+  data-location-id="{{ cvh_location_id | url_encode }}"
   {% if product %}
     data-product-id="gid://shopify/Product/{{ product.id }}"
   {% endif %}
