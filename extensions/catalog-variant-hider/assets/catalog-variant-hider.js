@@ -51,24 +51,18 @@
     // Intentionally ignore inline style="display:none" here — many themes
     // CSS-hide radio inputs and show styled <label> buttons instead, so
     // :not([style*="none"]) would wrongly return 0 and disable the product.
-    // Also include [data-variant-title] hidden inputs injected by the Liquid snippet —
-    // collection cards often have no radio/option elements, so this is the only
-    // signal that tells us which variant(s) the card represents.
     const allVariantEls = Array.from(
-      container.querySelectorAll('input[type="radio"], option, [data-variant-title]')
+      container.querySelectorAll('input[type="radio"], option')
     );
 
-    // Priority: dataset.variantTitle > tagName-specific fallback.
     // For <option> elements el.value is often a Shopify numeric variant ID, NOT the
     // human-readable option label.  Always prefer textContent for options so we match
     // "Shipper (12 Outer)" instead of "39087234562".
     // For radio inputs el.value IS the option label (e.g. "Outer"), so use it first.
-    const elText = (el) => {
-      if (el.dataset && el.dataset.variantTitle) return el.dataset.variantTitle.trim();
-      return el.tagName === "OPTION"
+    const elText = (el) =>
+      el.tagName === "OPTION"
         ? (el.textContent || el.value || "").trim()
         : (el.value || el.textContent || "").trim();
-    };
 
     const isBlockedEl = (el) => {
       const val = elText(el);
@@ -90,9 +84,20 @@
     const hasNonBlockedOpt  = realVariantEls.length > 0 &&
                               realVariantEls.some(el => !isBlockedEl(el));
 
+    // Fallback for collection cards: when no radio/option elements exist (e.g. a
+    // single-variant card), check [data-variant-title] hidden inputs injected by
+    // the Liquid snippet to determine if ALL variants are blocked.
+    const allVariantTitlesBlocked = allVariantEls.length === 0 && (() => {
+      const titles = Array.from(container.querySelectorAll("[data-variant-title]"))
+        .map(el => (el.dataset.variantTitle || "").trim())
+        .filter(t => t && !/^[-–—]|select|choose/i.test(t));
+      return titles.length > 0 &&
+        titles.every(t => validTypes.some(type => t.startsWith(type)) || validIds.includes(t));
+    })();
+
     // Early exit: nothing in this container matches the rules
     const contentMatch = validTypes.some(t => content.includes(t));
-    if (blockedEls.length === 0 && !isForbiddenSkuSelected && !contentMatch) return;
+    if (blockedEls.length === 0 && !isForbiddenSkuSelected && !contentMatch && !allVariantTitlesBlocked) return;
 
     // Shared helper: hide a variant element AND its visible label/wrapper.
     const hideVariantEl = (el) => {
@@ -141,14 +146,39 @@
       blockedEls.forEach(hideVariantEl);
       sweepBlockedLabels();
 
-      // A. Buy button — text scan + form fallback to match any theme.
-      const _allBtns = Array.from(container.querySelectorAll('button, [type="submit"], a.btn'));
-      const btn = _allBtns.find(b => {
-        if (b.name === "add") return true;
-        const t = (b.textContent || "").trim().toLowerCase();
-        return t.includes("add to cart") || t.includes("add to bag") ||
-               t.includes("buy now") || t === "add";
-      }) || container.querySelector('form[action*="/cart/add"] button');
+      // A. Buy button — text scan inside container, then fall back to matching
+      //    product-form[data-variants] by variant ID for collection cards where
+      //    the quick-add form sits outside the container element.
+      const _findBtn = (root) =>
+        Array.from(root.querySelectorAll('button, [type="submit"], a.btn')).find(b => {
+          if (b.name === "add") return true;
+          const t = (b.textContent || "").trim().toLowerCase();
+          return t.includes("add to cart") || t.includes("add to bag") ||
+                 t.includes("buy now") || t === "add";
+        }) || root.querySelector('form[action*="/cart/add"] button');
+
+      let btn = _findBtn(container);
+      let pfRoot = null; // extra root found via product-form JSON match
+
+      if (!btn && allVariantTitlesBlocked) {
+        // Collect numeric variant IDs from [data-variant-title] hidden inputs
+        const variantIds = Array.from(container.querySelectorAll("[data-variant-title]"))
+          .map(el => String(el.value || "")).filter(v => /^\d{8,}$/.test(v));
+        if (variantIds.length > 0) {
+          document.querySelectorAll("product-form[data-variants]").forEach(pf => {
+            if (btn) return;
+            try {
+              const pfIds = JSON.parse(pf.dataset.variants || "[]").map(v => String(v.id));
+              if (pfIds.length > 0 && pfIds.every(id => variantIds.includes(id))) {
+                pfRoot = pf.closest("li, .card-wrapper, article") || pf.parentElement;
+                btn = pf.querySelector('button[name="add"]') ||
+                      pf.querySelector('button[type="submit"]');
+              }
+            } catch (_) {}
+          });
+        }
+      }
+
       if (btn) {
         btn.disabled    = true;
         btn.textContent = "Back soon";
@@ -156,7 +186,7 @@
         btn.style.setProperty("pointer-events", "none", "important");
       }
 
-      // A1. Hide Pack Size label / variant option heading.
+      // A1. Hide Pack Size label / variant option heading (product page).
       container.querySelectorAll(
         'legend, .variant__label, [class*="option-name"], [class*="option__name"], ' +
         '[class*="variant-label"], [class*="variant__heading"], ' +
@@ -168,18 +198,19 @@
         }
       });
 
-      // A1b. Hide SKU line.
+      // A1b. Hide SKU line (product page).
       container.querySelectorAll(
         '.product__sku, [class*="sku"], [id*="sku"], [class*="product-sku"]'
       ).forEach(el => el.style.setProperty("display", "none", "important"));
 
-      // A2. Quantity selector — always hide it when no variant is orderable.
-      //     Covers Dawn (.quantity), Broadcast (.qty), and generic patterns.
-      container.querySelectorAll(
+      // A2. Quantity selector — hide in container AND in pfRoot (collection quick-add).
+      const _hideQty = (root) => root.querySelectorAll(
         '.quantity, .qty, .quantity-selector, ' +
         '[class*="quantity"]:not([class*="price"]), ' +
         'input[name="quantity"], [id*="quantity"]'
       ).forEach(el => el.style.setProperty("display", "none", "important"));
+      _hideQty(container);
+      if (pfRoot) _hideQty(pfRoot);
 
       // B. "Back soon" badge (replaces any sale/promo badge).
       const badges = container.querySelectorAll(
@@ -205,13 +236,12 @@
         badgeParent.appendChild(backSoonBadge);
       }
 
-      // C. Hide stock / inventory labels.
-      const extras = container.querySelectorAll(
+      // C. Hide stock / inventory labels — search container AND pfRoot.
+      const validTypesLower = validTypes.map(t => t.toLowerCase());
+      const _hideStock = (root) => root.querySelectorAll(
         '.inventory, .stock, .variant-wrapper, [id^="Inventory"], ' +
         '[class*="stock"], [class*="inventory"]'
-      );
-      const validTypesLower = validTypes.map(t => t.toLowerCase());
-      extras.forEach(item => {
+      ).forEach(item => {
         const itemText = (item.textContent || "").toLowerCase();
         const classStr = typeof item.className === "string" ? item.className.toLowerCase() : "";
         if (
@@ -224,6 +254,8 @@
           item.style.setProperty("display", "none", "important");
         }
       });
+      _hideStock(container);
+      if (pfRoot) _hideStock(pfRoot);
     }
   }
 
