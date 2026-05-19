@@ -55,14 +55,23 @@
       container.querySelectorAll('input[type="radio"], option')
     );
 
-    // For <option> elements el.value is often a Shopify numeric variant ID, NOT the
-    // human-readable option label.  Always prefer textContent for options so we match
-    // "Shipper (12 Outer)" instead of "39087234562".
-    // For radio inputs el.value IS the option label (e.g. "Outer"), so use it first.
-    const elText = (el) =>
-      el.tagName === "OPTION"
-        ? (el.textContent || el.value || "").trim()
-        : (el.value || el.textContent || "").trim();
+    // For <option> elements el.value is a Shopify numeric variant ID — use textContent.
+    // For radio inputs: if value is also a numeric variant ID (collection card pill picker
+    // uses value="{{ variant.id }}"), resolve the human-readable label from the wrapping
+    // <label> element instead. Otherwise use el.value directly (product page option pickers
+    // use value="Outer", value="Shipper", etc.).
+    const elText = (el) => {
+      if (el.tagName === "OPTION") return (el.textContent || el.value || "").trim();
+      const val = (el.value || "").trim();
+      if (el.type === "radio" && /^\d{8,}$/.test(val)) {
+        const lbl = el.id
+          ? container.querySelector(`label[for="${el.id}"]`)
+          : el.closest("label");
+        const labelText = lbl ? lbl.textContent.trim() : "";
+        if (labelText) return labelText;
+      }
+      return val || (el.textContent || "").trim();
+    };
 
     const isBlockedEl = (el) => {
       const val = elText(el);
