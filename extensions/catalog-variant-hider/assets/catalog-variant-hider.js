@@ -292,7 +292,9 @@
         if (!pid) return;
         const card = el.classList.contains("product-card")
           ? el
-          : (el.closest(".product-card") || el);
+          : (el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, [class*='product-card']")
+             || el.closest("li, article")
+             || el);
         if (!containerMap.has(pid)) containerMap.set(pid, card);
       });
 
