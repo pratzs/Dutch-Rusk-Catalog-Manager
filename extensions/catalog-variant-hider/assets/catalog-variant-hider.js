@@ -160,8 +160,9 @@
       if (validTypes.length === 0 && validIds.length === 0) return;
 
       const SELECTORS =
+        "#main-product, article[data-product-url], " +
         ".product, .product-single, .card, .grid__item, .product-section, " +
-        "[data-product-id], .product-item, .product__info-container";
+        ".product-item, .product__info-container";
 
       let busy = false;
       const applyAll = () => {
