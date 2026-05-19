@@ -45,32 +45,34 @@ export async function action({ request }) {
       prisma.catalogRule.findUnique({ where: { catalogId: sourceId } }),
     ]);
 
-    if (sourceRule) {
-      await prisma.catalogRule.upsert({
-        where: { catalogId: targetId },
-        update: {
-          hiddenVariantTypes: sourceRule.hiddenVariantTypes,
-          hiddenVariantIds: sourceRule.hiddenVariantIds,
-        },
-        create: {
-          catalogId: targetId,
-          catalogName: formData.get("targetName") || "Copied Catalog",
-          hiddenVariantTypes: sourceRule.hiddenVariantTypes,
-          hiddenVariantIds: sourceRule.hiddenVariantIds,
-        },
-      });
-    }
+    await prisma.$transaction(async (tx) => {
+      if (sourceRule) {
+        await tx.catalogRule.upsert({
+          where: { catalogId: targetId },
+          update: {
+            hiddenVariantTypes: sourceRule.hiddenVariantTypes,
+            hiddenVariantIds: sourceRule.hiddenVariantIds,
+          },
+          create: {
+            catalogId: targetId,
+            catalogName: formData.get("targetName") || "Copied Catalog",
+            hiddenVariantTypes: sourceRule.hiddenVariantTypes,
+            hiddenVariantIds: sourceRule.hiddenVariantIds,
+          },
+        });
+      }
 
-    if (sourceOverrides.length > 0) {
-      await prisma.productOverride.deleteMany({ where: { catalogId: targetId } });
-      await prisma.productOverride.createMany({
-        data: sourceOverrides.map((o) => ({
-          catalogId: targetId,
-          productId: o.productId,
-          hiddenVariantIds: o.hiddenVariantIds,
-        })),
-      });
-    }
+      if (sourceOverrides.length > 0) {
+        await tx.productOverride.deleteMany({ where: { catalogId: targetId } });
+        await tx.productOverride.createMany({
+          data: sourceOverrides.map((o) => ({
+            catalogId: targetId,
+            productId: o.productId,
+            hiddenVariantIds: o.hiddenVariantIds,
+          })),
+        });
+      }
+    });
 
     return {
       success: true,

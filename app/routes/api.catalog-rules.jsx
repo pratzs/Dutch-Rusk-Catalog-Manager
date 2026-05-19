@@ -54,7 +54,7 @@ async function catalogIdFromCustomer(customerId, shop) {
           customer(id: $id) {
             companyContactProfiles {
               company {
-                locations(first: 10) { nodes { id } }
+                locations(first: 50) { nodes { id } }
               }
             }
           }
