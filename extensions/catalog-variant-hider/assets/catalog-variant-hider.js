@@ -55,8 +55,17 @@
       container.querySelectorAll('input[type="radio"], option')
     );
 
+    // For <option> elements el.value is often a Shopify numeric variant ID, NOT the
+    // human-readable option label.  Always prefer textContent for options so we match
+    // "Shipper (12 Outer)" instead of "39087234562".
+    // For radio inputs el.value IS the option label (e.g. "Outer"), so use it first.
+    const elText = (el) =>
+      el.tagName === "OPTION"
+        ? (el.textContent || el.value || "").trim()
+        : (el.value || el.textContent || "").trim();
+
     const isBlockedEl = (el) => {
-      const val = (el.value || el.textContent || "").trim();
+      const val = elText(el);
       // Use startsWith so that hiding "Outer" never accidentally hides "Shipper (6 Outer)".
       return validTypes.some(t => val.startsWith(t)) || validIds.includes(val);
     };
@@ -88,7 +97,7 @@
       // Catch remaining visible text labels / swatch elements for the blocked types
       container.querySelectorAll("label, option, .swatch-element").forEach(el => {
         if (el.style.display === "none") return;
-        const val = (el.value || el.textContent || "").trim();
+        const val = elText(el); // uses textContent-first for <option> elements
         if (validTypes.some(t => val.startsWith(t)) || validIds.some(id => val.startsWith(id))) {
           el.style.setProperty("display", "none", "important");
           const wrap = el.closest(".swatch-element, .variant-input, li");
