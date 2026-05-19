@@ -31,8 +31,8 @@
 
   // ── Apply rules to a single container ───────────────────────────────────
   function applyRulesToContainer(container, rules) {
-    // When an override exists it is fully authoritative — blanket type rules are suppressed.
-    const validTypes = rules.hasOverride ? [] : (rules.hiddenVariantTypes || []);
+    // Pack type rules and product override IDs are both applied simultaneously.
+    const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds || [];
 
     if (validTypes.length === 0 && validIds.length === 0) return;
@@ -155,7 +155,7 @@
     if (singleProductId) {
       // ══ PRODUCT PAGE — single product, single fetch ═══════════════════
       const rules = await fetchRules(locationId, singleProductId);
-      const validTypes = rules.hasOverride ? [] : (rules.hiddenVariantTypes || []);
+      const validTypes = rules.hiddenVariantTypes || [];
       const validIds   = rules.hiddenVariantIds || [];
       if (validTypes.length === 0 && validIds.length === 0) return;
 

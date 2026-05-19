@@ -131,7 +131,7 @@ export default function CatalogRules() {
                     <s-checkbox
                       label=""
                       checked={isBlocked}
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); toggleType(value); }}
                     />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: '700', fontSize: '15px', color: isBlocked ? '#d72c0d' : '#1a1a2e' }}>
