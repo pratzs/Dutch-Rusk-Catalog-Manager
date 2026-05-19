@@ -180,10 +180,10 @@ export default function CatalogOverrides() {
     const initial = {};
     if (products) {
       products.forEach((p) => {
-        if (overridesMap[p.id] !== undefined) {
-          // Override exists — it is the complete source of truth for this product.
-          // Do NOT merge blanket rules on top; the override fully controls visibility.
-          initial[p.id] = overridesMap[p.id] || [];
+        if (overridesMap[p.id]?.length > 0) {
+          // Non-empty override is the complete source of truth for this product.
+          // Do NOT merge blanket rules on top — the override fully controls visibility.
+          initial[p.id] = overridesMap[p.id];
         } else {
           // No override — compute the effective hidden state from blanket rules.
           const fromMaster = p.variants.nodes

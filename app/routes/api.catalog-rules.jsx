@@ -126,12 +126,11 @@ export async function loader({ request }) {
     });
   }
 
-  if (override) {
-    // A product-level override is the COMPLETE list of hidden variants for this product.
-    // Blanket hiddenVariantTypes are intentionally NOT applied — the override takes full
-    // control, which is what allows showing a normally-blocked type (e.g. Shipper) for
-    // a specific product.
-    const hiddenVariantIds = (override.hiddenVariantIds || []).map((id) =>
+  if (override && override.hiddenVariantIds.length > 0) {
+    // Non-empty override = complete explicit list for this product.
+    // Blanket hiddenVariantTypes are skipped — the override takes full control.
+    // This allows exceptions like "show Shipper for this specific product".
+    const hiddenVariantIds = override.hiddenVariantIds.map((id) =>
       id.includes("/") ? id.split("/").pop() : id
     );
     return new Response(
@@ -140,12 +139,13 @@ export async function loader({ request }) {
     );
   }
 
-  // No product-level override — apply the catalog's blanket pack type rules.
+  // No override (or an empty override saved before this logic existed) —
+  // apply the catalog's blanket pack type rules normally.
   return new Response(
     JSON.stringify({
       hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],
       hiddenVariantIds: [],
-      hasOverride: false,
+      hasOverride: !!override,
     }),
     { status: 200, headers: CORS_HEADERS }
   );
