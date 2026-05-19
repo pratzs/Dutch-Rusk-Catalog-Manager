@@ -179,17 +179,24 @@
 
     } else {
       // ══ COLLECTION PAGE — per-product fetching ════════════════════════
-      // Prefer containers that explicitly declare their product ID.
-      // Ignite (and most Shopify themes) sets data-product-id on grid items.
-      const productContainers = Array.from(
-        document.querySelectorAll("[data-product-id]")
-      );
+      // Walk every [data-product-id] element and resolve its closest product-card
+      // ancestor so we always apply rules to the full card, not a nested button.
+      const idElements = Array.from(document.querySelectorAll("[data-product-id]"));
+      const containerMap = new Map();
+      idElements.forEach(el => {
+        const pid = el.dataset.productId;
+        if (!pid) return;
+        const card = el.classList.contains("product-card")
+          ? el
+          : (el.closest(".product-card") || el);
+        if (!containerMap.has(pid)) containerMap.set(pid, card);
+      });
 
-      if (productContainers.length > 0) {
+      if (containerMap.size > 0) {
         // Fetch rules for every product in parallel (results are cached).
         await Promise.all(
-          productContainers.map(async container => {
-            let pid = container.dataset.productId || "";
+          Array.from(containerMap.entries()).map(async ([numericPid, container]) => {
+            let pid = numericPid;
             // Themes output numeric IDs; convert to full GID for the API.
             if (pid && !pid.includes("/")) {
               pid = `gid://shopify/Product/${pid}`;
@@ -207,7 +214,7 @@
 
         document
           .querySelectorAll(
-            ".product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container"
+            ".product-card, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container"
           )
           .forEach(c => applyRulesToContainer(c, rules));
       }
