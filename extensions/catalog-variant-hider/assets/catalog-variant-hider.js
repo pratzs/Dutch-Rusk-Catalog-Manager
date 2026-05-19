@@ -10,10 +10,6 @@
   const rulesCache = {};
 
   // ── API ──────────────────────────────────────────────────────────────────
-  // Resolution priority (server handles this):
-  //   1. locationId  — CompanyLocation GID from Liquid (fastest, no extra API call)
-  //   2. customerId + shop — triggers a server-side Admin API lookup to find the
-  //      customer's company location, then resolves via LocationCatalogMap
   async function fetchRules(locationId, productId) {
     const cacheKey = `${locationId || CUSTOMER_ID}::${productId || ""}`;
     if (rulesCache[cacheKey]) return rulesCache[cacheKey];
@@ -51,25 +47,58 @@
     const currentSku   = currentSkuEl ? currentSkuEl.textContent.trim() : "";
     const isForbiddenSkuSelected = validIds.includes(currentSku);
 
-    // Targeted variant-input check (radio buttons / select options only)
-    const variantInputMatch = validIds.some(id =>
-      Array.from(container.querySelectorAll('input[type="radio"], option'))
-        .some(el => el.value === id)
+    // ── Classify ALL radio/option elements ───────────────────────────────
+    // Intentionally ignore inline style="display:none" here — many themes
+    // CSS-hide radio inputs and show styled <label> buttons instead, so
+    // :not([style*="none"]) would wrongly return 0 and disable the product.
+    const allVariantEls = Array.from(
+      container.querySelectorAll('input[type="radio"], option')
     );
 
-    const isMatch =
-      validTypes.some(t => content.includes(t)) ||
-      isForbiddenSkuSelected ||
-      variantInputMatch;
+    const isBlockedEl = (el) => {
+      const val = (el.value || el.textContent || "").trim();
+      return validTypes.some(t => val.includes(t)) || validIds.includes(val);
+    };
 
-    if (!isMatch) return;
+    const blockedEls       = allVariantEls.filter(isBlockedEl);
+    const hasNonBlockedOpt = allVariantEls.length > 0 &&
+                             allVariantEls.some(el => !isBlockedEl(el));
 
-    // Determine if this container has multiple purchasable options
-    const visibleRadios  = container.querySelectorAll('input[type="radio"]:not([style*="none"])');
-    const hasOtherOptions = visibleRadios.length > 1;
+    // Early exit: nothing in this container matches the rules
+    const contentMatch = validTypes.some(t => content.includes(t));
+    if (blockedEls.length === 0 && !isForbiddenSkuSelected && !contentMatch) return;
 
-    if (!hasOtherOptions || isForbiddenSkuSelected) {
-      // ── Disable the whole product ────────────────────────────────────────
+    if (hasNonBlockedOpt && !isForbiddenSkuSelected) {
+      // ── Multi-variant: hide ONLY the blocked options ─────────────────────
+
+      blockedEls.forEach(el => {
+        el.style.setProperty("display", "none", "important");
+        // For styled radio pickers the visible button is <label for="id">
+        if (el.id) {
+          const lbl = container.querySelector(`label[for="${el.id}"]`);
+          if (lbl) lbl.style.setProperty("display", "none", "important");
+        }
+        const wrap = el.closest(".swatch-element, .variant-input, li");
+        if (wrap && !wrap.classList.contains("grid__item")) {
+          wrap.style.setProperty("display", "none", "important");
+        }
+      });
+
+      // Catch remaining visible text labels / swatch elements for the blocked types
+      container.querySelectorAll("label, option, .swatch-element").forEach(el => {
+        if (el.style.display === "none") return;
+        const val = (el.value || el.textContent || "").trim();
+        if (validTypes.some(t => val.includes(t)) || validIds.some(id => val.includes(id))) {
+          el.style.setProperty("display", "none", "important");
+          const wrap = el.closest(".swatch-element, .variant-input, li");
+          if (wrap && !wrap.classList.contains("grid__item")) {
+            wrap.style.setProperty("display", "none", "important");
+          }
+        }
+      });
+
+    } else {
+      // ── All options blocked (or forbidden SKU selected): disable product ──
 
       // A. Buy button
       const btn = container.querySelector('button[name="add"], .add-to-cart, [type="submit"]');
@@ -124,22 +153,6 @@
           item.style.setProperty("display", "none", "important");
         }
       });
-
-    } else {
-      // ── Multi-variant: hide only the restricted options ──────────────────
-      container.querySelectorAll("input, label, option, .swatch-element").forEach(item => {
-        const val = item.value || item.textContent || "";
-        if (
-          validTypes.some(t => val.includes(t)) ||
-          validIds.some(id => val.includes(id))
-        ) {
-          item.style.setProperty("display", "none", "important");
-          const wrap = item.closest(".swatch-element, .variant-input, li");
-          if (wrap && !wrap.classList.contains("grid__item")) {
-            wrap.style.setProperty("display", "none", "important");
-          }
-        }
-      });
     }
   }
 
@@ -150,7 +163,6 @@
       document.querySelector("[data-location-id]");
     if (!el) return;
 
-    // Require at least one identifier to resolve the catalog
     if (!LOCATION_ID && !CUSTOMER_ID) {
       console.warn("[CVH] No locationId or customerId — cannot resolve catalog");
       return;
@@ -160,12 +172,9 @@
 
     const singleProductId = el.dataset.productId || null;
 
-    // resolvedLocationId is used as the cache key and API param when present.
-    // When blank the API falls back to customerId+shop server-side.
     let resolvedLocationId = LOCATION_ID;
 
-    // Last-resort JS check: /cart.js sometimes carries the company location for
-    // active B2B carts even when Liquid doesn't expose it.
+    // Last-resort JS check: /cart.js sometimes carries the company location
     if (!resolvedLocationId) {
       try {
         const cartData = await (await fetch("/cart.js")).json();
@@ -183,7 +192,7 @@
     }
 
     if (singleProductId) {
-      // ══ PRODUCT PAGE — single product, single fetch ═══════════════════
+      // ══ PRODUCT PAGE ═════════════════════════════════════════════════════
       const rules = await fetchRules(resolvedLocationId, singleProductId);
       console.log("[CVH] Product page rules:", rules);
       const validTypes = rules.hiddenVariantTypes || [];
@@ -210,8 +219,8 @@
       }).observe(document.body, { childList: true, subtree: true });
 
     } else {
-      // ══ COLLECTION PAGE — per-product fetching ════════════════════════
-      const idElements  = Array.from(document.querySelectorAll("[data-product-id]"));
+      // ══ COLLECTION PAGE ══════════════════════════════════════════════════
+      const idElements   = Array.from(document.querySelectorAll("[data-product-id]"));
       const containerMap = new Map();
       idElements.forEach(el => {
         const pid = el.dataset.productId;
@@ -232,7 +241,6 @@
           })
         );
       } else {
-        // Fallback: no product IDs discoverable — apply blanket type rules only.
         const rules = await fetchRules(resolvedLocationId, "");
         if ((rules.hiddenVariantTypes || []).length === 0) return;
         document
