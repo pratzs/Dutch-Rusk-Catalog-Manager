@@ -36,7 +36,10 @@ async function catalogIdFromCustomer(customerId, shop) {
   const session = await prisma.session.findFirst({
     where: { shop, isOnline: false },
   });
-  if (!session?.accessToken) return null;
+  if (!session?.accessToken) {
+    console.error("[CVH-API] No offline session found for shop:", shop);
+    return null;
+  }
 
   let gqlData;
   try {
@@ -60,17 +63,26 @@ async function catalogIdFromCustomer(customerId, shop) {
       }),
     });
     gqlData = await res.json();
-  } catch (_) {
+  } catch (e) {
+    console.error("[CVH-API] Admin GraphQL fetch error:", e);
+    return null;
+  }
+
+  if (gqlData.errors) {
+    console.error("[CVH-API] GraphQL errors:", JSON.stringify(gqlData.errors));
     return null;
   }
 
   const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
+  console.log("[CVH-API] Customer", customerGid, "→ profiles:", profiles.length);
   for (const profile of profiles) {
     for (const loc of profile.company?.locations?.nodes ?? []) {
+      console.log("[CVH-API] Checking location:", loc.id);
       const id = await catalogIdFromLocationGid(loc.id);
-      if (id) return id;
+      if (id) { console.log("[CVH-API] Resolved catalogId:", id); return id; }
     }
   }
+  console.error("[CVH-API] No matching location in LocationCatalogMap for customer:", customerGid);
   return null;
 }
 
