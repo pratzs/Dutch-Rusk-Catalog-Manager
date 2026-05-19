@@ -144,20 +144,22 @@
     const el =
       document.getElementById("catalog-variant-hider-data") ||
       document.querySelector("[data-location-id]");
-    if (!el) return;
+    if (!el) { console.log("[CVH] ❌ No data element found — block not enabled or customer not B2B"); return; }
 
     // Use the customer's company location GID so the API can resolve the correct catalog.
     const locationId      = LOCATION_ID;
     const singleProductId = el.dataset.productId || null;
 
-    if (!locationId) return; // No B2B location available — nothing to hide.
+    console.log("[CVH] ✅ Running | locationId:", locationId, "| productId:", singleProductId);
+    if (!locationId) { console.log("[CVH] ❌ No locationId — customer may not have a company location"); return; }
 
     if (singleProductId) {
       // ══ PRODUCT PAGE — single product, single fetch ═══════════════════
       const rules = await fetchRules(locationId, singleProductId);
+      console.log("[CVH] Product page rules:", rules);
       const validTypes = rules.hiddenVariantTypes || [];
       const validIds   = rules.hiddenVariantIds || [];
-      if (validTypes.length === 0 && validIds.length === 0) return;
+      if (validTypes.length === 0 && validIds.length === 0) { console.log("[CVH] ❌ No rules to apply"); return; }
 
       const SELECTORS =
         "#main-product, article[data-product-url], " +
@@ -193,6 +195,7 @@
         if (!containerMap.has(pid)) containerMap.set(pid, card);
       });
 
+      console.log("[CVH] Collection page | containers found:", containerMap.size);
       if (containerMap.size > 0) {
         // Fetch rules for every product in parallel (results are cached).
         await Promise.all(
@@ -203,6 +206,7 @@
               pid = `gid://shopify/Product/${pid}`;
             }
             const rules = await fetchRules(locationId, pid);
+            console.log("[CVH] Rules for", pid, "→", rules);
             applyRulesToContainer(container, rules);
           })
         );
