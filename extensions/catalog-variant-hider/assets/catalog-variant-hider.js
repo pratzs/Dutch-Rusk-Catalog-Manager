@@ -70,45 +70,70 @@
       return validTypes.some(t => val.startsWith(t)) || validIds.includes(val);
     };
 
-    const blockedEls       = allVariantEls.filter(isBlockedEl);
-    const hasNonBlockedOpt = allVariantEls.length > 0 &&
-                             allVariantEls.some(el => !isBlockedEl(el));
+    const blockedEls = allVariantEls.filter(isBlockedEl);
+
+    // Exclude placeholder / "Select..." options from the non-blocked check.
+    // A theme's <select> often has <option value="">Select Pack Size</option> as the
+    // first entry — that would wrongly make hasNonBlockedOpt = true and skip the
+    // "disable product" branch even when every real option is blocked.
+    const isPlaceholder = (el) => {
+      const val = elText(el);
+      return val === "" || /^[-–—]|select|choose/i.test(val);
+    };
+    const realVariantEls    = allVariantEls.filter(el => !isPlaceholder(el));
+    const hasNonBlockedOpt  = realVariantEls.length > 0 &&
+                              realVariantEls.some(el => !isBlockedEl(el));
 
     // Early exit: nothing in this container matches the rules
     const contentMatch = validTypes.some(t => content.includes(t));
     if (blockedEls.length === 0 && !isForbiddenSkuSelected && !contentMatch) return;
 
-    if (hasNonBlockedOpt && !isForbiddenSkuSelected) {
-      // ── Multi-variant: hide ONLY the blocked options ─────────────────────
+    // Shared helper: hide a variant element AND its visible label/wrapper.
+    const hideVariantEl = (el) => {
+      el.style.setProperty("display", "none", "important");
+      if (el.id) {
+        const lbl = container.querySelector(`label[for="${el.id}"]`);
+        if (lbl) lbl.style.setProperty("display", "none", "important");
+      }
+      const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
+      if (wrap && !wrap.classList.contains("grid__item")) {
+        wrap.style.setProperty("display", "none", "important");
+      }
+    };
 
-      blockedEls.forEach(el => {
-        el.style.setProperty("display", "none", "important");
-        // For styled radio pickers the visible button is <label for="id">
-        if (el.id) {
-          const lbl = container.querySelector(`label[for="${el.id}"]`);
-          if (lbl) lbl.style.setProperty("display", "none", "important");
-        }
-        const wrap = el.closest(".swatch-element, .variant-input, li");
-        if (wrap && !wrap.classList.contains("grid__item")) {
-          wrap.style.setProperty("display", "none", "important");
-        }
-      });
-
-      // Catch remaining visible text labels / swatch elements for the blocked types
-      container.querySelectorAll("label, option, .swatch-element").forEach(el => {
+    // Sweep: hide any label/button/swatch whose visible text starts with a blocked type.
+    // This catches styled variant pickers (label buttons, swatch divs, custom buttons)
+    // that don't use standard radio inputs.
+    const sweepBlockedLabels = () => {
+      container.querySelectorAll(
+        "label, option, .swatch-element, " +
+        "[class*='option__label'], [class*='variant-label'], [class*='swatch-label'], " +
+        "[class*='option-value'], [data-option-value], [data-value]"
+      ).forEach(el => {
         if (el.style.display === "none") return;
-        const val = elText(el); // uses textContent-first for <option> elements
+        const val = elText(el);
         if (validTypes.some(t => val.startsWith(t)) || validIds.some(id => val.startsWith(id))) {
           el.style.setProperty("display", "none", "important");
-          const wrap = el.closest(".swatch-element, .variant-input, li");
+          const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
           if (wrap && !wrap.classList.contains("grid__item")) {
             wrap.style.setProperty("display", "none", "important");
           }
         }
       });
+    };
+
+    if (hasNonBlockedOpt && !isForbiddenSkuSelected) {
+      // ── Multi-variant: hide ONLY the blocked options ─────────────────────
+      blockedEls.forEach(hideVariantEl);
+      sweepBlockedLabels();
 
     } else {
       // ── All options blocked (or forbidden SKU selected): disable product ──
+
+      // A0. Hide the blocked variant elements and their labels/buttons.
+      //     (Same as the multi-variant branch but here ALL are blocked.)
+      blockedEls.forEach(hideVariantEl);
+      sweepBlockedLabels();
 
       // A. Buy button — cast a wide net to catch quick-add buttons,
       //    standard add-to-cart forms, and link-style cart buttons.
