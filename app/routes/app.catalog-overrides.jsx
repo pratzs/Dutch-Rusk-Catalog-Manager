@@ -458,12 +458,42 @@ export default function CatalogOverrides() {
 
             {/* Search */}
             <div style={{ marginBottom: "16px" }}>
-              <s-text-field
-                label="Search products"
-                value={searchInput}
-                onInput={(e) => setSearchInput(e.target.value)}
-                placeholder="Type a product name to filter..."
-              />
+              <label style={{ display: "block", marginBottom: "6px", fontSize: "14px", fontWeight: "500", color: "#202223" }}>
+                Search products
+              </label>
+              <div style={{ position: "relative" }}>
+                <input
+                  type="text"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Type any part of a product name..."
+                  style={{
+                    width: "100%",
+                    padding: "8px 36px 8px 12px",
+                    border: "1px solid #c9cccf",
+                    borderRadius: "6px",
+                    fontSize: "14px",
+                    boxSizing: "border-box",
+                    outline: "none",
+                  }}
+                />
+                {searchInput && (
+                  <button
+                    onClick={() => setSearchInput("")}
+                    style={{
+                      position: "absolute", right: "10px", top: "50%", transform: "translateY(-50%)",
+                      background: "none", border: "none", cursor: "pointer",
+                      fontSize: "16px", color: "#6d7175", padding: "0",
+                    }}
+                    title="Clear search"
+                  >×</button>
+                )}
+              </div>
+              {searchInput && (
+                <div style={{ fontSize: "12px", color: "#6d7175", marginTop: "4px" }}>
+                  Showing {filteredProducts.length} of {products.length} products matching "{searchInput}"
+                </div>
+              )}
             </div>
 
             {/* Filters + bulk toggles */}
