@@ -135,21 +135,37 @@
       blockedEls.forEach(hideVariantEl);
       sweepBlockedLabels();
 
-      // A. Buy button — cast a wide net to catch quick-add buttons,
-      //    standard add-to-cart forms, and link-style cart buttons.
-      //    Always say "Back soon" (never "Sold out").
-      const btn = container.querySelector(
-        'button[name="add"], button[type="submit"], ' +
-        '.add-to-cart, .btn-cart, .quick-add__submit, ' +
-        '[class*="add-to-cart"], [class*="cart-btn"], [class*="addtocart"], ' +
-        'form[action*="/cart/add"] button, a.btn[href*="/cart"]'
-      );
+      // A. Buy button — text scan + form fallback to match any theme.
+      const _allBtns = Array.from(container.querySelectorAll('button, [type="submit"], a.btn'));
+      const btn = _allBtns.find(b => {
+        if (b.name === "add") return true;
+        const t = (b.textContent || "").trim().toLowerCase();
+        return t.includes("add to cart") || t.includes("add to bag") ||
+               t.includes("buy now") || t === "add";
+      }) || container.querySelector('form[action*="/cart/add"] button');
       if (btn) {
         btn.disabled    = true;
         btn.textContent = "Back soon";
         btn.style.opacity = "0.5";
         btn.style.setProperty("pointer-events", "none", "important");
       }
+
+      // A1. Hide Pack Size label / variant option heading.
+      container.querySelectorAll(
+        'legend, .variant__label, [class*="option-name"], [class*="option__name"], ' +
+        '[class*="variant-label"], [class*="variant__heading"], ' +
+        'fieldset[data-option-name], .product-form__input label'
+      ).forEach(el => {
+        const t = (el.textContent || "").trim().toLowerCase();
+        if (t.includes("pack size") || t.includes("pack type") || t.includes("size")) {
+          el.style.setProperty("display", "none", "important");
+        }
+      });
+
+      // A1b. Hide SKU line.
+      container.querySelectorAll(
+        '.product__sku, [class*="sku"], [id*="sku"], [class*="product-sku"]'
+      ).forEach(el => el.style.setProperty("display", "none", "important"));
 
       // A2. Quantity selector — always hide it when no variant is orderable.
       //     Covers Dawn (.quantity), Broadcast (.qty), and generic patterns.
