@@ -1,28 +1,35 @@
 (function () {
-  // APP_URL and locationId are injected by the Liquid snippet via data attributes —
-  // never hardcoded here so the app can be redeployed without touching this file.
+  // APP_URL, locationId, customerId, and shop are injected by the Liquid snippet
+  // via data attributes — never hardcoded here.
   const _el = document.getElementById("catalog-variant-hider-data");
-  const APP_URL = (_el && _el.dataset.appUrl) || "https://dutch-rusk-catalog-manager.onrender.com";
+  const APP_URL     = (_el && _el.dataset.appUrl) || "https://dutch-rusk-catalog-manager.onrender.com";
   const LOCATION_ID = (_el && _el.dataset.locationId) ? decodeURIComponent(_el.dataset.locationId) : null;
+  const CUSTOMER_ID = (_el && _el.dataset.customerId) || null;
+  const SHOP        = (_el && _el.dataset.shop) || window.Shopify?.shop || null;
 
   const rulesCache = {};
 
   // ── API ──────────────────────────────────────────────────────────────────
-  // Sends locationId (company location GID) so the API can resolve the correct catalog.
-  // Falls back to catalogId param if locationId is unavailable.
+  // Resolution priority (server handles this):
+  //   1. locationId  — CompanyLocation GID from Liquid (fastest, no extra API call)
+  //   2. customerId + shop — triggers a server-side Admin API lookup to find the
+  //      customer's company location, then resolves via LocationCatalogMap
   async function fetchRules(locationId, productId) {
-    const key = `${locationId}::${productId || ""}`;
-    if (rulesCache[key]) return rulesCache[key];
+    const cacheKey = `${locationId || CUSTOMER_ID}::${productId || ""}`;
+    if (rulesCache[cacheKey]) return rulesCache[cacheKey];
     try {
-      const pid = productId ? encodeURIComponent(productId) : "";
-      const locParam = locationId
-        ? `locationId=${encodeURIComponent(locationId)}`
-        : "";
-      const res = await fetch(
-        `${APP_URL}/api/catalog-rules?${locParam}&productId=${pid}`
-      );
+      const params = new URLSearchParams();
+      if (locationId) {
+        params.set("locationId", locationId);
+      } else if (CUSTOMER_ID) {
+        params.set("customerId", CUSTOMER_ID);
+        if (SHOP) params.set("shop", SHOP);
+      }
+      if (productId) params.set("productId", productId);
+
+      const res  = await fetch(`${APP_URL}/api/catalog-rules?${params}`);
       const data = await res.json();
-      rulesCache[key] = data;
+      rulesCache[cacheKey] = data;
       return data;
     } catch (_) {
       return { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
@@ -31,9 +38,8 @@
 
   // ── Apply rules to a single container ───────────────────────────────────
   function applyRulesToContainer(container, rules) {
-    // Pack type rules and product override IDs are both applied simultaneously.
     const validTypes = rules.hiddenVariantTypes || [];
-    const validIds   = rules.hiddenVariantIds || [];
+    const validIds   = rules.hiddenVariantIds   || [];
 
     if (validTypes.length === 0 && validIds.length === 0) return;
 
@@ -45,7 +51,7 @@
     const currentSku   = currentSkuEl ? currentSkuEl.textContent.trim() : "";
     const isForbiddenSkuSelected = validIds.includes(currentSku);
 
-    // Targeted variant-input check (radio buttons / select options only — NOT innerHTML)
+    // Targeted variant-input check (radio buttons / select options only)
     const variantInputMatch = validIds.some(id =>
       Array.from(container.querySelectorAll('input[type="radio"], option'))
         .some(el => el.value === id)
@@ -59,19 +65,17 @@
     if (!isMatch) return;
 
     // Determine if this container has multiple purchasable options
-    const visibleRadios = container.querySelectorAll('input[type="radio"]:not([style*="none"])');
+    const visibleRadios  = container.querySelectorAll('input[type="radio"]:not([style*="none"])');
     const hasOtherOptions = visibleRadios.length > 1;
 
     if (!hasOtherOptions || isForbiddenSkuSelected) {
-      // ── Disable the whole product ──────────────────────────────────────
+      // ── Disable the whole product ────────────────────────────────────────
 
       // A. Buy button
       const btn = container.querySelector('button[name="add"], .add-to-cart, [type="submit"]');
       if (btn) {
-        btn.disabled = true;
-        btn.textContent = window.location.pathname.includes("/products/")
-          ? "Sold out"
-          : "Back soon";
+        btn.disabled     = true;
+        btn.textContent  = window.location.pathname.includes("/products/") ? "Sold out" : "Back soon";
         btn.style.opacity = "0.5";
       }
 
@@ -122,7 +126,7 @@
       });
 
     } else {
-      // ── Multi-variant: hide only the restricted options ────────────────
+      // ── Multi-variant: hide only the restricted options ──────────────────
       container.querySelectorAll("input, label, option, .swatch-element").forEach(item => {
         const val = item.value || item.textContent || "";
         if (
@@ -144,39 +148,47 @@
     const el =
       document.getElementById("catalog-variant-hider-data") ||
       document.querySelector("[data-location-id]");
-    if (!el) { console.log("[CVH] ❌ No data element found — block not enabled or customer not B2B"); return; }
+    if (!el) return;
 
-    // Use the customer's company location GID so the API can resolve the correct catalog.
-    const locationId      = LOCATION_ID;
+    // Require at least one identifier to resolve the catalog
+    if (!LOCATION_ID && !CUSTOMER_ID) {
+      console.warn("[CVH] No locationId or customerId — cannot resolve catalog");
+      return;
+    }
+
+    console.log("[CVH] Running | locationId:", LOCATION_ID, "| customerId:", CUSTOMER_ID, "| shop:", SHOP);
+
     const singleProductId = el.dataset.productId || null;
 
-    // Log all debug attributes so we can see what Liquid provided
-    console.log("[CVH] ✅ Running | locationId:", locationId, "| productId:", singleProductId);
-    console.log("[CVH] debug attrs:", {
-      custLoc:  el.dataset.dbgCustLoc  || "(empty)",
-      cartLoc:  el.dataset.dbgCartLoc  || "(empty)",
-      custId:   el.dataset.dbgCustId   || "(empty)",
-    });
+    // resolvedLocationId is used as the cache key and API param when present.
+    // When blank the API falls back to customerId+shop server-side.
+    let resolvedLocationId = LOCATION_ID;
 
-    // Last-resort: if Liquid gave us nothing, try /cart.js (B2B cart carries company_location)
-    let resolvedLocationId = locationId;
+    // Last-resort JS check: /cart.js sometimes carries the company location for
+    // active B2B carts even when Liquid doesn't expose it.
     if (!resolvedLocationId) {
       try {
         const cartData = await (await fetch("/cart.js")).json();
-        resolvedLocationId = cartData?.company_location?.id || null;
+        resolvedLocationId =
+          cartData?.company_location?.id ||
+          cartData?.buyer_identity?.company_location?.id ||
+          null;
         if (resolvedLocationId) console.log("[CVH] Got locationId from cart.js:", resolvedLocationId);
       } catch (_) {}
     }
 
-    if (!resolvedLocationId) { console.log("[CVH] ❌ No locationId from any source — cannot resolve catalog"); return; }
+    if (!resolvedLocationId && !CUSTOMER_ID) {
+      console.warn("[CVH] No location or customer ID from any source — cannot resolve catalog");
+      return;
+    }
 
     if (singleProductId) {
       // ══ PRODUCT PAGE — single product, single fetch ═══════════════════
       const rules = await fetchRules(resolvedLocationId, singleProductId);
       console.log("[CVH] Product page rules:", rules);
       const validTypes = rules.hiddenVariantTypes || [];
-      const validIds   = rules.hiddenVariantIds || [];
-      if (validTypes.length === 0 && validIds.length === 0) { console.log("[CVH] ❌ No rules to apply"); return; }
+      const validIds   = rules.hiddenVariantIds   || [];
+      if (validTypes.length === 0 && validIds.length === 0) return;
 
       const SELECTORS =
         "#main-product, article[data-product-url], " +
@@ -199,9 +211,7 @@
 
     } else {
       // ══ COLLECTION PAGE — per-product fetching ════════════════════════
-      // Walk every [data-product-id] element and resolve its closest product-card
-      // ancestor so we always apply rules to the full card, not a nested button.
-      const idElements = Array.from(document.querySelectorAll("[data-product-id]"));
+      const idElements  = Array.from(document.querySelectorAll("[data-product-id]"));
       const containerMap = new Map();
       idElements.forEach(el => {
         const pid = el.dataset.productId;
@@ -212,28 +222,19 @@
         if (!containerMap.has(pid)) containerMap.set(pid, card);
       });
 
-      console.log("[CVH] Collection page | containers found:", containerMap.size);
       if (containerMap.size > 0) {
-        // Fetch rules for every product in parallel (results are cached).
         await Promise.all(
           Array.from(containerMap.entries()).map(async ([numericPid, container]) => {
             let pid = numericPid;
-            // Themes output numeric IDs; convert to full GID for the API.
-            if (pid && !pid.includes("/")) {
-              pid = `gid://shopify/Product/${pid}`;
-            }
+            if (pid && !pid.includes("/")) pid = `gid://shopify/Product/${pid}`;
             const rules = await fetchRules(resolvedLocationId, pid);
-            console.log("[CVH] Rules for", pid, "→", rules);
             applyRulesToContainer(container, rules);
           })
         );
       } else {
         // Fallback: no product IDs discoverable — apply blanket type rules only.
-        // Individual product overrides cannot be applied without a product ID.
         const rules = await fetchRules(resolvedLocationId, "");
-        const validTypes = rules.hiddenVariantTypes || [];
-        if (validTypes.length === 0) return;
-
+        if ((rules.hiddenVariantTypes || []).length === 0) return;
         document
           .querySelectorAll(
             ".product-card, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container"

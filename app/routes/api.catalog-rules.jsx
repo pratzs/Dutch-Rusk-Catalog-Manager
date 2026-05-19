@@ -1,7 +1,7 @@
 // app/routes/api.catalog-rules.jsx
 // Public API called by the storefront theme extension.
-// Accepts either ?catalogId=<numeric> OR ?locationId=<companyLocationGid>
-// so the snippet can pass the customer's company location ID directly.
+// Accepts ?locationId=<companyLocationGid> OR ?customerId=<numericId>&shop=<domain>
+// as the primary catalog-resolution strategies, with ?catalogId=<numeric> as a last resort.
 import prisma from "../db.server";
 
 const CORS_HEADERS = {
@@ -11,33 +11,99 @@ const CORS_HEADERS = {
   "Cache-Control": "no-store",
 };
 
-export async function loader({ request }) {
-  const url = new URL(request.url);
-  let catalogId = url.searchParams.get("catalogId");
-  let locationId = url.searchParams.get("locationId");
-  const productId = url.searchParams.get("productId");
+// Resolve catalogId from a CompanyLocation GID via the LocationCatalogMap table.
+async function catalogIdFromLocationGid(locationGid) {
+  if (!locationGid) return null;
+  const normalized = locationGid.includes("/")
+    ? locationGid
+    : `gid://shopify/CompanyLocation/${locationGid}`;
+  const mapping = await prisma.locationCatalogMap.findUnique({
+    where: { locationGid: normalized },
+  });
+  return mapping?.catalogId ?? null;
+}
 
-  // Resolve catalogId from locationId when the snippet sends a company location GID.
-  if (!catalogId && locationId) {
-    // Normalize — some themes may strip the GID prefix and pass just the numeric part.
-    if (!locationId.includes("/")) {
-      locationId = `gid://shopify/CompanyLocation/${locationId}`;
-    }
-    const mapping = await prisma.locationCatalogMap.findUnique({
-      where: { locationGid: locationId },
+// Resolve catalogId by querying the Shopify Admin API for the customer's company
+// locations, then mapping those locations via LocationCatalogMap.
+// Uses the offline session token stored for the given shop.
+async function catalogIdFromCustomer(customerId, shop) {
+  if (!customerId || !shop) return null;
+
+  const customerGid = customerId.includes("/")
+    ? customerId
+    : `gid://shopify/Customer/${customerId}`;
+
+  const session = await prisma.session.findFirst({
+    where: { shop, isOnline: false },
+  });
+  if (!session?.accessToken) return null;
+
+  let gqlData;
+  try {
+    const res = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": session.accessToken,
+      },
+      body: JSON.stringify({
+        query: `query($id: ID!) {
+          customer(id: $id) {
+            companyContactProfiles {
+              company {
+                locations(first: 10) { nodes { id } }
+              }
+            }
+          }
+        }`,
+        variables: { id: customerGid },
+      }),
     });
-    if (mapping) catalogId = mapping.catalogId;
+    gqlData = await res.json();
+  } catch (_) {
+    return null;
   }
 
-  // Normalize catalogId — DB stores numeric strings, snippets may pass full GIDs.
-  if (catalogId && catalogId.includes("/")) catalogId = catalogId.split("/").pop();
+  const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
+  for (const profile of profiles) {
+    for (const loc of profile.company?.locations?.nodes ?? []) {
+      const id = await catalogIdFromLocationGid(loc.id);
+      if (id) return id;
+    }
+  }
+  return null;
+}
+
+export async function loader({ request }) {
+  const url = new URL(request.url);
+  const productId = url.searchParams.get("productId");
+
+  // ── Strategy 1: explicit locationId (GID from Liquid) ─────────────────────
+  let locationId = url.searchParams.get("locationId");
+  let catalogId = locationId ? await catalogIdFromLocationGid(locationId) : null;
+
+  // ── Strategy 2: catalogId passed directly ─────────────────────────────────
+  if (!catalogId) {
+    catalogId = url.searchParams.get("catalogId") || null;
+    if (catalogId?.includes("/")) catalogId = catalogId.split("/").pop();
+  }
+
+  // ── Strategy 3: customerId + shop → Admin API lookup ──────────────────────
+  if (!catalogId) {
+    const customerId = url.searchParams.get("customerId");
+    const shop = url.searchParams.get("shop");
+    catalogId = await catalogIdFromCustomer(customerId, shop);
+  }
 
   if (!catalogId) {
     return new Response(
-      JSON.stringify({ error: "Missing catalogId or locationId" }),
+      JSON.stringify({ error: "Could not resolve catalog" }),
       { status: 400, headers: CORS_HEADERS }
     );
   }
+
+  // Normalize — DB stores numeric strings, snippets may pass full GIDs.
+  if (catalogId.includes("/")) catalogId = catalogId.split("/").pop();
 
   const rule = await prisma.catalogRule.findUnique({ where: { catalogId } });
 
