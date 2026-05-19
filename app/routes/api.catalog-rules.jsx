@@ -25,7 +25,6 @@ async function catalogIdFromLocationGid(locationGid) {
 
 // Resolve catalogId by querying the Shopify Admin API for the customer's company
 // locations, then mapping those locations via LocationCatalogMap.
-// Uses the offline session token stored for the given shop.
 async function catalogIdFromCustomer(customerId, shop) {
   if (!customerId || !shop) return null;
 
@@ -77,13 +76,18 @@ async function catalogIdFromCustomer(customerId, shop) {
   console.log("[CVH-API] Customer", customerGid, "→ profiles:", profiles.length);
   for (const profile of profiles) {
     for (const loc of profile.company?.locations?.nodes ?? []) {
-      console.log("[CVH-API] Checking location:", loc.id);
       const id = await catalogIdFromLocationGid(loc.id);
       if (id) { console.log("[CVH-API] Resolved catalogId:", id); return id; }
     }
   }
   console.error("[CVH-API] No matching location in LocationCatalogMap for customer:", customerGid);
   return null;
+}
+
+// Returns true if a stored override value looks like a legacy GID or numeric variant ID
+// (saved before the title-based override system was introduced).
+function isLegacyId(value) {
+  return value.includes("/") || /^\d{10,}$/.test(value);
 }
 
 export async function loader({ request }) {
@@ -114,7 +118,6 @@ export async function loader({ request }) {
     );
   }
 
-  // Normalize — DB stores numeric strings, snippets may pass full GIDs.
   if (catalogId.includes("/")) catalogId = catalogId.split("/").pop();
 
   const rule = await prisma.catalogRule.findUnique({ where: { catalogId } });
@@ -126,21 +129,29 @@ export async function loader({ request }) {
     });
   }
 
+  // ── Product-level override logic ──────────────────────────────────────────
+  // Overrides now store variant TITLES (e.g. "Outer", "Shipper (6 Outer)") so
+  // the storefront can match by name using startsWith.  Legacy overrides that
+  // contain GIDs or numeric IDs are treated the same as no override — blanket
+  // rules apply.
   if (override && override.hiddenVariantIds.length > 0) {
-    // Non-empty override = complete explicit list for this product.
-    // Blanket hiddenVariantTypes are skipped — the override takes full control.
-    // This allows exceptions like "show Shipper for this specific product".
-    const hiddenVariantIds = override.hiddenVariantIds.map((id) =>
-      id.includes("/") ? id.split("/").pop() : id
-    );
-    return new Response(
-      JSON.stringify({ hiddenVariantTypes: [], hiddenVariantIds, hasOverride: true }),
-      { status: 200, headers: CORS_HEADERS }
-    );
+    const allLegacy = override.hiddenVariantIds.every(isLegacyId);
+
+    if (!allLegacy) {
+      // New-style: stored values are variant titles.  They become the complete
+      // hiddenVariantTypes for this product — blanket rules are intentionally
+      // skipped, which allows showing a normally-blocked type (e.g. Shipper)
+      // for a specific product.
+      const titles = override.hiddenVariantIds.filter(v => !isLegacyId(v));
+      return new Response(
+        JSON.stringify({ hiddenVariantTypes: titles, hiddenVariantIds: [], hasOverride: true }),
+        { status: 200, headers: CORS_HEADERS }
+      );
+    }
+    // Legacy GID-based override → fall through and apply blanket rules.
   }
 
-  // No override (or an empty override saved before this logic existed) —
-  // apply the catalog's blanket pack type rules normally.
+  // No override, empty override, or legacy-only override — apply blanket rules.
   return new Response(
     JSON.stringify({
       hiddenVariantTypes: rule ? rule.hiddenVariantTypes : [],

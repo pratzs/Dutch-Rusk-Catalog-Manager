@@ -57,7 +57,8 @@
 
     const isBlockedEl = (el) => {
       const val = (el.value || el.textContent || "").trim();
-      return validTypes.some(t => val.includes(t)) || validIds.includes(val);
+      // Use startsWith so that hiding "Outer" never accidentally hides "Shipper (6 Outer)".
+      return validTypes.some(t => val.startsWith(t)) || validIds.includes(val);
     };
 
     const blockedEls       = allVariantEls.filter(isBlockedEl);
@@ -88,7 +89,7 @@
       container.querySelectorAll("label, option, .swatch-element").forEach(el => {
         if (el.style.display === "none") return;
         const val = (el.value || el.textContent || "").trim();
-        if (validTypes.some(t => val.includes(t)) || validIds.some(id => val.includes(id))) {
+        if (validTypes.some(t => val.startsWith(t)) || validIds.some(id => val.startsWith(id))) {
           el.style.setProperty("display", "none", "important");
           const wrap = el.closest(".swatch-element, .variant-input, li");
           if (wrap && !wrap.classList.contains("grid__item")) {

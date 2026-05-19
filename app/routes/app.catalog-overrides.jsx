@@ -4,6 +4,11 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
+// Mirrors the same helper in api.catalog-rules.jsx — detects old GID/numeric override data.
+function isLegacyId(value) {
+  return value.includes("/") || /^\d{10,}$/.test(value);
+}
+
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -177,26 +182,58 @@ export default function CatalogOverrides() {
   const bulkSavePayloadRef = useRef(null);
 
   useEffect(() => {
+    // Compute which variant GIDs should appear as "hidden" in the UI, per product.
+    // DB overrides now store variant TITLES (or the sentinel "__SHOW_ALL__").
+    // Legacy overrides store GIDs/numeric IDs and are treated as "no override".
+
+    const fromBlanket = (p) => {
+      const fromMaster = p.variants.nodes
+        .filter((v) => {
+          const variantSku = (v.sku || "").trim().toUpperCase();
+          return globalHiddenSkus.some((gs) => gs.trim().toUpperCase() === variantSku);
+        })
+        .map((v) => v.id);
+      const byType = p.variants.nodes
+        .filter((v) => hiddenVariantTypes.some((t) => v.title.toLowerCase().startsWith(t.toLowerCase())))
+        .map((v) => v.id);
+      return Array.from(new Set([...fromMaster, ...byType]));
+    };
+
     const initial = {};
     if (products) {
       products.forEach((p) => {
-        if (overridesMap[p.id]?.length > 0) {
-          // Non-empty override is the complete source of truth for this product.
-          // Do NOT merge blanket rules on top — the override fully controls visibility.
-          initial[p.id] = overridesMap[p.id];
-        } else {
-          // No override — compute the effective hidden state from blanket rules.
-          const fromMaster = p.variants.nodes
-            .filter((v) => {
-              const variantSku = (v.sku || "").trim().toUpperCase();
-              return globalHiddenSkus.some((gs) => gs.trim().toUpperCase() === variantSku);
-            })
-            .map((v) => v.id);
-          const bulkType = p.variants.nodes
-            .filter((v) => hiddenVariantTypes.some((t) => v.title.toLowerCase().includes(t.toLowerCase())))
-            .map((v) => v.id);
-          initial[p.id] = Array.from(new Set([...fromMaster, ...bulkType]));
+        const rawOverride = overridesMap[p.id]; // undefined | string[]
+
+        if (rawOverride === undefined) {
+          // No override record — apply blanket rules.
+          initial[p.id] = fromBlanket(p);
+          return;
         }
+
+        if (rawOverride.length === 0) {
+          // Empty override (legacy empty record) — treat as no override.
+          initial[p.id] = fromBlanket(p);
+          return;
+        }
+
+        if (rawOverride[0] === "__SHOW_ALL__") {
+          // Explicit "show everything" override — nothing is hidden.
+          initial[p.id] = [];
+          return;
+        }
+
+        const allLegacy = rawOverride.every(isLegacyId);
+        if (allLegacy) {
+          // Legacy GID-based override — treat as no override, apply blanket rules.
+          initial[p.id] = fromBlanket(p);
+          return;
+        }
+
+        // New title-based override — find matching variant GIDs.
+        const titles = rawOverride.filter((v) => !isLegacyId(v));
+        initial[p.id] = p.variants.nodes
+          .filter((v) => titles.some((t) => v.title.toLowerCase().startsWith(t.toLowerCase()) || v.title === t))
+          .map((v) => v.id);
       });
     }
     initialHidden.current = initial;
@@ -267,19 +304,30 @@ export default function CatalogOverrides() {
   };
 
   const handleSave = (productId) => {
-    // Save the COMPLETE current hidden state for this product.
-    // The override record is the full source of truth — it overrides blanket rules entirely,
-    // which is what allows explicitly showing a normally-blocked type (e.g. Shipper) for
-    // a specific product.
-    const allHiddenForProduct = pendingHidden[productId] || [];
+    // The UI tracks hidden state as variant GIDs (for checkbox logic).
+    // The DB stores variant TITLES so the storefront JS can match by option value.
+    // Convert GIDs → titles here before submitting.
+    const hiddenGids = pendingHidden[productId] || [];
+    const product = products.find((p) => p.id === productId);
 
-    singleSaveRef.current = { productId, hidden: allHiddenForProduct };
+    let titlesToSave;
+    if (hiddenGids.length === 0) {
+      // User explicitly cleared all — save sentinel so the API skips blanket rules.
+      titlesToSave = ["__SHOW_ALL__"];
+    } else {
+      titlesToSave = hiddenGids
+        .map((gid) => product?.variants.nodes.find((v) => v.id === gid)?.title)
+        .filter(Boolean);
+    }
+
+    // Keep UI-state GIDs in the ref so initialHidden stays in sync after save.
+    singleSaveRef.current = { productId, hidden: hiddenGids };
 
     const formData = new FormData();
     formData.append("intent", "save");
     formData.append("catalogId", catalogDbId);
     formData.append("productId", productId);
-    allHiddenForProduct.forEach((v) => formData.append("hiddenVariantIds", v));
+    titlesToSave.forEach((t) => formData.append("hiddenVariantIds", t));
     saveFetcher.submit(formData, { method: "post" });
   };
 
@@ -306,7 +354,10 @@ export default function CatalogOverrides() {
   };
 
   const handleSaveAllDirty = () => {
-    const payload = {};
+    // uiPayload  — GIDs, used to sync initialHidden after save (UI state).
+    // dbPayload  — TITLES, what actually gets written to the DB.
+    const uiPayload = {};
+    const dbPayload = {};
     let dirtyCount = 0;
 
     products.forEach((p) => {
@@ -316,7 +367,15 @@ export default function CatalogOverrides() {
         JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
 
       if (isDirty) {
-        payload[p.id] = currentHidden; // complete list — override takes full control
+        uiPayload[p.id] = currentHidden;
+
+        if (currentHidden.length === 0) {
+          dbPayload[p.id] = ["__SHOW_ALL__"];
+        } else {
+          dbPayload[p.id] = currentHidden
+            .map((gid) => p.variants.nodes.find((v) => v.id === gid)?.title)
+            .filter(Boolean);
+        }
         dirtyCount++;
       }
     });
@@ -326,13 +385,13 @@ export default function CatalogOverrides() {
       return;
     }
 
-    // Snapshot payload so the effect can sync initialHidden when the fetcher settles.
-    bulkSavePayloadRef.current = payload;
+    // Snapshot UI-state GIDs so the effect can sync initialHidden when the fetcher settles.
+    bulkSavePayloadRef.current = uiPayload;
 
     const formData = new FormData();
     formData.append("intent", "save_bulk");
     formData.append("catalogId", catalogDbId);
-    formData.append("bulkData", JSON.stringify(payload));
+    formData.append("bulkData", JSON.stringify(dbPayload));
     bulkFetcher.submit(formData, { method: "post" });
     shopify.toast.show(`Saving ${dirtyCount} product${dirtyCount !== 1 ? "s" : ""}…`);
   };
