@@ -119,7 +119,7 @@ export async function loader({ request }) {
     allVariantTypes: Array.from(allVariantTypes).sort(),
     pageInfo,
     debugMessage,
-    serverSearch: search,
+    search,
   };
 }
 
@@ -166,8 +166,7 @@ export async function action({ request }) {
 export default function CatalogOverrides() {
   const {
     catalogDbId, catalogGid, catalogName, products, overridesMap,
-    globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo, debugMessage,
-    serverSearch,
+    globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo, debugMessage, search,
   } = useLoaderData();
 
   const navigate = useNavigate();
@@ -182,9 +181,9 @@ export default function CatalogOverrides() {
   const [pendingHidden, setPendingHidden] = useState({});
   const initialHidden = useRef({});
   const [variantFilter, setVariantFilter] = useState("all");
-  // searchInput is kept in sync with the URL param (serverSearch) so navigating back
+  // searchInput is kept in sync with the URL param (search) so navigating back
   // and forth preserves the typed query.
-  const [searchInput, setSearchInput] = useState(serverSearch || "");
+  const [searchInput, setSearchInput] = useState(search);
   const searchDebounce = useRef(null);
 
   // Track which single productId is mid-save so we can mark it done when fetcher settles.
@@ -216,26 +215,22 @@ export default function CatalogOverrides() {
         const rawOverride = overridesMap[p.id]; // undefined | string[]
 
         if (rawOverride === undefined) {
-          // No override record — apply blanket rules.
           initial[p.id] = fromBlanket(p);
           return;
         }
 
         if (rawOverride.length === 0) {
-          // Empty override (legacy empty record) — treat as no override.
           initial[p.id] = fromBlanket(p);
           return;
         }
 
         if (rawOverride[0] === "__SHOW_ALL__") {
-          // Explicit "show everything" override — nothing is hidden.
           initial[p.id] = [];
           return;
         }
 
         const allLegacy = rawOverride.every(isLegacyId);
         if (allLegacy) {
-          // Legacy GID-based override — treat as no override, apply blanket rules.
           initial[p.id] = fromBlanket(p);
           return;
         }
@@ -279,12 +274,11 @@ export default function CatalogOverrides() {
 
   const filteredProducts = useMemo(() => {
     if (!products) return [];
-    let filtered = products;
     if (variantFilter !== "all") {
-      filtered = filtered.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
+      return products.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
     }
     // Title search is now server-side (URL param), only filter by variant type client-side.
-    return filtered;
+    return products;
   }, [products, variantFilter]);
 
   // Variant IDs already covered by blanket rules — excluded from manual overrides.
@@ -462,9 +456,9 @@ export default function CatalogOverrides() {
             </div>
           )}
 
-          <s-section heading={serverSearch ? `Search results for "${serverSearch}" (${products.length})` : `Products in this Catalog (${products.length})`}>
+          <s-section heading={search ? `Search results for "${search}" (${filteredProducts.length})` : `Products in this Catalog (${products.length})`}>
 
-            {/* Search */}
+            {/* Search — server-side via ?search= param, debounced 400ms */}
             <div style={{ marginBottom: "16px" }}>
               <label style={{ display: "block", marginBottom: "6px", fontSize: "14px", fontWeight: "500", color: "#202223" }}>
                 Search products
@@ -509,15 +503,15 @@ export default function CatalogOverrides() {
                     style={{
                       position: "absolute", right: "10px", top: "50%", transform: "translateY(-50%)",
                       background: "none", border: "none", cursor: "pointer",
-                      fontSize: "16px", color: "#6d7175", padding: "0",
+                      fontSize: "18px", color: "#6d7175", padding: "0", lineHeight: "1",
                     }}
                     title="Clear search"
                   >×</button>
                 )}
               </div>
-              {searchInput && (
+              {search && (
                 <div style={{ fontSize: "12px", color: "#6d7175", marginTop: "4px" }}>
-                  Showing {products.length} result{products.length !== 1 ? "s" : ""} for "{searchInput}"
+                  Showing {filteredProducts.length} result{filteredProducts.length !== 1 ? "s" : ""} for "{search}"
                 </div>
               )}
             </div>
@@ -545,10 +539,10 @@ export default function CatalogOverrides() {
             <s-stack direction="block" gap="base">
               {filteredProducts.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "40px", border: "1px solid #e1e3e5", borderRadius: "8px", color: "#6d7175" }}>
-                  {searchInput ? (
+                  {search ? (
                     <>
                       <div style={{ fontSize: "32px", marginBottom: "8px" }}>🔍</div>
-                      <div style={{ fontWeight: "600" }}>No products match "{searchInput}"</div>
+                      <div style={{ fontWeight: "600" }}>No products match "{search}"</div>
                       <div style={{ fontSize: "13px", marginTop: "4px" }}>Try a different search term or clear the filter.</div>
                     </>
                   ) : (
