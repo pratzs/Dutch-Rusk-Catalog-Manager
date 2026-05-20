@@ -11,13 +11,13 @@
 
   // ── sessionStorage cache (per-customer, per browser session) ───────────
   // Key prefix uses CUSTOMER_ID so a different customer login gets a fresh cache.
-  const SS_PRE = "cvh2:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
+  const SS_PRE = "cvh3:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
   try {
-    const prev = sessionStorage.getItem("cvh2:who");
+    const prev = sessionStorage.getItem("cvh3:who");
     if (prev !== (CUSTOMER_ID || LOCATION_ID || "")) {
-      Object.keys(sessionStorage).filter(k => k.startsWith("cvh2:")).forEach(k => sessionStorage.removeItem(k));
+      Object.keys(sessionStorage).filter(k => k.startsWith("cvh3:")).forEach(k => sessionStorage.removeItem(k));
     }
-    sessionStorage.setItem("cvh2:who", CUSTOMER_ID || LOCATION_ID || "");
+    sessionStorage.setItem("cvh3:who", CUSTOMER_ID || LOCATION_ID || "");
   } catch (_) {}
 
   // ── API ──────────────────────────────────────────────────────────────────
@@ -25,23 +25,24 @@
     const cacheKey = `${locationId || CUSTOMER_ID}::${productId || ""}`;
     if (rulesCache[cacheKey]) return rulesCache[cacheKey];
     const ssKey = SS_PRE + (productId || "__blanket");
-    try { const s = sessionStorage.getItem(ssKey); if (s) { const d = JSON.parse(s); rulesCache[cacheKey] = d; return d; } } catch (_) {}
+    try {
+      const s = sessionStorage.getItem(ssKey);
+      if (s) { const d = JSON.parse(s); if (Array.isArray(d.hiddenVariantTypes)) { rulesCache[cacheKey] = d; return d; } }
+    } catch (_) {}
     try {
       const params = new URLSearchParams();
-      if (locationId) {
-        params.set("locationId", locationId);
-      } else if (CUSTOMER_ID) {
-        params.set("customerId", CUSTOMER_ID);
-        if (SHOP) params.set("shop", SHOP);
-      }
+      if (locationId) { params.set("locationId", locationId); }
+      else if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
       if (productId) params.set("productId", productId);
-
       const res  = await fetch(`${APP_URL}/api/catalog-rules?${params}`);
       const data = await res.json();
-      rulesCache[cacheKey] = data;
-      rulesCache[cacheKey] = data;
-      try { sessionStorage.setItem(ssKey, JSON.stringify(data)); } catch (_) {}
+      // Only cache valid rule responses — never cache API error objects.
+      if (Array.isArray(data.hiddenVariantTypes)) {
+        rulesCache[cacheKey] = data;
+        try { sessionStorage.setItem(ssKey, JSON.stringify(data)); } catch (_) {}
+      }
       return data;
+    } catch (_) {
       return { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
     }
   }
