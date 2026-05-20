@@ -510,8 +510,8 @@ export default function CatalogOverrides() {
                     clearTimeout(searchDebounce.current);
                     searchDebounce.current = setTimeout(() => {
                       const p = new URLSearchParams();
-                      p.set("catalogId", encodeURIComponent(catalogGid));
-                      p.set("catalogName", encodeURIComponent(catalogName));
+                      p.set("catalogId", catalogGid);
+                      p.set("catalogName", catalogName);
                       if (val.trim()) p.set("search", val.trim());
                       navigate(`/app/catalog-overrides?${p.toString()}`);
                     }, 400);
@@ -533,8 +533,8 @@ export default function CatalogOverrides() {
                       setSearchInput("");
                       clearTimeout(searchDebounce.current);
                       const p = new URLSearchParams();
-                      p.set("catalogId", encodeURIComponent(catalogGid));
-                      p.set("catalogName", encodeURIComponent(catalogName));
+                      p.set("catalogId", catalogGid);
+                      p.set("catalogName", catalogName);
                       navigate(`/app/catalog-overrides?${p.toString()}`);
                     }}
                     style={{
