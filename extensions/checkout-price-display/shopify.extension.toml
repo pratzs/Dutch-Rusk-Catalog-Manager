@@ -1,0 +1,15 @@
+api_version = "2024-07"
+
+[[extensions]]
+uid = "f8bb7433-3ba1-7ec6-168f-91e20b7503642d706894"
+type = "ui_extension"
+name = "Checkout Price Display"
+handle = "checkout-price-display"
+
+  [[extensions.targeting]]
+  module = "./src/index.jsx"
+  target = "purchase.checkout.cart-line-item.render-after"
+
+  [[extensions.targeting]]
+  module = "./src/OrderSummary.jsx"
+  target = "purchase.checkout.order-summary-line-items.render-after"
