@@ -74,9 +74,6 @@ async function catalogIdFromCustomer(customerId, shop) {
 
   const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
   console.log("[CVH-API] Customer", customerGid, "→ profiles:", profiles.length);
-  for (const profile of profiles) {
-  const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
-  console.log("[CVH-API] Customer", customerGid, "→ profiles:", profiles.length);
 
   // First pass: try existing LocationCatalogMap entries.
   for (const profile of profiles) {
