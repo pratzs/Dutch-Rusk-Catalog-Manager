@@ -1,73 +1,88 @@
 // app/routes/api.sync-compare-prices.jsx
 // Sets compare_at_price = price for every variant that has no compare_at_price.
-// This lets the checkout UI extension show strikethrough prices for B2B catalog customers
-// without needing network_access approval, because compareAtAmountPerQuantity becomes
-// populated (regular retail price) while B2B customers pay the lower catalog price.
+// This lets the checkout UI extension show ~~retail price~~ catalog price for B2B customers.
 import { authenticate } from "../shopify.server";
 
 export async function action({ request }) {
   const { admin } = await authenticate.admin(request);
 
   let updatedCount = 0;
-  let cursor = null;
-  let hasNextPage = true;
+  let productCursor = null;
+  let hasNextProductPage = true;
 
-  while (hasNextPage) {
-    const query = `
-      query GetVariants($cursor: String) {
-        productVariants(first: 100, after: $cursor) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
-            id
-            price
-            compareAtPrice
+  try {
+    while (hasNextProductPage) {
+      // Query products + their variants
+      const productsRes = await admin.graphql(
+        `query GetProducts($cursor: String) {
+          products(first: 10, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              variants(first: 100) {
+                nodes {
+                  id
+                  price
+                  compareAtPrice
+                }
+              }
+            }
           }
+        }`,
+        { variables: { cursor: productCursor } }
+      );
+
+      const { data, errors } = await productsRes.json();
+
+      if (errors) {
+        console.error("[sync-compare-prices] Query errors:", JSON.stringify(errors));
+        return Response.json({ error: "Failed to query products: " + errors[0]?.message }, { status: 500 });
+      }
+
+      const page = data?.products;
+      if (!page) break;
+
+      hasNextProductPage = page.pageInfo.hasNextPage;
+      productCursor = page.pageInfo.endCursor;
+
+      for (const product of page.nodes) {
+        // Only update variants where compareAtPrice is null/empty
+        const needsUpdate = product.variants.nodes.filter(
+          (v) => !v.compareAtPrice || v.compareAtPrice === "0.00" || parseFloat(v.compareAtPrice) === 0
+        );
+
+        if (needsUpdate.length === 0) continue;
+
+        const variantInputs = needsUpdate.map((v) => ({
+          id: v.id,
+          compareAtPrice: v.price,
+        }));
+
+        const mutRes = await admin.graphql(
+          `mutation BulkUpdateVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+              userErrors { field message }
+            }
+          }`,
+          { variables: { productId: product.id, variants: variantInputs } }
+        );
+
+        const mutData = await mutRes.json();
+        const userErrors = mutData?.data?.productVariantsBulkUpdate?.userErrors ?? [];
+
+        if (userErrors.length > 0) {
+          console.error("[sync-compare-prices] userErrors for product", product.id, JSON.stringify(userErrors));
+          // Continue with other products rather than aborting
+        } else if (mutData.errors) {
+          console.error("[sync-compare-prices] GraphQL errors:", JSON.stringify(mutData.errors));
+        } else {
+          updatedCount += variantInputs.length;
         }
       }
-    `;
-
-    const res = await admin.graphql(query, { variables: { cursor } });
-    const { data } = await res.json();
-    const page = data?.productVariants;
-    if (!page) break;
-
-    hasNextPage = page.pageInfo.hasNextPage;
-    cursor = page.pageInfo.endCursor;
-
-    // Only update variants where compareAtPrice is null or empty
-    const needsUpdate = page.nodes.filter(
-      (v) => !v.compareAtPrice || parseFloat(v.compareAtPrice) === 0
-    );
-
-    if (needsUpdate.length === 0) continue;
-
-    // Batch update in chunks of 100
-    const mutation = `
-      mutation BulkUpdateVariants($variants: [ProductVariantsBulkInput!]!, $productId: ID!) {
-        productVariantsBulkUpdate(variants: $variants, productId: $productId) {
-          userErrors { field message }
-        }
-      }
-    `;
-
-    // Group by product (required by productVariantsBulkUpdate)
-    const byProduct = {};
-    for (const v of needsUpdate) {
-      // Extract product GID from variant GID
-      // variant: gid://shopify/ProductVariant/123 → need product GID
-      // We'll use a single-variant mutation approach instead
-      const updateMutation = `
-        mutation UpdateVariant($id: ID!, $compareAtPrice: Money!) {
-          productVariantUpdate(input: { id: $id, compareAtPrice: $compareAtPrice }) {
-            userErrors { field message }
-          }
-        }
-      `;
-      await admin.graphql(updateMutation, {
-        variables: { id: v.id, compareAtPrice: v.price },
-      });
-      updatedCount++;
     }
+  } catch (err) {
+    console.error("[sync-compare-prices] Unexpected error:", err);
+    return Response.json({ error: err.message }, { status: 500 });
   }
 
   return Response.json({ success: true, updatedCount });
