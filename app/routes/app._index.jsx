@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate } from "react-router";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -18,6 +18,9 @@ export const loader = async ({ request }) => {
 export default function Index() {
   const { totalRules, totalOverrides, activeRules, recentRules } = useLoaderData();
   const navigate = useNavigate();
+  const syncFetcher = useFetcher();
+  const isSyncing = syncFetcher.state !== 'idle';
+  const syncResult = syncFetcher.data;
 
   return (
     <s-page heading="Dutch Rusk — Catalog Manager">
@@ -151,6 +154,52 @@ export default function Index() {
 
       <s-section slot="aside" heading="Need Help?">
         <s-text tone="subdued">Contact your Digital Lead for support with this tool.</s-text>
+      </s-section>
+
+      {/* Checkout Strikethrough Sync */}
+      <s-section heading="Checkout Strikethrough Prices">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <s-text>
+            B2B catalog customers see discounted prices at checkout, but Shopify doesn't
+            automatically show the original retail price as a strikethrough. Click the button
+            below to sync the retail price onto every variant's compare-at price — this is a
+            one-time setup (or run it again after bulk price updates).
+          </s-text>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <button
+              type="button"
+              onClick={() => syncFetcher.submit({}, { method: 'post', action: '/api/sync-compare-prices' })}
+              disabled={isSyncing}
+              style={{
+                background: isSyncing ? '#95c9b4' : '#008060',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '10px 20px',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: isSyncing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {isSyncing ? 'Syncing…' : '🏷️ Sync Compare-At Prices'}
+            </button>
+            {syncResult?.success && (
+              <span style={{ color: '#008060', fontWeight: '600' }}>
+                ✅ Done — {syncResult.updatedCount} variant(s) updated
+              </span>
+            )}
+            {syncResult?.error && (
+              <span style={{ color: '#d72c0d', fontWeight: '600' }}>
+                ❌ {syncResult.error}
+              </span>
+            )}
+          </div>
+          <s-text tone="subdued">
+            This sets compare_at_price = price for any variant missing a compare-at value.
+            Regular customers won't see a strikethrough (price = compare-at, so Shopify hides it),
+            but B2B catalog customers will see ~~retail price~~ their discounted price at checkout.
+          </s-text>
+        </div>
       </s-section>
 
     </s-page>
