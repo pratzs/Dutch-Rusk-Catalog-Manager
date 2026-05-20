@@ -8,7 +8,7 @@ import {
 } from '@shopify/ui-extensions-react/checkout';
 
 export default reactExtension(
-  'purchase.checkout.order-summary-line-items.render-after',
+  'purchase.checkout.reductions.render-after',
   () => <TotalSavings />,
 );
 
@@ -27,15 +27,28 @@ function TotalSavings() {
   let currency = 'NZD';
 
   for (const line of lines) {
-    const compareAtMoney = line.cost.compareAtAmountPerQuantity;
-    if (!compareAtMoney) continue;
+    if (!line?.cost) continue;
 
-    const compareAt = parseFloat(compareAtMoney.amount);
     const current = parseFloat(line.cost.amountPerQuantity.amount);
     currency = line.cost.amountPerQuantity.currencyCode;
+    const qty = line.quantity ?? 1;
 
-    if (compareAt > current) {
-      totalSavings += (compareAt - current) * line.quantity;
+    // Source 1: compareAtAmountPerQuantity
+    const compareAtMoney = line.cost.compareAtAmountPerQuantity;
+    if (compareAtMoney) {
+      const compareAt = parseFloat(compareAtMoney.amount);
+      if (compareAt > current) {
+        totalSavings += (compareAt - current) * qty;
+        continue;
+      }
+    }
+
+    // Source 2: discountAllocations (B2B catalog discounts)
+    const allocations = line.discountAllocations ?? [];
+    if (allocations.length > 0) {
+      totalSavings += allocations.reduce((sum, d) => {
+        return sum + parseFloat(d.discountedAmount.amount);
+      }, 0);
     }
   }
 
