@@ -1,4 +1,4 @@
-api_version = "2024-07"
+api_version = "2025-07"
 
 [[extensions]]
 uid = "f8bb7433-3ba1-7ec6-168f-91e20b7503642d706894"
@@ -12,4 +12,4 @@ handle = "checkout-price-display"
 
   [[extensions.targeting]]
   module = "./src/OrderSummary.jsx"
-  target = "purchase.checkout.order-summary-line-items.render-after"
+  target = "purchase.checkout.reductions.render-after"
