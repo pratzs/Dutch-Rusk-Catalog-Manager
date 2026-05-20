@@ -75,12 +75,51 @@ async function catalogIdFromCustomer(customerId, shop) {
   const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
   console.log("[CVH-API] Customer", customerGid, "→ profiles:", profiles.length);
   for (const profile of profiles) {
+  const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
+  console.log("[CVH-API] Customer", customerGid, "→ profiles:", profiles.length);
+
+  // First pass: try existing LocationCatalogMap entries.
+  for (const profile of profiles) {
     for (const loc of profile.company?.locations?.nodes ?? []) {
       const id = await catalogIdFromLocationGid(loc.id);
       if (id) { console.log("[CVH-API] Resolved catalogId:", id); return id; }
     }
   }
-  console.error("[CVH-API] No matching location in LocationCatalogMap for customer:", customerGid);
+
+  // No match — map is stale/missing. Re-sync catalog→location data then retry.
+  console.log("[CVH-API] LocationCatalogMap miss — syncing catalog locations for shop:", shop);
+  try {
+    const syncRes = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
+      body: JSON.stringify({ query: `query { catalogs(first: 250) { nodes { id ... on CompanyLocationCatalog { companyLocations(first: 50) { nodes { id } } } } } }` }),
+    });
+    const syncData = await syncRes.json();
+    if (!syncData.errors) {
+      const upserts = [];
+      for (const cat of syncData.data.catalogs.nodes) {
+        const cid = cat.id.split("/").pop();
+        for (const loc of cat.companyLocations?.nodes ?? []) {
+          upserts.push(prisma.locationCatalogMap.upsert({
+            where: { locationGid: loc.id }, update: { catalogId: cid }, create: { locationGid: loc.id, catalogId: cid },
+          }));
+        }
+      }
+      if (upserts.length > 0) await Promise.all(upserts);
+      console.log("[CVH-API] Sync wrote", upserts.length, "location mappings");
+    }
+  } catch (syncErr) {
+    console.error("[CVH-API] Sync error:", syncErr);
+  }
+
+  // Retry lookup with freshly synced data.
+  for (const profile of profiles) {
+    for (const loc of profile.company?.locations?.nodes ?? []) {
+      const id = await catalogIdFromLocationGid(loc.id);
+      if (id) { console.log("[CVH-API] Resolved (after sync) catalogId:", id); return id; }
+    }
+  }
+  console.error("[CVH-API] Still no match after sync for customer:", customerGid);
   return null;
 }
 
