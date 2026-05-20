@@ -6,6 +6,9 @@ type = "ui_extension"
 name = "Checkout Price Display"
 handle = "checkout-price-display"
 
+  [extensions.capabilities]
+  network_access = true
+
   [[extensions.targeting]]
   module = "./src/index.jsx"
   target = "purchase.checkout.cart-line-item.render-after"
