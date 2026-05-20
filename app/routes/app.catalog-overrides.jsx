@@ -21,9 +21,11 @@ export async function loader({ request }) {
   if (!originalCatalogId) return redirect("/app/catalog-manager");
 
   const cleanId = originalCatalogId.includes("/") ? originalCatalogId.split("/").pop() : originalCatalogId;
-  // When a search term is active, ignore cursors — always page 1.
+  // When a search term is active, fetch up to 250 products and filter client-side.
+  // The publication.products `query` arg does not reliably support wildcard title matching,
+  // so we skip the API filter entirely and do it in JS instead.
   const paginationArgs = search
-    ? `first: 50`
+    ? `first: 250`
     : before ? `last: 50, before: "${before}"`
     : after  ? `first: 50, after: "${after}"`
     : `first: 50`;
@@ -65,7 +67,7 @@ export async function loader({ request }) {
       const prodResponse = await admin.graphql(
         `query getPubProducts($pubId: ID!) {
           publication(id: $pubId) {
-            products(${paginationArgs}${search ? `, query: "title:*${search}*"` : ""}) {
+            products(${paginationArgs}) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id
@@ -274,12 +276,16 @@ export default function CatalogOverrides() {
 
   const filteredProducts = useMemo(() => {
     if (!products) return [];
-    if (variantFilter !== "all") {
-      return products.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
+    let filtered = products;
+    if (search.trim()) {
+      const lower = search.trim().toLowerCase();
+      filtered = filtered.filter((p) => p.title.toLowerCase().includes(lower));
     }
-    // Title search is now server-side (URL param), only filter by variant type client-side.
-    return products;
-  }, [products, variantFilter]);
+    if (variantFilter !== "all") {
+      filtered = filtered.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
+    }
+    return filtered;
+  }, [products, search, variantFilter]);
 
   // Variant IDs already covered by blanket rules — excluded from manual overrides.
   const getBulkHiddenIds = (product) =>
