@@ -1,57 +1,54 @@
 // app/routes/api.sync-compare-prices.jsx
-// Sets compare_at_price = price for every variant that has no compare_at_price.
-// This lets the checkout UI extension show ~~retail price~~ catalog price for B2B customers.
+// Sets compare_at_price = price for variants missing a compare_at_price.
+// Supports cursor-based pagination — each POST processes one page of 25 products
+// in parallel, then returns a nextCursor. The UI keeps calling until done.
 import { authenticate } from "../shopify.server";
 
 export async function action({ request }) {
   const { admin } = await authenticate.admin(request);
 
+  const body = await request.json().catch(() => ({}));
+  const cursor = body.cursor ?? null;
+
   let updatedCount = 0;
-  let productCursor = null;
-  let hasNextProductPage = true;
 
   try {
-    while (hasNextProductPage) {
-      // Query products + their variants
-      const productsRes = await admin.graphql(
-        `query GetProducts($cursor: String) {
-          products(first: 10, after: $cursor) {
-            pageInfo { hasNextPage endCursor }
-            nodes {
-              id
-              variants(first: 100) {
-                nodes {
-                  id
-                  price
-                  compareAtPrice
-                }
+    const productsRes = await admin.graphql(
+      `query GetProducts($cursor: String) {
+        products(first: 25, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            variants(first: 100) {
+              nodes {
+                id
+                price
+                compareAtPrice
               }
             }
           }
-        }`,
-        { variables: { cursor: productCursor } }
-      );
+        }
+      }`,
+      { variables: { cursor } }
+    );
 
-      const { data, errors } = await productsRes.json();
+    const { data, errors } = await productsRes.json();
 
-      if (errors) {
-        console.error("[sync-compare-prices] Query errors:", JSON.stringify(errors));
-        return Response.json({ error: "Failed to query products: " + errors[0]?.message }, { status: 500 });
-      }
+    if (errors) {
+      console.error("[sync-compare-prices] Query errors:", JSON.stringify(errors));
+      return Response.json({ error: "Query failed: " + errors[0]?.message }, { status: 500 });
+    }
 
-      const page = data?.products;
-      if (!page) break;
+    const page = data?.products;
+    if (!page) return Response.json({ success: true, updatedCount: 0, done: true });
 
-      hasNextProductPage = page.pageInfo.hasNextPage;
-      productCursor = page.pageInfo.endCursor;
-
-      for (const product of page.nodes) {
-        // Only update variants where compareAtPrice is null/empty
+    // Process all products on this page in PARALLEL
+    await Promise.all(
+      page.nodes.map(async (product) => {
         const needsUpdate = product.variants.nodes.filter(
-          (v) => !v.compareAtPrice || v.compareAtPrice === "0.00" || parseFloat(v.compareAtPrice) === 0
+          (v) => !v.compareAtPrice || parseFloat(v.compareAtPrice) === 0
         );
-
-        if (needsUpdate.length === 0) continue;
+        if (needsUpdate.length === 0) return;
 
         const variantInputs = needsUpdate.map((v) => ({
           id: v.id,
@@ -71,19 +68,21 @@ export async function action({ request }) {
         const userErrors = mutData?.data?.productVariantsBulkUpdate?.userErrors ?? [];
 
         if (userErrors.length > 0) {
-          console.error("[sync-compare-prices] userErrors for product", product.id, JSON.stringify(userErrors));
-          // Continue with other products rather than aborting
-        } else if (mutData.errors) {
-          console.error("[sync-compare-prices] GraphQL errors:", JSON.stringify(mutData.errors));
-        } else {
+          console.error("[sync-compare-prices] userErrors:", JSON.stringify(userErrors));
+        } else if (!mutData.errors) {
           updatedCount += variantInputs.length;
         }
-      }
-    }
+      })
+    );
+
+    return Response.json({
+      success: true,
+      updatedCount,
+      done: !page.pageInfo.hasNextPage,
+      nextCursor: page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null,
+    });
   } catch (err) {
-    console.error("[sync-compare-prices] Unexpected error:", err);
+    console.error("[sync-compare-prices] Error:", err);
     return Response.json({ error: err.message }, { status: 500 });
   }
-
-  return Response.json({ success: true, updatedCount });
 }

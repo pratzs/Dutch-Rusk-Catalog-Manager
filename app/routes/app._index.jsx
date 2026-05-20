@@ -1,4 +1,5 @@
-import { useLoaderData, useNavigate, useFetcher } from "react-router";
+import React from 'react';
+import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -18,9 +19,33 @@ export const loader = async ({ request }) => {
 export default function Index() {
   const { totalRules, totalOverrides, activeRules, recentRules } = useLoaderData();
   const navigate = useNavigate();
-  const syncFetcher = useFetcher();
-  const isSyncing = syncFetcher.state !== 'idle';
-  const syncResult = syncFetcher.data;
+  const [syncState, setSyncState] = React.useState({ running: false, total: 0, done: false, error: null });
+
+  async function runSync() {
+    setSyncState({ running: true, total: 0, done: false, error: null });
+    let cursor = null;
+    let total = 0;
+    try {
+      while (true) {
+        const res = await fetch('/api/sync-compare-prices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cursor }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          setSyncState({ running: false, total, done: false, error: data.error || 'Request failed' });
+          return;
+        }
+        total += data.updatedCount ?? 0;
+        setSyncState({ running: !data.done, total, done: data.done, error: null });
+        if (data.done) break;
+        cursor = data.nextCursor;
+      }
+    } catch (err) {
+      setSyncState({ running: false, total, done: false, error: err.message });
+    }
+  }
 
   return (
     <s-page heading="Dutch Rusk — Catalog Manager">
@@ -165,32 +190,32 @@ export default function Index() {
             below to sync the retail price onto every variant's compare-at price — this is a
             one-time setup (or run it again after bulk price updates).
           </s-text>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
             <button
               type="button"
-              onClick={() => syncFetcher.submit({}, { method: 'post', action: '/api/sync-compare-prices' })}
-              disabled={isSyncing}
+              onClick={runSync}
+              disabled={syncState.running}
               style={{
-                background: isSyncing ? '#95c9b4' : '#008060',
+                background: syncState.running ? '#95c9b4' : '#008060',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '6px',
                 padding: '10px 20px',
                 fontSize: '14px',
                 fontWeight: '600',
-                cursor: isSyncing ? 'not-allowed' : 'pointer',
+                cursor: syncState.running ? 'not-allowed' : 'pointer',
               }}
             >
-              {isSyncing ? 'Syncing…' : '🏷️ Sync Compare-At Prices'}
+              {syncState.running ? `Syncing… (${syncState.total} updated so far)` : '🏷️ Sync Compare-At Prices'}
             </button>
-            {syncResult?.success && (
+            {syncState.done && (
               <span style={{ color: '#008060', fontWeight: '600' }}>
-                ✅ Done — {syncResult.updatedCount} variant(s) updated
+                ✅ Done — {syncState.total} variant(s) updated
               </span>
             )}
-            {syncResult?.error && (
+            {syncState.error && (
               <span style={{ color: '#d72c0d', fontWeight: '600' }}>
-                ❌ {syncResult.error}
+                ❌ {syncState.error}
               </span>
             )}
           </div>
