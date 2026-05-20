@@ -21,12 +21,7 @@ export async function loader({ request }) {
   if (!originalCatalogId) return redirect("/app/catalog-manager");
 
   const cleanId = originalCatalogId.includes("/") ? originalCatalogId.split("/").pop() : originalCatalogId;
-  // When a search term is active, fetch up to 250 products and filter client-side.
-  // The publication.products `query` arg does not reliably support wildcard title matching,
-  // so we skip the API filter entirely and do it in JS instead.
-  const paginationArgs = search
-    ? `first: 250`
-    : before ? `last: 50, before: "${before}"`
+  const paginationArgs = before ? `last: 50, before: "${before}"`
     : after  ? `first: 50, after: "${after}"`
     : `first: 50`;
 
@@ -64,27 +59,63 @@ export async function loader({ request }) {
 
   if (pubId) {
     try {
-      const prodResponse = await admin.graphql(
-        `query getPubProducts($pubId: ID!) {
-          publication(id: $pubId) {
-            products(${paginationArgs}) {
-              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-              nodes {
-                id
-                title
-                variants(first: 250) { nodes { id title sku } }
+      if (search.trim()) {
+        // Search mode: paginate through ALL products so client-side filter works
+        // across the full catalog regardless of size.
+        let cursor = null;
+        let hasMore = true;
+        while (hasMore) {
+          const args = cursor ? `first: 250, after: "${cursor}"` : `first: 250`;
+          const prodResponse = await admin.graphql(
+            `query getPubProducts($pubId: ID!) {
+              publication(id: $pubId) {
+                products(${args}) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes {
+                    id
+                    title
+                    variants(first: 250) { nodes { id title sku } }
+                  }
+                }
+              }
+            }`,
+            { variables: { pubId } }
+          );
+          const prodJson = await prodResponse.json();
+          if (prodJson.errors) {
+            debugMessage = "Products API Error: " + JSON.stringify(prodJson.errors);
+            hasMore = false;
+          } else {
+            const page = prodJson.data?.publication?.products;
+            products = products.concat(page?.nodes || []);
+            hasMore = page?.pageInfo?.hasNextPage || false;
+            cursor = page?.pageInfo?.endCursor || null;
+          }
+        }
+        // pageInfo stays empty — pagination UI is hidden during search.
+      } else {
+        const prodResponse = await admin.graphql(
+          `query getPubProducts($pubId: ID!) {
+            publication(id: $pubId) {
+              products(${paginationArgs}) {
+                pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+                nodes {
+                  id
+                  title
+                  variants(first: 250) { nodes { id title sku } }
+                }
               }
             }
-          }
-        }`,
-        { variables: { pubId } }
-      );
-      const prodJson = await prodResponse.json();
-      if (prodJson.errors) {
-        debugMessage = "Products API Error: " + JSON.stringify(prodJson.errors);
-      } else {
-        products = prodJson.data?.publication?.products?.nodes || [];
-        pageInfo = prodJson.data?.publication?.products?.pageInfo || pageInfo;
+          }`,
+          { variables: { pubId } }
+        );
+        const prodJson = await prodResponse.json();
+        if (prodJson.errors) {
+          debugMessage = "Products API Error: " + JSON.stringify(prodJson.errors);
+        } else {
+          products = prodJson.data?.publication?.products?.nodes || [];
+          pageInfo = prodJson.data?.publication?.products?.pageInfo || pageInfo;
+        }
       }
     } catch (error) {
       debugMessage = "Product Fetch Catch: " + error.message;
