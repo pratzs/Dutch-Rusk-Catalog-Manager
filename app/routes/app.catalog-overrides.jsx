@@ -16,11 +16,17 @@ export async function loader({ request }) {
   const catalogName = url.searchParams.get("catalogName");
   const after = url.searchParams.get("after") || null;
   const before = url.searchParams.get("before") || null;
+  const search = url.searchParams.get("search") || "";
 
   if (!originalCatalogId) return redirect("/app/catalog-manager");
 
   const cleanId = originalCatalogId.includes("/") ? originalCatalogId.split("/").pop() : originalCatalogId;
-  const paginationArgs = before ? `last: 50, before: "${before}"` : after ? `first: 50, after: "${after}"` : `first: 50`;
+  // When a search term is active, ignore cursors — always page 1.
+  const paginationArgs = search
+    ? `first: 50`
+    : before ? `last: 50, before: "${before}"`
+    : after  ? `first: 50, after: "${after}"`
+    : `first: 50`;
 
   let products = [];
   let pageInfo = { hasNextPage: false, hasPreviousPage: false };
@@ -59,7 +65,7 @@ export async function loader({ request }) {
       const prodResponse = await admin.graphql(
         `query getPubProducts($pubId: ID!) {
           publication(id: $pubId) {
-            products(${paginationArgs}) {
+            products(${paginationArgs}${search ? `, query: "title:*${search}*"` : ""}) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id
@@ -113,6 +119,7 @@ export async function loader({ request }) {
     allVariantTypes: Array.from(allVariantTypes).sort(),
     pageInfo,
     debugMessage,
+    serverSearch: search,
   };
 }
 
@@ -160,6 +167,7 @@ export default function CatalogOverrides() {
   const {
     catalogDbId, catalogGid, catalogName, products, overridesMap,
     globalHiddenSkus, hiddenVariantTypes, allVariantTypes, pageInfo, debugMessage,
+    serverSearch,
   } = useLoaderData();
 
   const navigate = useNavigate();
@@ -174,7 +182,10 @@ export default function CatalogOverrides() {
   const [pendingHidden, setPendingHidden] = useState({});
   const initialHidden = useRef({});
   const [variantFilter, setVariantFilter] = useState("all");
-  const [searchInput, setSearchInput] = useState("");
+  // searchInput is kept in sync with the URL param (serverSearch) so navigating back
+  // and forth preserves the typed query.
+  const [searchInput, setSearchInput] = useState(serverSearch || "");
+  const searchDebounce = useRef(null);
 
   // Track which single productId is mid-save so we can mark it done when fetcher settles.
   const singleSaveRef = useRef(null);
@@ -272,12 +283,9 @@ export default function CatalogOverrides() {
     if (variantFilter !== "all") {
       filtered = filtered.filter((p) => p.variants.nodes.some((v) => v.title.startsWith(variantFilter)));
     }
-    if (searchInput.trim() !== "") {
-      const lowerSearch = searchInput.toLowerCase();
-      filtered = filtered.filter((p) => p.title.toLowerCase().includes(lowerSearch));
-    }
+    // Title search is now server-side (URL param), only filter by variant type client-side.
     return filtered;
-  }, [products, variantFilter, searchInput]);
+  }, [products, variantFilter]);
 
   // Variant IDs already covered by blanket rules — excluded from manual overrides.
   const getBulkHiddenIds = (product) =>
@@ -454,7 +462,7 @@ export default function CatalogOverrides() {
             </div>
           )}
 
-          <s-section heading={`Products in this Catalog (${products.length})`}>
+          <s-section heading={serverSearch ? `Search results for "${serverSearch}" (${products.length})` : `Products in this Catalog (${products.length})`}>
 
             {/* Search */}
             <div style={{ marginBottom: "16px" }}>
@@ -465,7 +473,18 @@ export default function CatalogOverrides() {
                 <input
                   type="text"
                   value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSearchInput(val);
+                    clearTimeout(searchDebounce.current);
+                    searchDebounce.current = setTimeout(() => {
+                      const p = new URLSearchParams();
+                      p.set("catalogId", encodeURIComponent(catalogGid));
+                      p.set("catalogName", encodeURIComponent(catalogName));
+                      if (val.trim()) p.set("search", val.trim());
+                      navigate(`/app/catalog-overrides?${p.toString()}`);
+                    }, 400);
+                  }}
                   placeholder="Type any part of a product name..."
                   style={{
                     width: "100%",
@@ -479,7 +498,14 @@ export default function CatalogOverrides() {
                 />
                 {searchInput && (
                   <button
-                    onClick={() => setSearchInput("")}
+                    onClick={() => {
+                      setSearchInput("");
+                      clearTimeout(searchDebounce.current);
+                      const p = new URLSearchParams();
+                      p.set("catalogId", encodeURIComponent(catalogGid));
+                      p.set("catalogName", encodeURIComponent(catalogName));
+                      navigate(`/app/catalog-overrides?${p.toString()}`);
+                    }}
                     style={{
                       position: "absolute", right: "10px", top: "50%", transform: "translateY(-50%)",
                       background: "none", border: "none", cursor: "pointer",
@@ -491,7 +517,7 @@ export default function CatalogOverrides() {
               </div>
               {searchInput && (
                 <div style={{ fontSize: "12px", color: "#6d7175", marginTop: "4px" }}>
-                  Showing {filteredProducts.length} of {products.length} products matching "{searchInput}"
+                  Showing {products.length} result{products.length !== 1 ? "s" : ""} for "{searchInput}"
                 </div>
               )}
             </div>

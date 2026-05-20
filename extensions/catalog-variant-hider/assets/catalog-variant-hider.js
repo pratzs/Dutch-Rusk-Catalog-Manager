@@ -331,40 +331,64 @@
       }).observe(document.body, { childList: true, subtree: true });
 
     } else {
-      // ══ COLLECTION PAGE ══════════════════════════════════════════════════
-      const idElements   = Array.from(document.querySelectorAll("[data-product-id]"));
-      const containerMap = new Map();
-      idElements.forEach(el => {
-        const pid = el.dataset.productId;
-        if (!pid) return;
-        const card = el.classList.contains("product-card")
-          ? el
-          : (el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, [class*='product-card']")
-             || el.closest("li, article")
-             || el);
-        if (!containerMap.has(pid)) containerMap.set(pid, card);
-      });
-
-      if (containerMap.size > 0) {
+      // ══ COLLECTION PAGE ══════════════════════════════════════════════════════
+      //
+      // processIdElements: find cards not yet seen, mark them immediately
+      // (data-cvh-seen) to prevent re-processing, then fetch+apply rules.
+      const processIdElements = async (idElements) => {
+        const toProcess = [];
+        idElements.forEach(pidEl => {
+          const pid = pidEl.dataset.productId;
+          if (!pid) return;
+          const card = pidEl.classList.contains("product-card")
+            ? pidEl
+            : (pidEl.closest(
+                ".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, [class*='product-card']"
+              ) || pidEl.closest("li, article") || pidEl);
+          if (card.hasAttribute("data-cvh-seen") || card.hasAttribute("data-cvh-processed")) return;
+          card.setAttribute("data-cvh-seen", "1");
+          toProcess.push([pid, card]);
+        });
+        if (toProcess.length === 0) return;
         await Promise.all(
-          Array.from(containerMap.entries()).map(async ([numericPid, container]) => {
+          toProcess.map(async ([numericPid, container]) => {
             let pid = numericPid;
             if (pid && !pid.includes("/")) pid = `gid://shopify/Product/${pid}`;
             const rules = await fetchRules(resolvedLocationId, pid);
             applyRulesToContainer(container, rules);
           })
         );
+      };
+
+      const initialElements = Array.from(document.querySelectorAll("[data-product-id]"));
+      if (initialElements.length > 0) {
+        await processIdElements(initialElements);
       } else {
+        // Fallback: no [data-product-id] on this theme — use collection-level rules.
         const rules = await fetchRules(resolvedLocationId, "");
-        if ((rules.hiddenVariantTypes || []).length === 0) return;
-        document
-          .querySelectorAll(
-            ".product-card, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container"
-          )
-          .forEach(c => applyRulesToContainer(c, rules));
+        if ((rules.hiddenVariantTypes || []).length > 0) {
+          document
+            .querySelectorAll(
+              ".product-card, .product, .product-single, .card, .grid__item, " +
+              ".product-section, .product-item, .product__info-container"
+            )
+            .forEach(c => applyRulesToContainer(c, rules));
+        }
       }
+
+      // ── Infinite-scroll watcher ───────────────────────────────────────────
+      // When infinite scroll appends new cards the MutationObserver fires.
+      // A short debounce coalesces the burst of DOM mutations from one batch
+      // into a single processIdElements call. Already-seen cards are skipped,
+      // so only newly added products (e.g. 51-100) get fetched and hidden.
+      let scrollDebounce = null;
+      new MutationObserver(() => {
+        clearTimeout(scrollDebounce);
+        scrollDebounce = setTimeout(() => {
+          processIdElements(Array.from(document.querySelectorAll("[data-product-id]")));
+        }, 80);
+      }).observe(document.body, { childList: true, subtree: true });
     }
   }
-
   init();
 })();
