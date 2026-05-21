@@ -1,17 +1,11 @@
-import { useState, useEffect } from 'react';
 import {
   reactExtension,
   useCartLineTarget,
-  useShop,
+  useAppMetafields,
   Text,
   InlineStack,
   BlockStack,
 } from '@shopify/ui-extensions-react/checkout';
-
-const APP_URL = 'https://dutch-rusk-catalog-manager.onrender.com';
-
-// Module-level cache so we don't re-fetch on every render
-const priceCache = {};
 
 export default reactExtension(
   'purchase.checkout.cart-line-item.render-after',
@@ -28,75 +22,42 @@ function formatMoney(amount, currencyCode) {
 
 function CartLineSavings() {
   const line = useCartLineTarget();
-  const shop = useShop();
-  const [fetchedCompareAt, setFetchedCompareAt] = useState(undefined);
+  // Reads the custom.retail_price metafield set on the variant by the sync tool
+  const appMetafields = useAppMetafields();
 
-  const merchandiseId = line?.merchandise?.id;
   const currentPrice = parseFloat(line?.cost?.amountPerQuantity?.amount ?? '0');
   const currency = line?.cost?.amountPerQuantity?.currencyCode ?? 'NZD';
   const qty = line?.quantity ?? 1;
 
-  // --- Source 1: compareAtAmountPerQuantity (cheapest — no network call) ---
-  const compareAtMoney = line?.cost?.compareAtAmountPerQuantity;
-  const directCompareAt = compareAtMoney
-    ? parseFloat(compareAtMoney.amount)
-    : null;
+  // Source 1: metafield retail_price set by the sync
+  const retailMeta = appMetafields?.find(
+    (m) => m.metafield?.namespace === 'custom' && m.metafield?.key === 'retail_price'
+  );
+  const metafieldPrice = retailMeta ? parseFloat(retailMeta.metafield.value) : null;
 
-  // --- Source 2: discountAllocations (B2B automatic discount) ---
+  // Source 2: compareAtAmountPerQuantity (native Shopify, works if compare_at > price)
+  const compareAtMoney = line?.cost?.compareAtAmountPerQuantity;
+  const directCompareAt = compareAtMoney ? parseFloat(compareAtMoney.amount) : null;
+
+  // Source 3: discountAllocations (automatic discount / B2B discount codes)
   const allocations = line?.discountAllocations ?? [];
   const totalDiscount = allocations.reduce(
-    (sum, d) => sum + parseFloat(d.discountedAmount?.amount ?? '0'),
-    0,
+    (sum, d) => sum + parseFloat(d.discountedAmount?.amount ?? '0'), 0,
   );
 
-  // --- Source 3: backend API → Admin API compareAtPrice ---
-  useEffect(() => {
-    // Only fetch if sources 1 & 2 give nothing useful
-    if (!merchandiseId || !shop?.myshopifyDomain) return;
-    if (directCompareAt !== null && directCompareAt > currentPrice) return;
-    if (totalDiscount > 0) return;
-
-    // Check module cache first
-    if (priceCache[merchandiseId] !== undefined) {
-      setFetchedCompareAt(priceCache[merchandiseId]);
-      return;
-    }
-
-    const endpoint =
-      `${APP_URL}/api/variant-prices` +
-      `?variantIds=${encodeURIComponent(merchandiseId)}` +
-      `&shop=${encodeURIComponent(shop.myshopifyDomain)}`;
-
-    fetch(endpoint)
-      .then((r) => r.json())
-      .then(({ prices }) => {
-        const v = prices?.[merchandiseId];
-        // Use compareAtPrice if set, otherwise fall back to retail price
-        const raw = v?.compareAtPrice ?? v?.price ?? null;
-        const parsed = raw ? parseFloat(raw) : null;
-        const result = parsed && parsed > currentPrice ? parsed : null;
-        priceCache[merchandiseId] = result;
-        setFetchedCompareAt(result);
-      })
-      .catch(() => {
-        priceCache[merchandiseId] = null;
-        setFetchedCompareAt(null);
-      });
-  }, [merchandiseId, shop?.myshopifyDomain]);
-
-  // --- Resolve the best savings info ---
+  // Pick best source — metafield takes priority for B2B catalog pricing
   let originalPerUnit = null;
   let totalSavings = null;
 
-  if (directCompareAt !== null && directCompareAt > currentPrice) {
+  if (metafieldPrice && metafieldPrice > currentPrice) {
+    originalPerUnit = metafieldPrice;
+    totalSavings = (metafieldPrice - currentPrice) * qty;
+  } else if (directCompareAt !== null && directCompareAt > currentPrice) {
     originalPerUnit = directCompareAt;
     totalSavings = (directCompareAt - currentPrice) * qty;
   } else if (totalDiscount > 0) {
     originalPerUnit = currentPrice + totalDiscount / qty;
     totalSavings = totalDiscount;
-  } else if (fetchedCompareAt && fetchedCompareAt > currentPrice) {
-    originalPerUnit = fetchedCompareAt;
-    totalSavings = (fetchedCompareAt - currentPrice) * qty;
   }
 
   if (!originalPerUnit || !totalSavings) return null;

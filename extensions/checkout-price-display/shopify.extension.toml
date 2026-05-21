@@ -10,6 +10,14 @@ handle = "checkout-price-display"
   module = "./src/index.jsx"
   target = "purchase.checkout.cart-line-item.render-after"
 
+    [[extensions.targeting.metafields]]
+    namespace = "custom"
+    key = "retail_price"
+
   [[extensions.targeting]]
   module = "./src/OrderSummary.jsx"
   target = "purchase.checkout.reductions.render-after"
+
+    [[extensions.targeting.metafields]]
+    namespace = "custom"
+    key = "retail_price"

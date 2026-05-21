@@ -45,14 +45,20 @@ export async function action({ request }) {
     // Process all products on this page in PARALLEL
     await Promise.all(
       page.nodes.map(async (product) => {
-        const needsUpdate = product.variants.nodes.filter(
-          (v) => !v.compareAtPrice || parseFloat(v.compareAtPrice) === 0
-        );
-        if (needsUpdate.length === 0) return;
+        // Update ALL variants to ensure retail_price metafield is set on every one
+        const needsUpdate = product.variants.nodes;
 
         const variantInputs = needsUpdate.map((v) => ({
           id: v.id,
           compareAtPrice: v.price,
+          // Store retail price in a metafield so the checkout extension
+          // can read it directly without network_access
+          metafields: [{
+            namespace: "custom",
+            key: "retail_price",
+            value: v.price,
+            type: "number_decimal",
+          }],
         }));
 
         const mutRes = await admin.graphql(
