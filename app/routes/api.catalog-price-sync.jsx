@@ -125,11 +125,11 @@ async function fetchCatalogCompanyMap(admin) {
     const { data } = await gql(
       admin,
       `query GetCatalogs($cursor: String) {
-        catalogs(first: 20, after: $cursor, catalogType: B2B) {
+        catalogs(first: 20, after: $cursor, type: COMPANY_LOCATION) {
           pageInfo { hasNextPage endCursor }
           nodes {
             priceList { id }
-            ... on B2bCatalog {
+            ... on CompanyLocationCatalog {
               companyLocations(first: 100) {
                 nodes { company { id } }
               }
