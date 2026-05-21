@@ -10,6 +10,11 @@
 //
 import { authenticate } from "../shopify.server";
 
+// Dedup: suppress re-triggers for 3 min after the sync itself writes metafields.
+// The sync updating custom.catalog_fixed_prices fires products/update → would loop.
+const recentlySynced = new Map(); // productId (number) → timestamp ms
+const DEDUP_TTL = 3 * 60 * 1000; // 3 minutes
+
 export const action = async ({ request }) => {
   const { topic, admin, session, payload } = await authenticate.webhook(request);
 
@@ -19,6 +24,19 @@ export const action = async ({ request }) => {
 
   try {
     const product = payload;
+    const now = Date.now();
+
+    // Prune stale entries
+    for (const [id, ts] of recentlySynced) {
+      if (now - ts > DEDUP_TTL) recentlySynced.delete(id);
+    }
+
+    // Skip if this product was synced very recently (loop guard)
+    if (recentlySynced.has(product.id)) {
+      return new Response("OK", { status: 200 });
+    }
+    recentlySynced.set(product.id, now);
+
     const variantIds = (product.variants ?? [])
       .filter((v) => v.id)
       .map((v) => `gid://shopify/ProductVariant/${v.id}`);
