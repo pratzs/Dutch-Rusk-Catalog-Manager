@@ -6,7 +6,6 @@
   "type": "module",
   "scripts": {
     "shopify": "npm exec -- shopify",
-    "build": "npm exec -- shopify app function build",
     "preview": "npm exec -- shopify app function run",
     "typegen": "npm exec -- shopify app function typegen"
   },
