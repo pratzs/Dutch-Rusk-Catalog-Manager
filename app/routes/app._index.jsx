@@ -20,6 +20,7 @@ export default function Index() {
   const { totalRules, totalOverrides, activeRules, recentRules } = useLoaderData();
   const navigate = useNavigate();
   const [syncState, setSyncState] = React.useState({ running: false, total: 0, done: false, error: null });
+  const [backfillState, setBackfillState] = React.useState({ running: false, updated: 0, skipped: 0, done: false, error: null });
 
   async function runSync() {
     setSyncState({ running: true, total: 0, done: false, error: null });
@@ -44,6 +45,34 @@ export default function Index() {
       }
     } catch (err) {
       setSyncState({ running: false, total, done: false, error: err.message });
+    }
+  }
+
+  async function runBackfill() {
+    setBackfillState({ running: true, updated: 0, skipped: 0, done: false, error: null });
+    let cursor = null;
+    let updated = 0;
+    let skipped = 0;
+    try {
+      while (true) {
+        const res = await fetch('/api/backfill-order-discounts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cursor, daysBack: 365 }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          setBackfillState({ running: false, updated, skipped, done: false, error: data.error || 'Request failed' });
+          return;
+        }
+        updated += data.updatedCount ?? 0;
+        skipped += data.skippedCount ?? 0;
+        setBackfillState({ running: !data.done, updated, skipped, done: data.done, error: null });
+        if (data.done) break;
+        cursor = data.nextCursor;
+      }
+    } catch (err) {
+      setBackfillState({ running: false, updated, skipped, done: false, error: err.message });
     }
   }
 
@@ -223,6 +252,70 @@ export default function Index() {
             This sets compare_at_price = price for any variant missing a compare-at value.
             Regular customers won't see a strikethrough (price = compare-at, so Shopify hides it),
             but B2B catalog customers will see ~~retail price~~ their discounted price at checkout.
+          </s-text>
+        </div>
+      </s-section>
+
+      {/* B2B Order Discount Records */}
+      <s-section heading="B2B Discount Records on Orders">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <s-text>
+            Shopify's B2B catalog pricing silently lowers prices — no discount records appear on
+            orders, so ERPs (Ostendo, Odoo, etc.) can't see what discount was applied.
+            From now on, every new B2B order is automatically enriched with discount details
+            under "Additional Details" on the order page. Use the button below to backfill
+            the last 365 days of existing orders.
+          </s-text>
+          <div style={{
+            background: '#f0f7ff',
+            border: '1px solid #b4d4ff',
+            borderRadius: '8px',
+            padding: '12px 16px',
+            fontSize: '13px',
+            color: '#1a4a8a',
+            lineHeight: '1.6',
+          }}>
+            <strong>How it works:</strong> For each order line, the app compares the
+            B2B price paid against the retail compare-at price to calculate the exact
+            saving per item. This is written to the order as "Additional Details" —
+            visible on the Shopify Admin order page and readable by any ERP via the
+            Shopify Orders API (<code>note_attributes</code> field).
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={runBackfill}
+              disabled={backfillState.running}
+              style={{
+                background: backfillState.running ? '#8eb8e5' : '#1a4a8a',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '10px 20px',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: backfillState.running ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {backfillState.running
+                ? `Backfilling… (${backfillState.updated} updated, ${backfillState.skipped} no-discount)`
+                : '📋 Backfill Discount Records (last 365 days)'}
+            </button>
+            {backfillState.done && (
+              <span style={{ color: '#008060', fontWeight: '600' }}>
+                ✅ Done — {backfillState.updated} order(s) updated, {backfillState.skipped} had no B2B discount
+              </span>
+            )}
+            {backfillState.error && (
+              <span style={{ color: '#d72c0d', fontWeight: '600' }}>
+                ❌ {backfillState.error}
+              </span>
+            )}
+          </div>
+          <s-text tone="subdued">
+            New orders are handled automatically — this button is only needed once
+            for historical orders, or after re-running the compare-at sync.
+            Run "Sync Compare-At Prices" first if you haven't already.
           </s-text>
         </div>
       </s-section>

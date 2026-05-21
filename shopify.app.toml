@@ -19,9 +19,13 @@ api_version = "2026-04"
   topics = [ "app/uninstalled" ]
   uri = "/webhooks/app/uninstalled"
 
+  [[webhooks.subscriptions]]
+  topics = [ "orders/create" ]
+  uri = "/webhooks/orders/create"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_metaobject_definitions,write_metaobjects,read_products,write_products,read_publications,write_publications,read_customers,read_companies"
+scopes = "write_metaobject_definitions,write_metaobjects,read_products,write_products,read_publications,write_publications,read_customers,read_companies,read_orders,write_orders"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
