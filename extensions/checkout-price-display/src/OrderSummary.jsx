@@ -31,9 +31,12 @@ function TotalSavings() {
 
   for (const line of lines ?? []) {
     if (!line?.cost) continue;
-    const current = parseFloat(line.cost.amountPerQuantity.amount);
-    currency = line.cost.amountPerQuantity.currencyCode;
+    const rawPerQty = parseFloat(line.cost.amountPerQuantity?.amount ?? '0');
+    const rawTotal = parseFloat(line.cost.totalAmount?.amount ?? '0');
     const qty = line.quantity ?? 1;
+    // Net 30 orders may return amountPerQuantity=0; use totalAmount/qty instead
+    const current = rawPerQty > 0 ? rawPerQty : (qty > 0 ? rawTotal / qty : 0);
+    currency = line.cost.amountPerQuantity?.currencyCode ?? line.cost.totalAmount?.currencyCode ?? 'NZD';
     const variantId = line.merchandise?.id;
 
     // Source 1: metafield retail_price for this variant

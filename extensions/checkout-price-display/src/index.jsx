@@ -25,9 +25,15 @@ function CartLineSavings() {
   // Reads the custom.retail_price metafield set on the variant by the sync tool
   const appMetafields = useAppMetafields();
 
-  const currentPrice = parseFloat(line?.cost?.amountPerQuantity?.amount ?? '0');
-  const currency = line?.cost?.amountPerQuantity?.currencyCode ?? 'NZD';
+  // For B2B Net 30 orders amountPerQuantity may be 0 (due today = $0).
+  // Fall back to totalAmount / quantity which always reflects the real catalog price.
+  const rawPerQty = parseFloat(line?.cost?.amountPerQuantity?.amount ?? '0');
+  const rawTotal = parseFloat(line?.cost?.totalAmount?.amount ?? '0');
   const qty = line?.quantity ?? 1;
+  const currentPrice = rawPerQty > 0 ? rawPerQty : (qty > 0 ? rawTotal / qty : 0);
+  const currency = line?.cost?.amountPerQuantity?.currencyCode
+    ?? line?.cost?.totalAmount?.currencyCode
+    ?? 'NZD';
 
   // Source 1: metafield retail_price set by the sync
   const retailMeta = appMetafields?.find(
