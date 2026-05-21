@@ -47,12 +47,54 @@
     }
   }
 
+  // ── Strikethrough Pricing Helper ─────────────────────────────────────────
+  function injectStrikethroughPricing(container) {
+    // Find the retail price from:
+    // 1. The container's data attributes (collection cards)
+    // 2. The global data element (product page)
+    // 3. A hidden input/metadata element inside the container
+    const globalRetailPrice = _el ? _el.dataset.standardRetailPrice : null;
+    const retailEl = container.querySelector("[data-standard-retail-price], .cvh-retail-price");
+    
+    const retailPrice = parseFloat(
+      container.dataset.standardRetailPrice || 
+      globalRetailPrice || 
+      retailEl?.dataset.standardRetailPrice || 
+      retailEl?.value || 
+      "0"
+    );
+
+    if (!retailPrice) return;
+
+    // Find the active catalog price element (theme dependent selectors)
+    const priceEl = container.querySelector(
+      ".price-item--regular, .product__price, .grid-product__price, " +
+      ".price__container, [data-price], .current-price"
+    );
+    if (!priceEl || priceEl.querySelector(".cvh-strikethrough")) return;
+
+    const activePriceText = (priceEl.textContent || "").replace(/[^0-9.]/g, "");
+    const activePrice = parseFloat(activePriceText);
+
+    if (retailPrice > activePrice) {
+      const currencySymbol = (priceEl.textContent || "").trim().charAt(0) === "$" ? "$" : "";
+      const strikethrough = document.createElement("span");
+      strikethrough.className = "cvh-strikethrough";
+      strikethrough.style.cssText = "text-decoration: line-through; color: #8c8c8c; margin-right: 8px; font-weight: normal;";
+      strikethrough.textContent = `${currencySymbol}${retailPrice.toFixed(2)}`;
+      priceEl.prepend(strikethrough);
+    }
+  }
+
   // ── Apply rules to a single container ───────────────────────────────────
   function applyRulesToContainer(container, rules) {
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    if (validTypes.length === 0 && validIds.length === 0) return;
+    if (validTypes.length === 0 && validIds.length === 0) {
+      injectStrikethroughPricing(container);
+      return;
+    }
 
     container.setAttribute("data-cvh-processed", "1");
     const content = container.textContent || "";
@@ -281,6 +323,8 @@
       _hideStock(container);
       if (pfRoot) _hideStock(pfRoot);
     }
+    // Final step: inject retail strikethroughs
+    injectStrikethroughPricing(container);
   }
 
   // ── Bootstrap ────────────────────────────────────────────────────────────

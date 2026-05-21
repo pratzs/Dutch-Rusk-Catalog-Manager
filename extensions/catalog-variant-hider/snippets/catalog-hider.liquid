@@ -31,6 +31,7 @@
   data-shop="{{ shop.permanent_domain }}"
   {% if product %}
     data-product-id="gid://shopify/Product/{{ product.id }}"
+    data-standard-retail-price="{{ product.selected_or_first_available_variant.metafields.custom.standard_retail_price | default: product.selected_or_first_available_variant.compare_at_price | default: product.selected_or_first_available_variant.price | money_without_currency }}"
   {% endif %}
   style="display:none;"
   aria-hidden="true"
