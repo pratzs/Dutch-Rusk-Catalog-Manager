@@ -45,7 +45,7 @@ export async function action({ request }) {
           nodes {
             id
             name
-            noteAttributes { name value }
+            customAttributes { key value }
             lineItems(first: 100) {
               nodes {
                 quantity
@@ -140,10 +140,16 @@ export async function action({ request }) {
         });
 
         // Remove stale B2B notes, keep everything else
-        const existingNotes = (order.noteAttributes ?? []).filter(
-          (n) => !String(n.name).startsWith("B2B ")
+        // GraphQL returns customAttributes with {key, value} — not {name, value}
+        const existingNotes = (order.customAttributes ?? []).filter(
+          (n) => !String(n.key).startsWith("B2B ")
         );
-        const mergedNotes = [...existingNotes, ...discountNotes];
+        // existingNotes use GraphQL {key, value}; discountNotes use {name, value}
+        // Normalise everything to {key, value} for the mutation
+        const mergedNotes = [
+          ...existingNotes.map((n) => ({ key: n.key, value: n.value })),
+          ...discountNotes.map((n) => ({ key: n.name, value: n.value })),
+        ];
 
         const updateRes = await admin.graphql(
           `mutation UpdateOrderDiscountNotes($input: OrderInput!) {
@@ -156,10 +162,8 @@ export async function action({ request }) {
             variables: {
               input: {
                 id: order.id,
-                noteAttributes: mergedNotes.map((n) => ({
-                  name: String(n.name),
-                  value: String(n.value),
-                })),
+                // GraphQL uses "customAttributes" with {key, value} — not "noteAttributes"
+                customAttributes: mergedNotes,
               },
             },
           }

@@ -121,10 +121,13 @@ export const action = async ({ request }) => {
     });
 
     // ── Step 4: Merge with any existing note_attributes and update order ──────
-    // Filter out any stale B2B notes from a previous run (safety), keep everything else
+    // order.note_attributes is the REST payload field (uses "name" key)
+    // Filter out any stale B2B notes from a previous run, keep everything else
     const existingNotes = (order.note_attributes ?? []).filter(
       (n) => !String(n.name).startsWith("B2B ")
     );
+    // existingNotes use REST {name, value}; discountNotes use {name, value}
+    // GraphQL customAttributes mutation uses {key, value} — convert on the way out
     const mergedNotes = [...existingNotes, ...discountNotes];
 
     const orderId = `gid://shopify/Order/${order.id}`;
@@ -146,8 +149,9 @@ export const action = async ({ request }) => {
         variables: {
           input: {
             id: orderId,
-            noteAttributes: mergedNotes.map((n) => ({
-              name: String(n.name),
+            // GraphQL uses "customAttributes" with {key, value} — not "noteAttributes"
+            customAttributes: mergedNotes.map((n) => ({
+              key: String(n.name),
               value: String(n.value),
             })),
           },
