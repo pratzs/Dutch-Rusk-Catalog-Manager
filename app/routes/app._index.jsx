@@ -21,6 +21,7 @@ export default function Index() {
   const navigate = useNavigate();
   const [syncState, setSyncState] = React.useState({ running: false, total: 0, done: false, error: null });
   const [backfillState, setBackfillState] = React.useState({ running: false, updated: 0, skipped: 0, done: false, error: null });
+  const [catalogSyncState, setCatalogSyncState] = React.useState({ running: false, done: false, error: null, result: null });
 
   async function runSync() {
     setSyncState({ running: true, total: 0, done: false, error: null });
@@ -45,6 +46,25 @@ export default function Index() {
       }
     } catch (err) {
       setSyncState({ running: false, total, done: false, error: err.message });
+    }
+  }
+
+  async function runCatalogSync(forceAll = false) {
+    setCatalogSyncState({ running: true, done: false, error: null, result: null });
+    try {
+      const res = await fetch('/api/catalog-price-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forceAll }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setCatalogSyncState({ running: false, done: false, error: data.error || 'Request failed', result: null });
+        return;
+      }
+      setCatalogSyncState({ running: false, done: true, error: null, result: data });
+    } catch (err) {
+      setCatalogSyncState({ running: false, done: false, error: err.message, result: null });
     }
   }
 
@@ -252,6 +272,80 @@ export default function Index() {
             This sets compare_at_price = price for any variant missing a compare-at value.
             Regular customers won't see a strikethrough (price = compare-at, so Shopify hides it),
             but B2B catalog customers will see ~~retail price~~ their discounted price at checkout.
+          </s-text>
+        </div>
+      </s-section>
+
+      {/* Catalog Function Price Sync */}
+      <s-section heading="Catalog Function Sync (Discount Records on Orders)">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <s-text>
+            Syncs your B2B catalog price lists into Shopify metafields so the
+            "B2B Catalog Discount" Shopify Function can apply real per-line
+            discounts at checkout — giving every order proper discount records
+            visible in Shopify Admin and readable by Ostendo/Odoo.
+            The sync runs automatically every 10 minutes and also triggers
+            whenever Ostendo updates a product price.
+          </s-text>
+          <div style={{
+            background: '#fff8e6',
+            border: '1px solid #fdb714',
+            borderRadius: '8px',
+            padding: '12px 16px',
+            fontSize: '13px',
+            lineHeight: '1.6',
+          }}>
+            <strong>⚠️ Before running:</strong> In Shopify Admin → Markets → Catalogs,
+            set the blanket % to <strong>0%</strong> on each B2B catalog
+            (and remove fixed price overrides). The Function handles all discounting.
+            Run "Force Full Sync" first to populate all metafields, then
+            create an <strong>Automatic Discount</strong> in Shopify Admin using
+            the "B2B Catalog Discount" function.
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => runCatalogSync(false)}
+              disabled={catalogSyncState.running}
+              style={{
+                background: catalogSyncState.running ? '#8eb8e5' : '#2156c3',
+                color: '#fff', border: 'none', borderRadius: '6px',
+                padding: '10px 20px', fontSize: '14px', fontWeight: '600',
+                cursor: catalogSyncState.running ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {catalogSyncState.running ? 'Syncing…' : '🔄 Sync Changed Catalogs'}
+            </button>
+            <button
+              type="button"
+              onClick={() => runCatalogSync(true)}
+              disabled={catalogSyncState.running}
+              style={{
+                background: catalogSyncState.running ? '#aaa' : '#66270f',
+                color: '#fff', border: 'none', borderRadius: '6px',
+                padding: '10px 20px', fontSize: '14px', fontWeight: '600',
+                cursor: catalogSyncState.running ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Force Full Sync
+            </button>
+            {catalogSyncState.done && catalogSyncState.result && (
+              <span style={{ color: '#008060', fontWeight: '600', fontSize: '13px' }}>
+                ✅ {catalogSyncState.result.message} —{' '}
+                {catalogSyncState.result.updatedCompanies} company metafield(s),{' '}
+                {catalogSyncState.result.updatedVariants} variant metafield(s) written
+              </span>
+            )}
+            {catalogSyncState.error && (
+              <span style={{ color: '#d72c0d', fontWeight: '600' }}>
+                ❌ {catalogSyncState.error}
+              </span>
+            )}
+          </div>
+          <s-text tone="subdued">
+            "Sync Changed Catalogs" is fast — it skips price lists that haven't
+            changed since the last run. "Force Full Sync" re-processes everything
+            and is useful after first setup or if metafields get out of sync.
           </s-text>
         </div>
       </s-section>

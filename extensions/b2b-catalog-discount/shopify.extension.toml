@@ -1,0 +1,15 @@
+api_version = "2025-07"
+
+[[extensions]]
+type = "function"
+name = "B2B Catalog Discount"
+handle = "b2b-catalog-discount"
+
+  [extensions.build]
+  command = "npm run build"
+  watch = ["src/**/*.js"]
+
+  [[extensions.targeting]]
+  module = "./src/run.js"
+  target = "purchase.order-discount"
+  input_query = "./src/run.graphql"

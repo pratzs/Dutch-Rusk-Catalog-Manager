@@ -60,3 +60,21 @@ model LocationCatalogMap {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
+
+// Tracks the last-known state of each B2B price list so the 10-minute
+// catalog sync can skip price lists that haven't changed (change detection).
+model CatalogSyncState {
+  id                   String   @id @default(cuid())
+  shop                 String
+  priceListId          String   // Shopify GID e.g. gid://shopify/PriceList/123
+  priceListName        String   @default("")
+  shopifyUpdatedAt     String   @default("") // ISO timestamp from Shopify for diffing
+  adjustmentType       String   @default("") // PERCENTAGE_DECREASE | PERCENTAGE_INCREASE | FIXED_AMOUNT
+  adjustmentValue      Float    @default(0)  // e.g. 20 for 20% off
+  // JSON array of variant GIDs that currently have fixed-price overrides in this list.
+  // Used to clean up metafields when a variant is removed from the override list.
+  overriddenVariantIds String   @default("[]")
+  lastSyncedAt         DateTime @default(now()) @updatedAt
+
+  @@unique([shop, priceListId])
+}
