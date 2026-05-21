@@ -75,13 +75,22 @@ export function cartLinesDiscountsGenerateRun(input) {
 
     // No fixed override → apply blanket percentage
     if (catalogPrice === null) {
-      if (discountPct <= 0) continue; // no discount for this company
+      if (discountPct <= 0 && !variant.standardRetailPrice?.value) continue;
       catalogPrice = basePrice * (1 - discountPct / 100);
     }
 
-    if (isNaN(catalogPrice) || catalogPrice >= basePrice) continue;
+    const standardRetailPrice = parseFloat(variant.standardRetailPrice?.value ?? "0");
+    let discountAmount = 0;
 
-    const discountAmount = basePrice - catalogPrice;
+    if (standardRetailPrice > 0 && standardRetailPrice > basePrice) {
+      // Use the difference between true retail and current catalog price
+      // to force Shopify to show the native strikethrough.
+      discountAmount = standardRetailPrice - basePrice;
+    } else {
+      if (isNaN(catalogPrice) || catalogPrice >= basePrice) continue;
+      discountAmount = basePrice - catalogPrice;
+    }
+
     if (discountAmount < MIN_DISCOUNT) continue;
 
     candidates.push({

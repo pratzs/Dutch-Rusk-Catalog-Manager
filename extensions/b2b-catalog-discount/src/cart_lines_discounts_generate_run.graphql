@@ -21,6 +21,12 @@ query CartInput {
           ) {
             value
           }
+          standardRetailPrice: metafield(
+            namespace: "custom"
+            key: "standard_retail_price"
+          ) {
+            value
+          }
         }
       }
     }

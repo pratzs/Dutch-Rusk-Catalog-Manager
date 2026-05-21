@@ -8,6 +8,7 @@
 //   company  → custom.catalog_pricelist_id   (which price list this company is on)
 //   company  → custom.catalog_discount_pct   (blanket % e.g. "20")
 //   variant  → custom.catalog_fixed_prices   (JSON of priceListGid→fixedPrice for overrides)
+//   variant  → custom.standard_retail_price   (compareAtPrice or price)
 //
 // Called by:
 //   • Dashboard "Sync Catalog Prices" button  (authenticate.admin)
@@ -160,7 +161,7 @@ async function fetchCatalogCompanyMap(admin) {
 // ─── fetch current catalog_fixed_prices metafields for specific variants ─────
 
 async function fetchVariantFixedPriceMeta(admin, variantIds) {
-  // Returns map: variantId → current JSON string (or null)
+  // Returns map: variantId → { metaValue, price, compareAtPrice }
   const map = {};
   for (let i = 0; i < variantIds.length; i += 50) {
     const batch = variantIds.slice(i, i + 50);
@@ -170,6 +171,8 @@ async function fetchVariantFixedPriceMeta(admin, variantIds) {
         nodes(ids: $ids) {
           ... on ProductVariant {
             id
+            price
+            compareAtPrice
             meta: metafield(namespace: "custom", key: "catalog_fixed_prices") {
               value
             }
@@ -179,7 +182,13 @@ async function fetchVariantFixedPriceMeta(admin, variantIds) {
       { ids: batch }
     );
     for (const node of data?.nodes ?? []) {
-      if (node?.id) map[node.id] = node.meta?.value ?? null;
+      if (node?.id) {
+        map[node.id] = {
+          metaValue: node.meta?.value ?? null,
+          price: node.price,
+          compareAtPrice: node.compareAtPrice,
+        };
+      }
     }
   }
   return map;
@@ -303,10 +312,13 @@ async function runSync(admin, shop, options = {}) {
     const metafieldsToWrite = [];
 
     for (const variantId of variantIdArray) {
+      const vData = existingMeta[variantId];
+      const standardPrice = vData?.compareAtPrice || vData?.price || "0";
+
       // Start from existing JSON (for price lists NOT being re-synced)
       let merged = {};
       try {
-        if (existingMeta[variantId]) merged = JSON.parse(existingMeta[variantId]);
+        if (vData?.metaValue) merged = JSON.parse(vData.metaValue);
       } catch {
         merged = {};
       }
@@ -333,13 +345,22 @@ async function runSync(admin, shop, options = {}) {
         }
       }
 
-      metafieldsToWrite.push({
-        ownerId: variantId,
-        namespace: "custom",
-        key: "catalog_fixed_prices",
-        type: "json",
-        value: JSON.stringify(merged),
-      });
+      metafieldsToWrite.push(
+        {
+          ownerId: variantId,
+          namespace: "custom",
+          key: "catalog_fixed_prices",
+          type: "json",
+          value: JSON.stringify(merged),
+        },
+        {
+          ownerId: variantId,
+          namespace: "custom",
+          key: "standard_retail_price",
+          type: "number_decimal",
+          value: String(standardPrice),
+        }
+      );
     }
 
     await metafieldsSet(admin, metafieldsToWrite);
