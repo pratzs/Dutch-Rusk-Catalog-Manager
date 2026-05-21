@@ -29,11 +29,11 @@ const DISCOUNT_LABEL = "Catalog name discount";
 const MIN_DISCOUNT = 0.001; // ignore rounding dust
 
 /**
- * @param {object} input - matches shape of run.graphql
- * @returns {{ discounts: Array, discountApplicationStrategy: string }}
+ * @param {import("../generated/api").CartInput} input
+ * @returns {import("../generated/api").CartLinesDiscountsGenerateRunResult}
  */
-export function run(input) {
-  const noDiscount = { discounts: [], discountApplicationStrategy: "ALL" };
+export function cartLinesDiscountsGenerateRun(input) {
+  const noDiscount = { operations: [] };
 
   // Only apply to B2B purchasing company checkouts
   const company = input?.cart?.buyerIdentity?.purchasingCompany?.company;
@@ -45,7 +45,7 @@ export function run(input) {
   const discountPct = parseFloat(company.discountPct?.value ?? "0");
   if (isNaN(discountPct) || discountPct < 0) return noDiscount;
 
-  const discounts = [];
+  const candidates = [];
 
   for (const line of input.cart.lines ?? []) {
     const variant = line.merchandise;
@@ -84,7 +84,8 @@ export function run(input) {
     const discountAmount = basePrice - catalogPrice;
     if (discountAmount < MIN_DISCOUNT) continue;
 
-    discounts.push({
+    candidates.push({
+      message: DISCOUNT_LABEL,
       targets: [
         {
           cartLine: {
@@ -99,13 +100,20 @@ export function run(input) {
           appliesToEachItem: true,
         },
       },
-      message: DISCOUNT_LABEL,
     });
   }
 
+  if (!candidates.length) return noDiscount;
+
   return {
-    discounts,
-    // ALL = every line gets its own discount (they're different amounts per line)
-    discountApplicationStrategy: "ALL",
+    operations: [
+      {
+        productDiscountsAdd: {
+          // ALL = every candidate applies (each targets a different line)
+          candidates,
+          selectionStrategy: "ALL",
+        },
+      },
+    ],
   };
 }

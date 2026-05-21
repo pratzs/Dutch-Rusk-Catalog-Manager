@@ -2,11 +2,15 @@
   "name": "b2b-catalog-discount",
   "version": "1.0.0",
   "description": "Shopify Function: applies B2B catalog discounts as real line-item discount_allocations",
+  "license": "UNLICENSED",
+  "type": "module",
   "scripts": {
-    "build": "npx --yes @shopify/shopify_function build",
-    "preview": "npx --yes @shopify/shopify_function preview"
+    "shopify": "npm exec -- shopify",
+    "build": "npm exec -- shopify app function build",
+    "preview": "npm exec -- shopify app function run",
+    "typegen": "npm exec -- shopify app function typegen"
   },
   "dependencies": {
-    "@shopify/shopify_function": "^2.0.0"
+    "@shopify/shopify_function": "^2.0.1"
   }
 }

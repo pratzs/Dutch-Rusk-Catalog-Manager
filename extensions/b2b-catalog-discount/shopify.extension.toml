@@ -1,15 +1,16 @@
-api_version = "2025-07"
+api_version = "2026-04"
 
 [[extensions]]
+uid = "173af04c-1584-da61-9f00-577342b535eb1a6c5c21"
 type = "function"
 name = "B2B Catalog Discount"
 handle = "b2b-catalog-discount"
 
   [extensions.build]
-  command = "npm run build"
-  watch = ["src/**/*.js"]
+  command = "npm exec -- shopify app function build"
+  path = "dist/function.wasm"
 
   [[extensions.targeting]]
-  module = "./src/run.js"
-  target = "purchase.order-discount"
-  input_query = "./src/run.graphql"
+  target = "cart.lines.discounts.generate.run"
+  input_query = "src/cart_lines_discounts_generate_run.graphql"
+  export = "cart-lines-discounts-generate-run"
