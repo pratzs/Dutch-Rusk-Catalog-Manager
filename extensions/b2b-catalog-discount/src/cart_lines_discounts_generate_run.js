@@ -90,6 +90,7 @@ export function cartLinesDiscountsGenerateRun(input) {
         {
           cartLine: {
             id: line.id,
+            quantity: line.quantity,
           },
         },
       ],

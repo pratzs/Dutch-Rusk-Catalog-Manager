@@ -2,6 +2,7 @@ query CartInput {
   cart {
     lines {
       id
+      quantity
       cost {
         amountPerQuantity {
           amount
