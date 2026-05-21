@@ -36,7 +36,7 @@ export const action = async ({ request }) => {
   }
 
   try {
-    // ── Step 1: Fetch retail price (compareAtPrice) for each variant ─────────
+    // ── Step 1: Fetch retail price (compareAtPrice or metafield) for each variant ──
     const variantRes = await admin.graphql(
       `query GetVariantRetailPrices($ids: [ID!]!) {
         nodes(ids: $ids) {
@@ -46,6 +46,9 @@ export const action = async ({ request }) => {
             title
             price
             compareAtPrice
+            standardRetail: metafield(namespace: "custom", key: "standard_retail_price") {
+              value
+            }
           }
         }
       }`,
@@ -54,7 +57,7 @@ export const action = async ({ request }) => {
 
     const { data } = await variantRes.json();
 
-    // Build lookup: numeric variant ID → { price, compareAtPrice, sku, title }
+    // Build lookup: numeric variant ID → { price, compareAtPrice, standardRetail, sku, title }
     const variantMap = {};
     for (const node of data?.nodes ?? []) {
       if (node?.id) {
@@ -63,8 +66,9 @@ export const action = async ({ request }) => {
       }
     }
 
-    // ── Step 2: Calculate discount per line item ──────────────────────────────
+    // ── Step 2: Calculate savings and prepare line updates ───────────────────
     const fmt = (n) => `$${Math.abs(n).toFixed(2)}`;
+    const lineItemUpdates = [];
     const discountNotes = [];
     let totalRetailValue = 0;
     let totalPaidValue = 0;
@@ -75,9 +79,10 @@ export const action = async ({ request }) => {
       const variant = variantMap[String(li.variant_id)];
       if (!variant) continue;
 
-      // compareAtPrice = retail price set by the sync tool
-      // If compare_at was never set (no discount), fall back to price itself
-      const retailPrice = parseFloat(variant.compareAtPrice ?? variant.price ?? "0");
+      // Prioritize the synced standard_retail_price metafield
+      const retailPrice = parseFloat(
+        variant.standardRetail?.value ?? variant.compareAtPrice ?? variant.price ?? "0"
+      );
       const paidPrice = parseFloat(li.price ?? "0");
       const qty = parseInt(li.quantity ?? 1, 10);
 
@@ -91,7 +96,16 @@ export const action = async ({ request }) => {
       totalRetailValue += retailPrice * qty;
       totalPaidValue += paidPrice * qty;
 
-      // Use SKU if available, otherwise product title + variant title
+      // Add a hidden property to the line item so it's recorded in order history
+      const existingProps = (li.properties ?? []).filter(p => p.name !== "_standard_retail_price");
+      lineItemUpdates.push({
+        id: `gid://shopify/LineItem/${li.id}`,
+        customAttributes: [
+          ...existingProps.map(p => ({ key: p.name, value: String(p.value) })),
+          { key: "_standard_retail_price", value: String(retailPrice) }
+        ]
+      });
+
       const label =
         li.sku ||
         [li.title, li.variant_title].filter(Boolean).join(" — ") ||
@@ -108,7 +122,7 @@ export const action = async ({ request }) => {
       return new Response("OK", { status: 200 });
     }
 
-    // ── Step 3: Prepend an order-level summary note ───────────────────────────
+    // ── Step 3: Update Order with line properties and note attributes ────────
     const totalSaved = totalRetailValue - totalPaidValue;
     const overallPct =
       totalRetailValue > 0
@@ -120,36 +134,103 @@ export const action = async ({ request }) => {
       value: `${fmt(totalSaved)} saved — ${overallPct}% off retail (retail total: ${fmt(totalRetailValue)})`,
     });
 
-    // ── Step 4: Merge with any existing note_attributes and update order ──────
-    // order.note_attributes is the REST payload field (uses "name" key)
-    // Filter out any stale B2B notes from a previous run, keep everything else
     const existingNotes = (order.note_attributes ?? []).filter(
       (n) => !String(n.name).startsWith("B2B ")
     );
-    // existingNotes use REST {name, value}; discountNotes use {name, value}
-    // GraphQL customAttributes mutation uses {key, value} — convert on the way out
     const mergedNotes = [...existingNotes, ...discountNotes];
 
     const orderId = `gid://shopify/Order/${order.id}`;
 
-    const updateRes = await admin.graphql(
-      `mutation UpdateOrderDiscountNotes($input: OrderInput!) {
-        orderUpdate(input: $input) {
-          order {
+    // ── Step 4: Trigger explicit orderEdit mutation for historical baseline ──
+    const editBeginRes = await admin.graphql(
+      `mutation BeginOrderEdit($id: ID!) {
+        orderEditBegin(id: $id) {
+          calculatedOrder {
             id
-            name
+            lineItems(first: 50) {
+              nodes {
+                id
+                variant { id }
+              }
+            }
           }
-          userErrors {
-            field
-            message
+          userErrors { field message }
+        }
+      }`,
+      { variables: { id: orderId } }
+    );
+
+    const editBeginData = await editBeginRes.json();
+    const editId = editBeginData?.data?.orderEditBegin?.calculatedOrder?.id;
+    const calcLines = editBeginData?.data?.orderEditBegin?.calculatedOrder?.lineItems?.nodes ?? [];
+
+    if (editId) {
+      // Map original variant IDs to their new CalculatedLineItem IDs
+      for (const li of lineItems) {
+        if (!li.variant_id) continue;
+        const vGid = `gid://shopify/ProductVariant/${li.variant_id}`;
+        const calcLi = calcLines.find(cl => cl.variant?.id === vGid);
+        const variant = variantMap[String(li.variant_id)];
+
+        if (calcLi && variant) {
+          const retailPrice = parseFloat(variant.standardRetail?.value ?? variant.compareAtPrice ?? variant.price ?? "0");
+          const paidPrice = parseFloat(li.price ?? "0");
+
+          if (retailPrice > paidPrice) {
+            await admin.graphql(
+              `mutation UpdateEditLineItem($id: ID!, $lineItemId: ID!, $attributes: [AttributeInput!]!) {
+                orderEditUpdateLineItem(id: $id, lineItemId: $lineItemId, customAttributes: $attributes) {
+                  userErrors { field message }
+                }
+              }`,
+              {
+                variables: {
+                  id: editId,
+                  lineItemId: calcLi.id,
+                  attributes: [
+                    { key: "_standard_retail_price", value: String(retailPrice) }
+                  ]
+                }
+              }
+            );
           }
+        }
+      }
+
+      // Commit the edit to solidify the historical baseline
+      await admin.graphql(
+        `mutation CommitOrderEdit($id: ID!) {
+          orderEditCommit(id: $id, notifyCustomer: false, staffNote: "B2B Catalog Retail Price Alignment") {
+            userErrors { field message }
+          }
+        }`,
+        { variables: { id: editId } }
+      );
+    }
+
+    // ── Step 5: Update Order with note attributes ───────────────────────────
+    const totalSaved = totalRetailValue - totalPaidValue;
+    const overallPct = totalRetailValue > 0 ? ((totalSaved / totalRetailValue) * 100).toFixed(1) : "0.0";
+
+    discountNotes.unshift({
+      name: "B2B Total Savings",
+      value: `${fmt(totalSaved)} saved — ${overallPct}% off retail (retail total: ${fmt(totalRetailValue)})`,
+    });
+
+    const existingNotes = (order.note_attributes ?? []).filter((n) => !String(n.name).startsWith("B2B "));
+    const mergedNotes = [...existingNotes, ...discountNotes];
+
+    const updateRes = await admin.graphql(
+      `mutation UpdateOrderNotes($input: OrderInput!) {
+        orderUpdate(input: $input) {
+          order { id name }
+          userErrors { field message }
         }
       }`,
       {
         variables: {
           input: {
             id: orderId,
-            // GraphQL uses "customAttributes" with {key, value} — not "noteAttributes"
             customAttributes: mergedNotes.map((n) => ({
               key: String(n.name),
               value: String(n.value),
@@ -163,16 +244,10 @@ export const action = async ({ request }) => {
     const userErrors = updateData?.data?.orderUpdate?.userErrors ?? [];
 
     if (userErrors.length > 0) {
-      console.error(
-        `[orders/create] orderUpdate errors for order ${order.id}:`,
-        JSON.stringify(userErrors)
-      );
+      console.error(`[orders/create] update errors for order ${order.id}:`, JSON.stringify(userErrors));
     } else {
       const orderName = updateData?.data?.orderUpdate?.order?.name ?? `#${order.order_number}`;
-      console.log(
-        `[orders/create] ${orderName}: wrote ${discountNotes.length} B2B discount note(s). ` +
-          `Total saved: ${fmt(totalSaved)} (${overallPct}% off retail)`
-      );
+      console.log(`[orders/create] ${orderName}: completed orderEdit and wrote ${discountNotes.length} note(s).`);
     }
   } catch (err) {
     // Log but always return 200 — a non-200 causes Shopify to retry 19 times
