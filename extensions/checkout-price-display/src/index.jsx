@@ -71,10 +71,10 @@ function CartLineSavings() {
   return (
     <BlockStack spacing="extraTight">
       <InlineStack spacing="tight" blockAlignment="center">
-        <Text appearance="subdued" size="small" textDecoration="line-through">
-          {formatMoney(originalPerUnit, currency)} each
+        <Text size="small" textDecoration="line-through">
+          {formatMoney(originalPerUnit, currency)}
         </Text>
-        <Text appearance="success" size="small">
+        <Text appearance="success" size="small" emphasis="bold">
           Save {formatMoney(totalSavings, currency)}
         </Text>
       </InlineStack>
