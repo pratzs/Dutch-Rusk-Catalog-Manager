@@ -148,9 +148,14 @@ export async function loader({ request }) {
   }
 
   if (!catalogId) {
+    console.warn("[CVH-API] Could not resolve catalog for request, returning empty rules");
     return new Response(
-      JSON.stringify({ error: "Could not resolve catalog" }),
-      { status: 400, headers: CORS_HEADERS }
+      JSON.stringify({
+        hiddenVariantTypes: [],
+        hiddenVariantIds: [],
+        hasOverride: false,
+      }),
+      { status: 200, headers: CORS_HEADERS }
     );
   }
 
