@@ -65,7 +65,7 @@ async function fetchAllPriceLists(admin) {
           nodes {
             id
             name
-            adjustment { type value }
+            parent { adjustment { type value } }
           }
         }
       }`,
@@ -214,8 +214,8 @@ async function runSync(admin, shop, options = {}) {
     : priceLists.filter((pl) => {
         const db = dbMap[pl.id];
         if (!db) return true; // never synced before
-        const adjType = pl.adjustment?.type ?? "";
-        const adjValue = pl.adjustment?.value ?? 0;
+        const adjType = pl.parent?.adjustment?.type ?? "";
+        const adjValue = pl.parent?.adjustment?.value ?? 0;
         return db.adjustmentType !== adjType || db.adjustmentValue !== adjValue;
       });
 
@@ -232,7 +232,7 @@ async function runSync(admin, shop, options = {}) {
   const allAdjustments = {}; // priceListId → {type, value}
 
   for (const pl of priceLists) {
-    const adj = pl.adjustment;
+    const adj = pl.parent?.adjustment;
     allAdjustments[pl.id] = adj
       ? { type: adj.type, value: adj.value }
       : { type: "PERCENTAGE_DECREASE", value: 0 };
@@ -391,7 +391,7 @@ async function runSync(admin, shop, options = {}) {
 
   // ── 8. Persist sync state to DB ──────────────────────────────────────────
   for (const pl of toSync) {
-    const adj = pl.adjustment;
+    const adj = pl.parent?.adjustment;
     await prisma.catalogSyncState.upsert({
       where: { shop_priceListId: { shop, priceListId: pl.id } },
       create: {
