@@ -65,7 +65,6 @@ async function fetchAllPriceLists(admin) {
           nodes {
             id
             name
-            updatedAt
             adjustment { type value }
           }
         }
@@ -206,11 +205,18 @@ async function runSync(admin, shop, options = {}) {
   const dbMap = Object.fromEntries(dbStates.map((s) => [s.priceListId, s]));
 
   // ── 3. Determine which price lists need re-syncing ───────────────────────
+  // Change detection: compare stored adjustment type+value against current.
+  // updatedAt doesn't exist on PriceList — we detect blanket-% changes via
+  // the adjustment fields we already persist in CatalogSyncState.
+  // Fixed-price changes are caught in real-time by the products/update webhook.
   const toSync = forceAll
     ? priceLists
     : priceLists.filter((pl) => {
         const db = dbMap[pl.id];
-        return !db || db.shopifyUpdatedAt !== pl.updatedAt;
+        if (!db) return true; // never synced before
+        const adjType = pl.adjustment?.type ?? "";
+        const adjValue = pl.adjustment?.value ?? 0;
+        return db.adjustmentType !== adjType || db.adjustmentValue !== adjValue;
       });
 
   log(`${toSync.length} price list(s) need syncing (${forceAll ? "forced" : "changed"})`);
@@ -392,7 +398,6 @@ async function runSync(admin, shop, options = {}) {
         shop,
         priceListId: pl.id,
         priceListName: pl.name,
-        shopifyUpdatedAt: pl.updatedAt,
         adjustmentType: adj?.type ?? "",
         adjustmentValue: adj?.value ?? 0,
         overriddenVariantIds: JSON.stringify(
@@ -401,7 +406,6 @@ async function runSync(admin, shop, options = {}) {
       },
       update: {
         priceListName: pl.name,
-        shopifyUpdatedAt: pl.updatedAt,
         adjustmentType: adj?.type ?? "",
         adjustmentValue: adj?.value ?? 0,
         overriddenVariantIds: JSON.stringify(
