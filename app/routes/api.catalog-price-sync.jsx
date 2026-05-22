@@ -20,8 +20,6 @@
 //   { variantIds: [...] }     → re-sync specific variants only (from products/update webhook)
 //   { forceAll: true }        → re-sync every price list regardless of updatedAt
 //
-import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
 
 const BATCH = 25; // metafieldsSet accepts up to 25 per call
 
@@ -57,6 +55,8 @@ async function metafieldsSet(adminOrFetch, metafields) {
 async function fetchAllPriceLists(admin) {
   const lists = [];
   let cursor = null;
+  const log = (...args) => console.log("[catalog-sync]", ...args);
+
   do {
     const { data } = await gql(
       admin,
@@ -202,6 +202,7 @@ async function fetchVariantFixedPriceMeta(admin, variantIds) {
 async function runSync(admin, shop, options = {}) {
   const { forceAll = false, variantIds: specificVariantIds = null } = options;
   const log = (...args) => console.log("[catalog-sync]", ...args);
+  const { default: prisma } = await import("../db.server");
 
   // ── 1. Fetch all price lists ─────────────────────────────────────────────
   log("Fetching price lists...");
@@ -217,10 +218,6 @@ async function runSync(admin, shop, options = {}) {
   const dbMap = Object.fromEntries(dbStates.map((s) => [s.priceListId, s]));
 
   // ── 3. Determine which price lists need re-syncing ───────────────────────
-  // Change detection: compare stored adjustment type+value against current.
-  // updatedAt doesn't exist on PriceList — we detect blanket-% changes via
-  // the adjustment fields we already persist in CatalogSyncState.
-  // Fixed-price changes are caught in real-time by the products/update webhook.
   const toSync = forceAll
     ? priceLists
     : priceLists.filter((pl) => {
@@ -238,9 +235,8 @@ async function runSync(admin, shop, options = {}) {
   }
 
   // ── 4. Build complete picture of all price lists (overrides + adjustments) ─
-  // We need the full picture to merge catalog_fixed_prices correctly across catalogs
-  log("Fetching overrides for all price lists...");
-  const allOverridesByList = {}; // priceListId → {variantId → fixedPrice}
+  log("Fetching prices for synced price lists...");
+  const allOverridesByList = {}; // priceListId → {variantId → price}
   const allAdjustments = {}; // priceListId → {type, value}
 
   for (const pl of priceLists) {
@@ -251,7 +247,6 @@ async function runSync(admin, shop, options = {}) {
     allOverridesByList[pl.id] = {};
   }
 
-  // Only fetch price details for changed lists (others keep DB state)
   for (const pl of toSync) {
     log(`Fetching all prices for price list: ${pl.name}`);
     const prices = await fetchPriceListPrices(admin, pl.id);
@@ -260,22 +255,9 @@ async function runSync(admin, shop, options = {}) {
     }
   }
 
-  // For unchanged lists, use DB-stored override info
-  for (const pl of priceLists) {
-    if (toSync.some((s) => s.id === pl.id)) continue; // already fetched
-    const db = dbMap[pl.id];
-    if (!db) continue;
-    // We don't cache override prices in DB — skip (they're unchanged anyway)
-    // Just ensure the key exists
-    if (!allOverridesByList[pl.id]) allOverridesByList[pl.id] = {};
-  }
-
-  // ── 5. Gather all variant IDs that currently or previously had overrides ──
-  const currentOverriddenByList = {}; // priceListId → Set<variantId>
-  for (const [plId, overrides] of Object.entries(allOverridesByList)) {
-    currentOverriddenByList[plId] = new Set(Object.keys(overrides));
-  }
-
+  // ── 5. Gather all variant IDs that need updates ──────────────────────────
+  const affectedVariantIds = new Set();
+  
   // Previous override sets from DB (to detect removals)
   const previousOverriddenByList = {}; // priceListId → Set<variantId>
   for (const db of dbStates) {
@@ -287,50 +269,31 @@ async function runSync(admin, shop, options = {}) {
     }
   }
 
-  // Collect all affected variant IDs (new overrides + removed overrides)
-  const affectedVariantIds = new Set();
   for (const pl of toSync) {
-    const current = currentOverriddenByList[pl.id] ?? new Set();
+    const current = new Set(Object.keys(allOverridesByList[pl.id] ?? {}));
     const previous = previousOverriddenByList[pl.id] ?? new Set();
     for (const id of current) affectedVariantIds.add(id);
-    for (const id of previous) affectedVariantIds.add(id); // removed ones need clearing
+    for (const id of previous) affectedVariantIds.add(id); 
   }
 
-  // ── 5.5 GATHER ALL VARIANTS IN THE PRICE LISTS (UNIVERSAL STRATEGY) ──────
-  // To ensure native strikethroughs work for ALL B2B lines, we must populate
-  // the 'catalog_fixed_prices' metafield for EVERY variant in the price list,
-  // not just the overridden ones.
-  if (toSync.length > 0) {
-    log("Identifying all variants in synced price lists for universal coverage...");
-    for (const pl of toSync) {
-      const allPricesInList = allOverridesByList[pl.id] ?? {};
-      for (const variantId of Object.keys(allPricesInList)) {
-        affectedVariantIds.add(variantId);
-      }
-    }
-  }
-
-  // If called with specific variant IDs (from products/update webhook), add those
   if (specificVariantIds) {
     for (const id of specificVariantIds) affectedVariantIds.add(id);
   }
 
   log(`${affectedVariantIds.size} variant(s) need metafield updates`);
 
-  // ── 6. Read current catalog_fixed_prices for affected variants ───────────
+  // ── 6. Read and Write Metafields ─────────────────────────────────────────
   let updatedVariants = 0;
   if (affectedVariantIds.size > 0) {
     const variantIdArray = [...affectedVariantIds];
     const existingMeta = await fetchVariantFixedPriceMeta(admin, variantIdArray);
 
-    // Build the new merged JSON for each affected variant
     const metafieldsToWrite = [];
 
     for (const variantId of variantIdArray) {
       const vData = existingMeta[variantId];
       const standardPrice = vData?.compareAtPrice || vData?.price || "0";
 
-      // Start from existing JSON (for price lists NOT being re-synced)
       let merged = {};
       try {
         if (vData?.metaValue) merged = JSON.parse(vData.metaValue);
@@ -338,25 +301,12 @@ async function runSync(admin, shop, options = {}) {
         merged = {};
       }
 
-      // Apply updates from re-synced price lists
       for (const pl of toSync) {
-        const fixedPrice = allOverridesByList[pl.id]?.[variantId];
-        if (fixedPrice !== undefined) {
-          merged[pl.id] = fixedPrice; // update/add fixed price
+        const price = allOverridesByList[pl.id]?.[variantId];
+        if (price !== undefined) {
+          merged[pl.id] = price;
         } else {
-          delete merged[pl.id]; // remove — this variant reverted to blanket %
-        }
-      }
-
-      // If specific variant IDs were requested (products/update), also refresh from all lists
-      if (specificVariantIds?.includes(variantId)) {
-        for (const [plId, overrides] of Object.entries(allOverridesByList)) {
-          const fixedPrice = overrides[variantId];
-          if (fixedPrice !== undefined) {
-            merged[plId] = fixedPrice;
-          } else {
-            delete merged[plId];
-          }
+          delete merged[pl.id];
         }
       }
 
@@ -382,7 +332,7 @@ async function runSync(admin, shop, options = {}) {
     updatedVariants = metafieldsToWrite.length;
   }
 
-  // ── 7. Update company metafields (pricelist_id + discount_pct) ───────────
+  // ── 7. Update company metafields ─────────────────────────────────────────
   log("Fetching catalog→company mapping...");
   const catalogCompanyMap = await fetchCatalogCompanyMap(admin);
 
@@ -393,29 +343,12 @@ async function runSync(admin, shop, options = {}) {
     const adj = allAdjustments[priceListId];
     if (!adj) continue;
 
-    const pct =
-      adj.type === "PERCENTAGE_DECREASE"
-        ? String(adj.value)
-        : adj.type === "PERCENTAGE_INCREASE"
-        ? String(-adj.value)
-        : "0";
+    const pct = adj.type === "PERCENTAGE_DECREASE" ? String(adj.value) : adj.type === "PERCENTAGE_INCREASE" ? String(-adj.value) : "0";
 
     for (const companyId of companyIds) {
       companyMetafields.push(
-        {
-          ownerId: companyId,
-          namespace: "custom",
-          key: "catalog_pricelist_id",
-          type: "single_line_text_field",
-          value: priceListId,
-        },
-        {
-          ownerId: companyId,
-          namespace: "custom",
-          key: "catalog_discount_pct",
-          type: "number_decimal",
-          value: pct,
-        }
+        { ownerId: companyId, namespace: "custom", key: "catalog_pricelist_id", type: "single_line_text_field", value: priceListId },
+        { ownerId: companyId, namespace: "custom", key: "catalog_discount_pct", type: "number_decimal", value: pct }
       );
       updatedCompanies++;
     }
@@ -425,7 +358,7 @@ async function runSync(admin, shop, options = {}) {
     await metafieldsSet(admin, companyMetafields);
   }
 
-  // ── 8. Persist sync state to DB ──────────────────────────────────────────
+  // ── 8. Persist sync state ────────────────────────────────────────────────
   for (const pl of toSync) {
     const adj = pl.parent?.adjustment;
     await prisma.catalogSyncState.upsert({
@@ -436,34 +369,27 @@ async function runSync(admin, shop, options = {}) {
         priceListName: pl.name,
         adjustmentType: adj?.type ?? "",
         adjustmentValue: adj?.value ?? 0,
-        overriddenVariantIds: JSON.stringify(
-          [...(currentOverriddenByList[pl.id] ?? [])]
-        ),
+        overriddenVariantIds: JSON.stringify([...new Set(Object.keys(allOverridesByList[pl.id] ?? {}))]),
       },
       update: {
         priceListName: pl.name,
         adjustmentType: adj?.type ?? "",
         adjustmentValue: adj?.value ?? 0,
-        overriddenVariantIds: JSON.stringify(
-          [...(currentOverriddenByList[pl.id] ?? [])]
-        ),
+        overriddenVariantIds: JSON.stringify([...new Set(Object.keys(allOverridesByList[pl.id] ?? {}))]),
       },
     });
   }
 
   log(`Done. Updated ${toSync.length} price list(s), ${updatedCompanies} company metafield(s), ${updatedVariants} variant metafield(s)`);
 
-  return {
-    updatedPriceLists: toSync.length,
-    updatedCompanies,
-    updatedVariants,
-    message: toSync.length === 0 ? "Nothing changed" : `Synced ${toSync.length} price list(s)`,
-  };
+  return { updatedPriceLists: toSync.length, updatedCompanies, updatedVariants, message: toSync.length === 0 ? "Nothing changed" : `Synced ${toSync.length} price list(s)` };
 }
 
 // ─── route handler ───────────────────────────────────────────────────────────
 
 export async function action({ request }) {
+  const { authenticate } = await import("../shopify.server");
+  
   const cronSecret = process.env.CRON_SECRET ?? "";
   const incomingSecret = request.headers.get("x-cron-secret") ?? "";
   const body = await request.json().catch(() => ({}));
@@ -472,38 +398,25 @@ export async function action({ request }) {
   let shop;
 
   if (incomingSecret && incomingSecret === cronSecret) {
-    // ── Cron / webhook call: authenticate using stored offline session ──────
-    // Find the first available offline session (single-tenant app)
+    const { default: prisma } = await import("../db.server");
     const session = await prisma.session.findFirst({
       where: { isOnline: false, accessToken: { not: "" } },
       orderBy: { id: "desc" },
     });
-    if (!session) {
-      return Response.json({ error: "No offline session found — reinstall the app" }, { status: 500 });
-    }
+    if (!session) return Response.json({ error: "No offline session found" }, { status: 500 });
     shop = session.shop;
-
-    // Build a minimal admin graphql shim using the raw access token
     const token = session.accessToken;
-    const apiVersion = "2026-04";
     admin = {
       graphql: async (query, { variables } = {}) => {
-        const r = await fetch(
-          `https://${shop}/admin/api/${apiVersion}/graphql.json`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Shopify-Access-Token": token,
-            },
-            body: JSON.stringify({ query, variables }),
-          }
-        );
+        const r = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+          body: JSON.stringify({ query, variables }),
+        });
         return { json: () => r.json() };
       },
     };
   } else {
-    // ── Admin dashboard call ─────────────────────────────────────────────
     const auth = await authenticate.admin(request);
     admin = auth.admin;
     shop = auth.session.shop;
