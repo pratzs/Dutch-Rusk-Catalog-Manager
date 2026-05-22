@@ -12,7 +12,7 @@ handle = "checkout-price-display"
 
     [[extensions.targeting.metafields]]
     namespace = "custom"
-    key = "retail_price"
+    key = "standard_retail_price"
 
   [[extensions.targeting]]
   module = "./src/OrderSummary.jsx"
@@ -20,4 +20,4 @@ handle = "checkout-price-display"
 
     [[extensions.targeting.metafields]]
     namespace = "custom"
-    key = "retail_price"
+    key = "standard_retail_price"

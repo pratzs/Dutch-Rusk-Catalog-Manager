@@ -35,9 +35,9 @@ function CartLineSavings() {
     ?? line?.cost?.totalAmount?.currencyCode
     ?? 'NZD';
 
-  // Source 1: metafield retail_price set by the sync
+  // Source 1: metafield standard_retail_price set by the sync
   const retailMeta = appMetafields?.find(
-    (m) => m.metafield?.namespace === 'custom' && m.metafield?.key === 'retail_price'
+    (m) => m.metafield?.namespace === 'custom' && m.metafield?.key === 'standard_retail_price'
   );
   const metafieldPrice = retailMeta ? parseFloat(retailMeta.metafield.value) : null;
 
@@ -55,13 +55,13 @@ function CartLineSavings() {
   let originalPerUnit = null;
   let totalSavings = null;
 
-  if (metafieldPrice && metafieldPrice > currentPrice) {
+  if (metafieldPrice && (metafieldPrice > currentPrice + 0.01)) {
     originalPerUnit = metafieldPrice;
     totalSavings = (metafieldPrice - currentPrice) * qty;
-  } else if (directCompareAt !== null && directCompareAt > currentPrice) {
+  } else if (directCompareAt !== null && directCompareAt > currentPrice + 0.01) {
     originalPerUnit = directCompareAt;
     totalSavings = (directCompareAt - currentPrice) * qty;
-  } else if (totalDiscount > 0) {
+  } else if (totalDiscount > 0.01) {
     originalPerUnit = currentPrice + totalDiscount / qty;
     totalSavings = totalDiscount;
   }
@@ -69,15 +69,18 @@ function CartLineSavings() {
   if (!originalPerUnit || !totalSavings) return null;
 
   return (
-    <BlockStack spacing="extraTight">
+    <BlockStack spacing="none">
       <InlineStack spacing="tight" blockAlignment="center">
-        <Text size="small" textDecoration="line-through">
-          {formatMoney(originalPerUnit, currency)}
+        <Text size="small" appearance="subdued" textDecoration="line-through">
+          Retail {formatMoney(originalPerUnit, currency)}
         </Text>
         <Text appearance="success" size="small" emphasis="bold">
-          Save {formatMoney(totalSavings, currency)}
+          {formatMoney(currentPrice, currency)}
         </Text>
       </InlineStack>
+      <Text appearance="success" size="extraSmall">
+        B2B Savings: {formatMoney(totalSavings, currency)} total
+      </Text>
     </BlockStack>
   );
 }
