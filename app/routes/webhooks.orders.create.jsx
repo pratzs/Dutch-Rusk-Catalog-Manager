@@ -5,8 +5,6 @@
 // price is simply baked in silently. This webhook enriches the order with
 // explicit discount note_attributes and forcing native admin strikethroughs.
 //
-import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
 
 export const action = async ({ request }) => {
   const { authenticate, unauthenticated } = await import("../shopify.server");
