@@ -19,6 +19,7 @@ async function metafieldsSet(adminOrFetch, metafields) {
 async function fetchAllPriceLists(admin) {
   const lists = [];
   let cursor = null;
+  const log = (...args) => console.log("[catalog-sync]", ...args);
   do {
     const { data } = await gql(admin, `query GetPriceLists($cursor: String) { priceLists(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id name parent { adjustment { type value } } } } }`, { cursor });
     const page = data?.priceLists;
@@ -41,25 +42,9 @@ async function fetchPriceListPrices(admin, priceListId) {
       if (node.variant?.id && node.price?.amount) prices.push({ variantId: node.variant.id, price: node.price.amount });
     }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-    if (cursor) console.log(`[catalog-sync] ...fetched ${prices.length} so far, continuing pagination`);
   } while (cursor);
   console.log(`[catalog-sync] Finished. Total prices in list: ${prices.length}`);
   return prices;
-}
-
-async function fetchCatalogAdjustmentMap(admin) {
-  const map = {};
-  let cursor = null;
-  do {
-    const { data } = await gql(admin, `query GetCatalogs($cursor: String) { catalogs(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { priceList { id } ... on MarketCatalog { adjustment { type value } } } } }`, { cursor });
-    const page = data?.catalogs;
-    if (!page) break;
-    for (const cat of page.nodes) {
-      if (cat.priceList?.id && cat.adjustment) map[cat.priceList.id] = cat.adjustment;
-    }
-    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-  } while (cursor);
-  return map;
 }
 
 async function fetchCatalogCompanyMap(admin) {
@@ -94,48 +79,43 @@ async function runSync(admin, shop, options = {}) {
   const log = (...args) => console.log("[catalog-sync]", ...args);
   const { default: prisma } = await import("../db.server");
 
-  log("Fetching metadata...");
+  log("Fetching price lists...");
   const priceLists = await fetchAllPriceLists(admin);
-  const catalogAdjs = await fetchCatalogAdjustmentMap(admin);
-
+  
   const allOverridesByList = {}; 
   const allAdjustments = {}; 
 
   for (const pl of priceLists) {
-    const adj = catalogAdjs[pl.id] || pl.parent?.adjustment || { type: "PERCENTAGE_DECREASE", value: 0 };
+    const adj = pl.parent?.adjustment || { type: "PERCENTAGE_DECREASE", value: 0 };
     allAdjustments[pl.id] = adj;
     allOverridesByList[pl.id] = {};
   }
 
-  // To ensure we fix the current issue, we ignore the DB skip logic for this full run
-  const toSync = priceLists; 
+  log(`Exhaustively syncing ${priceLists.length} price list(s)`);
 
-  log(`Exhaustively syncing ${toSync.length} price list(s)`);
-
-  for (const pl of toSync) {
+  for (const pl of priceLists) {
     const prices = await fetchPriceListPrices(admin, pl.id);
     for (const { variantId, price } of prices) { allOverridesByList[pl.id][variantId] = price; }
   }
 
   const affectedVariantIds = new Set();
-  for (const pl of toSync) {
+  for (const pl of priceLists) {
     for (const id of Object.keys(allOverridesByList[pl.id] ?? {})) affectedVariantIds.add(id);
   }
   if (specificVariantIds) { for (const id of specificVariantIds) affectedVariantIds.add(id); }
 
-  log(`Updating ${affectedVariantIds.size} variants with exhaustive price data...`);
+  log(`Updating ${affectedVariantIds.size} variant(s)...`);
 
   if (affectedVariantIds.size > 0) {
     const variantIdArray = [...affectedVariantIds];
     const existingMeta = await fetchVariantFixedPriceMeta(admin, variantIdArray);
     const metafieldsToWrite = [];
-
     for (const variantId of variantIdArray) {
       const vData = existingMeta[variantId];
       const standardPrice = vData?.compareAtPrice || vData?.price || "0";
       let merged = {};
       try { if (vData?.metaValue) merged = JSON.parse(vData.metaValue); } catch { merged = {}; }
-      for (const pl of toSync) {
+      for (const pl of priceLists) {
         const price = allOverridesByList[pl.id]?.[variantId];
         if (price !== undefined) merged[pl.id] = price; else delete merged[pl.id];
       }
@@ -173,7 +153,7 @@ async function runSync(admin, shop, options = {}) {
   }
 
   log("Exhaustive sync complete.");
-  return { success: true, message: `Exhaustively synced ${toSync.length} catalogs and ${affectedVariantIds.size} variants.` };
+  return { success: true, message: `Synced ${priceLists.length} price list(s)` };
 }
 
 export async function action({ request }) {
