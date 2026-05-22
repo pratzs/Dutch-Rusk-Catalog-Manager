@@ -59,10 +59,14 @@ export async function action({ request }) {
   });
 
   const data = await response.json();
-  const userErrors = data.data.discountCreate.userErrors;
+  const userErrors = data.data?.discountCreate?.userErrors ?? [];
 
-  if (userErrors.length > 0) {
-    return { error: userErrors.map(e => e.message).join(", ") };
+  if (data.errors || userErrors.length > 0) {
+    console.log("Full GraphQL Response Errors:", JSON.stringify(data.errors || data.data.discountCreate.userErrors, null, 2));
+    if (userErrors.length > 0) {
+      return { error: userErrors.map(e => e.message).join(", ") };
+    }
+    return { error: "An unexpected GraphQL error occurred." };
   }
 
   return { success: true, discountId: data.data.discountCreate.automaticAppDiscount.id };
