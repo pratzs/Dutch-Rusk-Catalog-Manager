@@ -170,10 +170,7 @@ export const action = async ({ request }) => {
                   id: editId,
                   lineItemId: calcLi.id,
                   discount: {
-                    fixedValue: {
-                      amount,
-                      currencyCode: "NZD"
-                    },
+                    amount: String(amount),
                     description: "Wholesale Catalog Discount"
                   }
                 }
