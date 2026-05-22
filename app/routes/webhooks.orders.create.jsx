@@ -144,8 +144,17 @@ export const action = async ({ request }) => {
     );
 
     const editBeginData = await editBeginRes.json();
+    if (editBeginData.errors) {
+      console.error("[orders/create] orderEditBegin GraphQL errors:", JSON.stringify(editBeginData.errors));
+    }
+
     const editId = editBeginData?.data?.orderEditBegin?.calculatedOrder?.id;
     const calcLines = editBeginData?.data?.orderEditBegin?.calculatedOrder?.lineItems?.nodes ?? [];
+    const editUserErrors = editBeginData?.data?.orderEditBegin?.userErrors ?? [];
+
+    if (editUserErrors.length > 0) {
+      console.error("[orders/create] orderEditBegin userErrors:", JSON.stringify(editUserErrors));
+    }
 
     if (editId) {
       // Map original variant IDs to their new CalculatedLineItem IDs
@@ -160,7 +169,7 @@ export const action = async ({ request }) => {
           const paidPrice = parseFloat(li.price ?? "0");
 
           if (retailPrice > paidPrice) {
-            await admin.graphql(
+            const updateLiRes = await admin.graphql(
               `mutation UpdateEditLineItem($id: ID!, $lineItemId: ID!, $attributes: [AttributeInput!]!) {
                 orderEditUpdateLineItem(id: $id, lineItemId: $lineItemId, customAttributes: $attributes) {
                   userErrors { field message }
@@ -176,12 +185,17 @@ export const action = async ({ request }) => {
                 }
               }
             );
+            const updateLiData = await updateLiRes.json();
+            const liUserErrors = updateLiData?.data?.orderEditUpdateLineItem?.userErrors ?? [];
+            if (liUserErrors.length > 0) {
+              console.error(`[orders/create] orderEditUpdateLineItem userErrors for line ${li.id}:`, JSON.stringify(liUserErrors));
+            }
           }
         }
       }
 
       // Commit the edit to solidify the historical baseline
-      await admin.graphql(
+      const commitRes = await admin.graphql(
         `mutation CommitOrderEdit($id: ID!) {
           orderEditCommit(id: $id, notifyCustomer: false, staffNote: "B2B Catalog Retail Price Alignment") {
             userErrors { field message }
@@ -189,6 +203,11 @@ export const action = async ({ request }) => {
         }`,
         { variables: { id: editId } }
       );
+      const commitData = await commitRes.json();
+      const commitUserErrors = commitData?.data?.orderEditCommit?.userErrors ?? [];
+      if (commitUserErrors.length > 0) {
+        console.error("[orders/create] orderEditCommit userErrors:", JSON.stringify(commitUserErrors));
+      }
     }
 
     // ── Step 5: Update Order with note attributes ───────────────────────────
