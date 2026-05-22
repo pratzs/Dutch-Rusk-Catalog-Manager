@@ -66,9 +66,8 @@ export const action = async ({ request }) => {
       }
     }
 
-    // ── Step 2: Calculate savings and prepare line updates ───────────────────
+    // ── Step 2: Calculate savings and prepare data ───────────────────────────
     const fmt = (n) => `$${Math.abs(n).toFixed(2)}`;
-    const lineItemUpdates = [];
     const discountNotes = [];
     let totalRetailValue = 0;
     let totalPaidValue = 0;
@@ -95,16 +94,6 @@ export const action = async ({ request }) => {
 
       totalRetailValue += retailPrice * qty;
       totalPaidValue += paidPrice * qty;
-
-      // Add a hidden property to the line item so it's recorded in order history
-      const existingProps = (li.properties ?? []).filter(p => p.name !== "_standard_retail_price");
-      lineItemUpdates.push({
-        id: `gid://shopify/LineItem/${li.id}`,
-        customAttributes: [
-          ...existingProps.map(p => ({ key: p.name, value: String(p.value) })),
-          { key: "_standard_retail_price", value: String(retailPrice) }
-        ]
-      });
 
       const label =
         li.sku ||
@@ -169,9 +158,10 @@ export const action = async ({ request }) => {
           const paidPrice = parseFloat(li.price ?? "0");
 
           if (retailPrice > paidPrice) {
-            const updateLiRes = await admin.graphql(
-              `mutation UpdateEditLineItem($id: ID!, $lineItemId: ID!, $attributes: [AttributeInput!]!) {
-                orderEditUpdateLineItem(id: $id, lineItemId: $lineItemId, customAttributes: $attributes) {
+            const amount = (retailPrice - paidPrice).toFixed(2);
+            const addDiscountRes = await admin.graphql(
+              `mutation AddLineItemDiscount($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
+                orderEditAddLineItemDiscount(id: $id, lineItemId: $lineItemId, discount: $discount) {
                   userErrors { field message }
                 }
               }`,
@@ -179,16 +169,20 @@ export const action = async ({ request }) => {
                 variables: {
                   id: editId,
                   lineItemId: calcLi.id,
-                  attributes: [
-                    { key: "_standard_retail_price", value: String(retailPrice) }
-                  ]
+                  discount: {
+                    fixedAmount: {
+                      amount,
+                      currencyCode: "NZD"
+                    },
+                    message: "Wholesale Catalog Discount"
+                  }
                 }
               }
             );
-            const updateLiData = await updateLiRes.json();
-            const liUserErrors = updateLiData?.data?.orderEditUpdateLineItem?.userErrors ?? [];
+            const addDiscountData = await addDiscountRes.json();
+            const liUserErrors = addDiscountData?.data?.orderEditAddLineItemDiscount?.userErrors ?? [];
             if (liUserErrors.length > 0) {
-              console.error(`[orders/create] orderEditUpdateLineItem userErrors for line ${li.id}:`, JSON.stringify(liUserErrors));
+              console.error(`[orders/create] orderEditAddLineItemDiscount userErrors for line ${li.id}:`, JSON.stringify(liUserErrors));
             }
           }
         }
@@ -197,7 +191,7 @@ export const action = async ({ request }) => {
       // Commit the edit to solidify the historical baseline
       const commitRes = await admin.graphql(
         `mutation CommitOrderEdit($id: ID!) {
-          orderEditCommit(id: $id, notifyCustomer: false, staffNote: "B2B Catalog Retail Price Alignment") {
+          orderEditCommit(id: $id, notifyCustomer: false, staffNote: "Wholesale Catalog Discount Alignment") {
             userErrors { field message }
           }
         }`,
