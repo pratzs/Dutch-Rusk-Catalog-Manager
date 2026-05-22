@@ -77,10 +77,7 @@ export function run(input) {
                 amount: finalRetail.toFixed(2),
               }
             }
-          },
-          customAttributes: [
-            { key: "_target_b2b_price", value: finalWholesale.toFixed(2) }
-          ]
+          }
         },
       });
     } else {

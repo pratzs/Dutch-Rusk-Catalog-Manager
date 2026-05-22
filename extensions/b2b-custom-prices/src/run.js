@@ -38,27 +38,22 @@ export function run(input) {
     // The currentPrice here will be the price RAISED to Retail by the Transformer.
     const currentPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
     const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
-    
-    // Read the target wholesale price injected by the Transformer property
-    const targetPropertyPrice = line.targetB2BPrice?.value ? parseFloat(line.targetB2BPrice.value) : null;
 
-    let targetWholesalePrice = targetPropertyPrice;
+    let targetWholesalePrice = null;
 
-    // 1. Check for Fixed Override (Fallback if property is missing)
-    if (targetWholesalePrice === null) {
-      const fixedPricesRaw = variant.fixedPrices?.value;
-      if (fixedPricesRaw) {
-        try {
-          const fixedPricesMap = JSON.parse(fixedPricesRaw);
-          const fixedPrice = fixedPricesMap[priceListId];
-          if (fixedPrice !== undefined && fixedPrice !== null) {
-            targetWholesalePrice = parseFloat(fixedPrice);
-          }
-        } catch (e) {}
-      }
+    // 1. Check for Fixed Override
+    const fixedPricesRaw = variant.fixedPrices?.value;
+    if (fixedPricesRaw) {
+      try {
+        const fixedPricesMap = JSON.parse(fixedPricesRaw);
+        const fixedPrice = fixedPricesMap[priceListId];
+        if (fixedPrice !== undefined && fixedPrice !== null) {
+          targetWholesalePrice = parseFloat(fixedPrice);
+        }
+      } catch (e) {}
     }
 
-    // 2. Fallback to blanket percentage (Fallback if property is missing)
+    // 2. Fallback to blanket percentage
     if (targetWholesalePrice === null && discountPct > 0) {
       const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
       targetWholesalePrice = baseline * (1 - discountPct / 100);
@@ -68,7 +63,7 @@ export function run(input) {
     if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice) {
       const discountAmount = currentPrice - targetWholesalePrice;
 
-      console.log(`Line ${line.id}: CurrentPrice=${currentPrice.toFixed(2)}, TargetWholesale=${targetWholesalePrice.toFixed(2)}, Discount=${discountAmount.toFixed(2)} (fromProp=${targetPropertyPrice !== null})`);
+      console.log(`Line ${line.id}: CurrentPrice=${currentPrice.toFixed(2)}, TargetWholesale=${targetWholesalePrice.toFixed(2)}, Discount=${discountAmount.toFixed(2)}`);
 
       if (discountAmount > 0.001) {
         discounts.push({
