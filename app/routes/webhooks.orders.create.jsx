@@ -14,7 +14,7 @@
 //   3. Compute savings per line: retailPrice − catalogPrice
 //   4. Write the breakdown back to the order's note_attributes via orderUpdate mutation
 //
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
 
 export const action = async ({ request }) => {
@@ -35,7 +35,7 @@ export const action = async ({ request }) => {
       return new Response("Bypass failed: No session", { status: 500 });
     }
 
-    const { admin: offlineAdmin } = await authenticate.admin(session);
+    const { admin: offlineAdmin } = await unauthenticated.admin(session.shop);
     admin = offlineAdmin;
   } else {
     // ── Standard Webhook Authentication ──────────────────────────────────────
