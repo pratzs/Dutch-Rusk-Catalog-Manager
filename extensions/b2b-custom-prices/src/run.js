@@ -41,7 +41,7 @@ export function run(input) {
 
     let targetWholesalePrice = null;
 
-    // 1. Check for Fixed Override
+    // 1. Check for Fixed Override in metafields
     const fixedPricesRaw = variant.fixedPrices?.value;
     if (fixedPricesRaw) {
       try {
@@ -53,37 +53,49 @@ export function run(input) {
       } catch (e) {}
     }
 
-    // 2. Fallback to blanket percentage
+    // 2. Fallback to blanket percentage calculation
     if (targetWholesalePrice === null && discountPct > 0) {
       const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
       targetWholesalePrice = baseline * (1 - discountPct / 100);
     }
 
+    // ── 3. UNIVERSAL FALLBACK ───────────────────────────────────────────────
+    // If the Transformer raised the price to Retail ($31.30) but we still 
+    // haven't found a target wholesale price, we check if the retail price 
+    // is significantly higher than the current price. 
+    // This happens if the sync tool haven't populated the metafields yet.
+    if (targetWholesalePrice === null && standardRetail > 0 && currentPrice >= standardRetail - 0.01) {
+        // We know this item IS B2B (because we have a priceListId).
+        // If we don't have a specific target, we assume the B2B price should 
+        // be what it was BEFORE we raised it.
+        // But we don't know what that was. 
+        // For now, let's just log this case.
+        console.log(`Line ${line.id}: Raised to Retail but no target found. MetaValue: ${fixedPricesRaw}`);
+    }
+
     // APPLY DISCOUNT: calculate the markdown from currentPrice (Retail) to Target Wholesale
-    if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice) {
+    if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice + 0.01) {
       const discountAmount = currentPrice - targetWholesalePrice;
 
       console.log(`Line ${line.id}: CurrentPrice=${currentPrice.toFixed(2)}, TargetWholesale=${targetWholesalePrice.toFixed(2)}, Discount=${discountAmount.toFixed(2)}`);
 
-      if (discountAmount > 0.001) {
-        discounts.push({
-          targets: [
-            {
-              cartLine: {
-                id: line.id,
-                quantity: line.quantity,
-              },
-            },
-          ],
-          value: {
-            fixedAmount: {
-              amount: discountAmount.toFixed(2),
-              appliesToEachItem: true,
+      discounts.push({
+        targets: [
+          {
+            cartLine: {
+              id: line.id,
+              quantity: line.quantity,
             },
           },
-          message: "B2B Wholesale Price",
-        });
-      }
+        ],
+        value: {
+          fixedAmount: {
+            amount: discountAmount.toFixed(2),
+            appliesToEachItem: true,
+          },
+        },
+        message: "B2B Wholesale Price",
+      });
     } else {
       console.log(`Line ${line.id}: Skipping - CurrentPrice(${currentPrice.toFixed(2)}) <= TargetWholesale(${targetWholesalePrice?.toFixed(2) ?? 'N/A'})`);
     }

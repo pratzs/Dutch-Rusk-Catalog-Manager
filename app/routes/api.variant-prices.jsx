@@ -1,7 +1,7 @@
-import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
+// app/routes/api.variant-prices.jsx
 
 export async function loader({ request }) {
+  const { authenticate } = await import("../shopify.server");
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
   const priceListId = url.searchParams.get("id");

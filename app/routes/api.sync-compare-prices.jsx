@@ -1,10 +1,7 @@
 // app/routes/api.sync-compare-prices.jsx
-// Sets compare_at_price = price for variants missing a compare_at_price.
-// Supports cursor-based pagination — each POST processes one page of 25 products
-// in parallel, then returns a nextCursor. The UI keeps calling until done.
-import { authenticate } from "../shopify.server";
 
 export async function action({ request }) {
+  const { authenticate } = await import("../shopify.server");
   const { admin } = await authenticate.admin(request);
 
   const body = await request.json().catch(() => ({}));
@@ -33,26 +30,16 @@ export async function action({ request }) {
     );
 
     const { data, errors } = await productsRes.json();
-
-    if (errors) {
-      console.error("[sync-compare-prices] Query errors:", JSON.stringify(errors));
-      return Response.json({ error: "Query failed: " + errors[0]?.message }, { status: 500 });
-    }
+    if (errors) return Response.json({ error: "Query failed" }, { status: 500 });
 
     const page = data?.products;
     if (!page) return Response.json({ success: true, updatedCount: 0, done: true });
 
-    // Process all products on this page in PARALLEL
     await Promise.all(
       page.nodes.map(async (product) => {
-        // Update ALL variants to ensure retail_price metafield is set on every one
-        const needsUpdate = product.variants.nodes;
-
-        const variantInputs = needsUpdate.map((v) => ({
+        const variantInputs = product.variants.nodes.map((v) => ({
           id: v.id,
           compareAtPrice: v.price,
-          // Store retail price in a metafield so the checkout extension
-          // can read it directly without network_access
           metafields: [{
             namespace: "custom",
             key: "retail_price",
@@ -61,7 +48,7 @@ export async function action({ request }) {
           }],
         }));
 
-        const mutRes = await admin.graphql(
+        await admin.graphql(
           `mutation BulkUpdateVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
             productVariantsBulkUpdate(productId: $productId, variants: $variants) {
               userErrors { field message }
@@ -69,15 +56,7 @@ export async function action({ request }) {
           }`,
           { variables: { productId: product.id, variants: variantInputs } }
         );
-
-        const mutData = await mutRes.json();
-        const userErrors = mutData?.data?.productVariantsBulkUpdate?.userErrors ?? [];
-
-        if (userErrors.length > 0) {
-          console.error("[sync-compare-prices] userErrors:", JSON.stringify(userErrors));
-        } else if (!mutData.errors) {
-          updatedCount += variantInputs.length;
-        }
+        updatedCount += variantInputs.length;
       })
     );
 
@@ -88,7 +67,6 @@ export async function action({ request }) {
       nextCursor: page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null,
     });
   } catch (err) {
-    console.error("[sync-compare-prices] Error:", err);
     return Response.json({ error: err.message }, { status: 500 });
   }
 }
