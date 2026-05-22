@@ -107,6 +107,7 @@ export const action = async ({ request }) => {
         variantMap[numId] = node;
       }
     }
+    console.log("[orders/create] Resolved variantMap:", JSON.stringify(variantMap, null, 2));
 
     // ── Step 2: Calculate savings and prepare data ───────────────────────────
     const fmt = (n) => `$${Math.abs(n).toFixed(2)}`;
@@ -118,7 +119,10 @@ export const action = async ({ request }) => {
       if (!li.variant_id) continue;
 
       const variant = variantMap[String(li.variant_id)];
-      if (!variant) continue;
+      if (!variant) {
+        console.warn(`[orders/create] Variant ${li.variant_id} not found in Shopify node lookup`);
+        continue;
+      }
 
       // Prioritize the synced standard_retail_price metafield
       const retailPrice = parseFloat(
@@ -127,8 +131,13 @@ export const action = async ({ request }) => {
       const paidPrice = parseFloat(li.price ?? "0");
       const qty = parseInt(li.quantity ?? 1, 10);
 
+      console.log(`[orders/create] Comparing prices for line ${li.id}: Retail=${retailPrice}, Paid=${paidPrice}, Qty=${qty}`);
+
       // Only note a discount if the customer actually paid less than retail
-      if (retailPrice <= paidPrice || retailPrice <= 0 || paidPrice <= 0) continue;
+      if (retailPrice <= paidPrice || retailPrice <= 0 || paidPrice <= 0) {
+        console.log(`[orders/create] Skipping line ${li.id}: No discount detected (Retail <= Paid)`);
+        continue;
+      }
 
       const savingPerUnit = retailPrice - paidPrice;
       const discountPct = ((savingPerUnit / retailPrice) * 100).toFixed(1);
