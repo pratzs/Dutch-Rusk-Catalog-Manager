@@ -4,11 +4,21 @@
 // Triggers a lightweight 'companyOnly' sync to ensure B2B account
 // metafields are always current.
 
+// Keep track of the last time we triggered a sync to avoid storming
+let lastTriggeredAt = 0;
+
 export const action = async ({ request }) => {
   const { authenticate } = await import("../shopify.server");
   const { topic, session } = await authenticate.webhook(request);
 
   console.log(`[webhooks/companies_sync] Received ${topic} for ${session?.shop}`);
+
+  const now = Date.now();
+  if (now - lastTriggeredAt < 10000) {
+    console.log(`[webhooks/companies_sync] Recently triggered (last: ${now - lastTriggeredAt}ms ago). Skipping to avoid storm.`);
+    return new Response("OK", { status: 200 });
+  }
+  lastTriggeredAt = now;
 
   try {
     const cronSecret = process.env.CRON_SECRET ?? "internal";

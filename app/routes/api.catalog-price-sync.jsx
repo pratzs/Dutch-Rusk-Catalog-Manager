@@ -80,9 +80,29 @@ async function runSync(admin, shop, options = {}) {
   const log = (...args) => console.log("[catalog-sync]", ...args);
   const { default: prisma } = await import("../db.server");
 
-  log(`Starting sync | CompanyOnly: ${companyOnly} | Force: ${forceAll}`);
+  // ── 0. Concurrency Lock ──────────────────────────────────────────────────
+  // Check if a sync is already running for this shop
+  const lastSync = await prisma.catalogSyncState.findFirst({
+    where: { shop, priceListId: "GLOBAL_LOCK" }
+  });
 
-  const priceLists = await fetchAllPriceLists(admin);
+  const now = Date.now();
+  if (lastSync && now - lastSync.lastSyncedAt.getTime() < 5 * 60 * 1000) {
+    log("Sync already in progress (locked). Skipping.");
+    return { success: false, message: "Sync already in progress. Please wait a few minutes." };
+  }
+
+  // Set the lock
+  await prisma.catalogSyncState.upsert({
+    where: { shop_priceListId: { shop, priceListId: "GLOBAL_LOCK" } },
+    create: { shop, priceListId: "GLOBAL_LOCK", lastSyncedAt: new Date() },
+    update: { lastSyncedAt: new Date() }
+  });
+
+  try {
+    log(`Starting sync | CompanyOnly: ${companyOnly} | Force: ${forceAll}`);
+
+    const priceLists = await fetchAllPriceLists(admin);
   const dbStates = await prisma.catalogSyncState.findMany({ where: { shop } });
   const dbMap = Object.fromEntries(dbStates.map((s) => [s.priceListId, s]));
 
@@ -179,6 +199,13 @@ async function runSync(admin, shop, options = {}) {
     }
   }
   if (companyMetafields.length > 0) await metafieldsSet(admin, companyMetafields);
+
+  } finally {
+    // Release the lock
+    await prisma.catalogSyncState.deleteMany({
+      where: { shop, priceListId: "GLOBAL_LOCK" }
+    });
+  }
 
   log("Sync complete.");
   return { success: true, updatedCompanies, updatedVariants };
