@@ -75,10 +75,17 @@ export async function action({ request }) {
     return { success: true, discountId: data.data.discountCreate.automaticAppDiscount.discountId };
   } catch (err) {
     console.error("Discount Activation Exception:", err);
+    
+    // Log detailed GraphQL errors if available (from shopify-api client)
+    if (err.graphQLErrors) {
+      console.error("GraphQL Schema/Validation Errors:", JSON.stringify(err.graphQLErrors, null, 2));
+      return { error: `GraphQL Error: ${err.graphQLErrors.map(e => e.message).join(", ")}` };
+    }
+
     if (err.response) {
       const errorData = await err.response.json().catch(() => ({}));
-      console.error("Full GraphQL Error Response:", JSON.stringify(errorData, null, 2));
-      return { error: `GraphQL Error: ${JSON.stringify(errorData.errors || "Unknown error")}` };
+      console.error("Full HTTP Error Response:", JSON.stringify(errorData, null, 2));
+      return { error: `HTTP Error: ${JSON.stringify(errorData.errors || "Unknown error")}` };
     }
     return { error: `Activation Failed: ${err.message}` };
   }
