@@ -3,17 +3,10 @@
 // Fires on every new order. For B2B catalog orders where the customer pays a
 // discounted catalog price, Shopify records NO discount_allocations — the lower
 // price is simply baked in silently. This webhook enriches the order with
-// explicit discount note_attributes so:
-//   • The Shopify Admin order page shows the savings under "Additional Details"
-//   • Any ERP (Ostendo, Odoo, etc.) reading the order via API sees the discount data
+// explicit discount note_attributes and forcing native admin strikethroughs.
 //
-// How it works:
-//   1. Receive order payload (REST format from Shopify webhook)
-//   2. For every line item that has a variant, fetch the variant's compareAtPrice
-//      (which equals the retail price — set by the "Sync Compare-At Prices" tool)
-//   3. Compute savings per line: retailPrice − catalogPrice
-//   4. Write the breakdown back to the order's note_attributes via orderUpdate mutation
-//
+import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
 
 export const action = async ({ request }) => {
   const { authenticate, unauthenticated } = await import("../shopify.server");
@@ -164,7 +157,125 @@ export const action = async ({ request }) => {
 
     const orderId = `gid://shopify/Order/${order.id}`;
 
-    // ── Step 3: Update Order with note attributes ───────────────────────────
+    // ── Step 4: Trigger explicit orderEdit mutation flow ────────────────────
+    const editBeginRes = await admin.graphql(
+      `mutation BeginOrderEdit($id: ID!) {
+        orderEditBegin(id: $id) {
+          calculatedOrder {
+            id
+            lineItems(first: 50) {
+              nodes {
+                id
+                variant { id }
+              }
+            }
+          }
+          userErrors { field message }
+        }
+      }`,
+      { variables: { id: orderId } }
+    );
+
+    const editBeginData = await editBeginRes.json();
+    const editId = editBeginData?.data?.orderEditBegin?.calculatedOrder?.id;
+    const calcLines = editBeginData?.data?.orderEditBegin?.calculatedOrder?.lineItems?.nodes ?? [];
+
+    if (editId) {
+      for (const li of lineItems) {
+        if (!li.variant_id) continue;
+        const vGid = `gid://shopify/ProductVariant/${li.variant_id}`;
+        const calcLi = calcLines.find(cl => cl.variant?.id === vGid);
+        const variant = variantMap[String(li.variant_id)];
+
+        if (calcLi && variant) {
+          const retailPrice = parseFloat(variant.standardRetail?.value ?? variant.compareAtPrice ?? variant.price ?? "0");
+          const paidPrice = parseFloat(li.price ?? "0");
+          const qty = parseInt(li.quantity ?? 1, 10);
+
+          if (retailPrice > paidPrice) {
+            console.log(`[orders/create] #${order.order_number}: Swapping line ${li.id} to force native strikethrough...`);
+
+            // 1. Remove the old line item (set quantity to 0)
+            await admin.graphql(
+              `mutation RemoveOldLine($id: ID!, $lineItemId: ID!) {
+                orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: 0) {
+                  userErrors { field message }
+                }
+              }`,
+              { variables: { id: editId, lineItemId: calcLi.id } }
+            );
+
+            // 2. Add the same variant back
+            const addRes = await admin.graphql(
+              `mutation AddNewLine($id: ID!, $variantId: ID!, $quantity: Int!) {
+                orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity) {
+                  calculatedLineItem { id }
+                  userErrors { field message }
+                }
+              }`,
+              { variables: { id: editId, variantId: vGid, quantity: qty } }
+            );
+            const addData = await addRes.json();
+            const newLineId = addData?.data?.orderEditAddVariant?.calculatedLineItem?.id;
+
+            if (newLineId) {
+              // 3. Apply the catalog discount markdown to the NEW line
+              const amount = (retailPrice - paidPrice).toFixed(2);
+              await admin.graphql(
+                `mutation AddDiscountToNewLine($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
+                  orderEditAddLineItemDiscount(id: $id, lineItemId: $lineItemId, discount: $discount) {
+                    userErrors { field message }
+                  }
+                }`,
+                {
+                  variables: {
+                    id: editId,
+                    lineItemId: newLineId,
+                    discount: {
+                      fixedValue: { amount: String(amount), currencyCode: "NZD" },
+                      description: "Wholesale Catalog Discount"
+                    }
+                  }
+                }
+              );
+
+              // 4. Record retail baseline as a visual property on the NEW line
+              const existingProps = (li.properties ?? []).filter(p => p.name !== "Retail Price");
+              await admin.graphql(
+                `mutation SetNewLineProperties($id: ID!, $lineItemId: ID!, $input: OrderEditUpdateLineItemInput!) {
+                  orderEditUpdateLineItem(id: $id, input: $input) {
+                    userErrors { field message }
+                  }
+                }`,
+                {
+                  variables: {
+                    id: newLineId,
+                    input: {
+                      customAttributes: [
+                        ...existingProps.map(p => ({ key: p.name, value: String(p.value) })),
+                        { key: "Retail Price", value: fmt(retailPrice) }
+                      ]
+                    }
+                  }
+                }
+              );
+            }
+          }
+        }
+      }
+
+      // Commit the edit
+      await admin.graphql(
+        `mutation CommitOrderEdit($id: ID!) {
+          orderEditCommit(id: $id, notifyCustomer: false, staffNote: "Wholesale Catalog Discount Swap") {
+            userErrors { field message }
+          }
+        }`,
+        { variables: { id: editId } }
+      );
+    }
+
+    // ── Step 5: Update Order with note attributes ───────────────────────────
     const totalSaved = totalRetailValue - totalPaidValue;
     const overallPct = totalRetailValue > 0 ? ((totalSaved / totalRetailValue) * 100).toFixed(1) : "0.0";
 
@@ -176,7 +287,7 @@ export const action = async ({ request }) => {
     const existingNotes = (order.note_attributes ?? []).filter((n) => !String(n.name).startsWith("B2B "));
     const mergedNotes = [...existingNotes, ...discountNotes];
 
-    const updateRes = await admin.graphql(
+    await admin.graphql(
       `mutation UpdateOrderNotes($input: OrderInput!) {
         orderUpdate(input: $input) {
           order { id name }
@@ -196,15 +307,9 @@ export const action = async ({ request }) => {
       }
     );
 
-    const updateData = await updateRes.json();
-    const userErrors = updateData?.data?.orderUpdate?.userErrors ?? [];
-
-    if (userErrors.length > 0) {
-      console.error(`[orders/create] update errors for order ${order.id}:`, JSON.stringify(userErrors));
-    } else {
-      const orderName = updateData?.data?.orderUpdate?.order?.name ?? `#${order.order_number}`;
-      console.log(`[orders/create] ${orderName}: labeled order with ${discountNotes.length} B2B discount note(s).`);
-    }
+    const orderName = `#${order.order_number}`;
+    console.log(`[orders/create] ${orderName}: swapped lines for native strikethrough and wrote ${discountNotes.length} note(s).`);
+    
   } catch (err) {
     // Log but always return 200 — a non-200 causes Shopify to retry 19 times
     console.error(`[orders/create] Unhandled error for order ${order?.id}:`, err);
