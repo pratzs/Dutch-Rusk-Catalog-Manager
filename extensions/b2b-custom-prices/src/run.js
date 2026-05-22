@@ -27,6 +27,8 @@ export function run(input) {
     return EMPTY_DISCOUNT;
   }
 
+  console.log(`[b2b-custom-prices] Run for List: ${priceListId} | Blanket: ${discountPct}%`);
+
   const discounts = [];
 
   for (const line of input.cart.lines) {
@@ -51,7 +53,7 @@ export function run(input) {
       } catch (e) {}
     }
 
-    // 2. Fallback to Blanket Percentage
+    // 2. Fallback to blanket percentage
     if (targetWholesalePrice === null && discountPct > 0) {
       const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
       targetWholesalePrice = baseline * (1 - discountPct / 100);
@@ -60,6 +62,8 @@ export function run(input) {
     // APPLY DISCOUNT: calculate the markdown from currentPrice (Retail) to Target Wholesale
     if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice) {
       const discountAmount = currentPrice - targetWholesalePrice;
+
+      console.log(`Line ${line.id}: CurrentPrice=${currentPrice.toFixed(2)}, TargetWholesale=${targetWholesalePrice.toFixed(2)}, Discount=${discountAmount.toFixed(2)}`);
 
       if (discountAmount > 0.001) {
         discounts.push({
@@ -80,6 +84,8 @@ export function run(input) {
           message: "B2B Wholesale Price",
         });
       }
+    } else {
+      console.log(`Line ${line.id}: Skipping - CurrentPrice(${currentPrice.toFixed(2)}) <= TargetWholesale(${targetWholesalePrice?.toFixed(2) ?? 'N/A'})`);
     }
   }
 

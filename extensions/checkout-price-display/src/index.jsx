@@ -25,6 +25,12 @@ function CartLineSavings() {
   // Reads the custom.retail_price metafield set on the variant by the sync tool
   const appMetafields = useAppMetafields();
 
+  console.log("[checkout-ui] Processing line:", line.id, {
+    cost: line.cost,
+    metafields: appMetafields,
+    quantity: line.quantity
+  });
+
   // For B2B Net 30 orders amountPerQuantity may be 0 (due today = $0).
   // Fall back to totalAmount / quantity which always reflects the real catalog price.
   const rawPerQty = parseFloat(line?.cost?.amountPerQuantity?.amount ?? '0');
@@ -40,6 +46,8 @@ function CartLineSavings() {
     (m) => m.metafield?.namespace === 'custom' && m.metafield?.key === 'standard_retail_price'
   );
   const metafieldPrice = retailMeta ? parseFloat(retailMeta.metafield.value) : null;
+
+  console.log(`[checkout-ui] Line ${line.id}: CurrentPrice=${currentPrice}, MetafieldPrice=${metafieldPrice}`);
 
   // Source 2: compareAtAmountPerQuantity (native Shopify, works if compare_at > price)
   const compareAtMoney = line?.cost?.compareAtAmountPerQuantity;
