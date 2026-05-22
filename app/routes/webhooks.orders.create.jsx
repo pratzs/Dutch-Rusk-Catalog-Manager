@@ -18,7 +18,7 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
 export const action = async ({ request }) => {
-  const hmacHeader = request.headers.get("X-Shopify-Hmac-Sha256");
+  const hmacHeader = request.headers.get("x-shopify-hmac-sha256") || request.headers.get("X-Shopify-Hmac-Sha256");
   let topic, admin, payload;
 
   if (hmacHeader === "SimulatedAdminBypassVerificationHash=") {
