@@ -40,7 +40,7 @@ export async function action({ request }) {
     mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
       discountCreate: discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
         automaticAppDiscount {
-          id
+          discountId
         }
         userErrors {
           field
@@ -69,7 +69,7 @@ export async function action({ request }) {
     return { error: "An unexpected GraphQL error occurred." };
   }
 
-  return { success: true, discountId: data.data.discountCreate.automaticAppDiscount.id };
+  return { success: true, discountId: data.data.discountCreate.automaticAppDiscount.discountId };
 }
 
 export default function ActivatePricing() {
