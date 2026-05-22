@@ -200,10 +200,10 @@ export const action = async ({ request }) => {
           const paidPrice = parseFloat(li.price ?? "0");
 
           if (retailPrice > paidPrice) {
-            // 1. Reset baseline price to retail total
-            console.log(`[orders/create] #${order.order_number}: Resetting baseline price to retail total...`);
-            await admin.graphql(
-              `mutation ResetLineItemPrice($id: ID!, $lineItemId: ID!, $price: MoneyInput!) {
+            // 1. Set unit price to wholesale rate
+            console.log(`[orders/create] #${order.order_number}: Setting unit price to wholesale rate ($${paidPrice.toFixed(2)})...`);
+            const updatePriceRes = await admin.graphql(
+              `mutation UpdateLineItemPrice($id: ID!, $lineItemId: ID!, $price: MoneyInput!) {
                 orderEditUpdateLineItemPrice(id: $id, lineItemId: $lineItemId, price: $price) {
                   userErrors { field message }
                 }
@@ -213,19 +213,23 @@ export const action = async ({ request }) => {
                   id: editId,
                   lineItemId: calcLi.id,
                   price: {
-                    amount: retailPrice.toFixed(2),
+                    amount: paidPrice.toFixed(2),
                     currencyCode: "NZD"
                   }
                 }
               }
             );
+            const updatePriceData = await updatePriceRes.json();
+            const priceUserErrors = updatePriceData?.data?.orderEditUpdateLineItemPrice?.userErrors ?? [];
+            if (priceUserErrors.length > 0) {
+              console.error(`[orders/create] orderEditUpdateLineItemPrice userErrors for line ${li.id}:`, JSON.stringify(priceUserErrors));
+            }
 
-            // 2. Applying line catalog discount markdown
-            console.log(`[orders/create] #${order.order_number}: Applying line catalog discount markdown...`);
-            const amount = (retailPrice - paidPrice).toFixed(2);
-            const addDiscountRes = await admin.graphql(
-              `mutation AddLineItemDiscount($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
-                orderEditAddLineItemDiscount(id: $id, lineItemId: $lineItemId, discount: $discount) {
+            // 2. Record retail baseline as a visual property
+            console.log(`[orders/create] #${order.order_number}: Recording retail baseline as a visual property ($${retailPrice.toFixed(2)})...`);
+            const updatePropsRes = await admin.graphql(
+              `mutation UpdateLineItemProperties($id: ID!, $lineItemId: ID!, $attributes: [AttributeInput!]!) {
+                orderEditUpdateLineItem(id: $id, lineItemId: $lineItemId, customAttributes: $attributes) {
                   userErrors { field message }
                 }
               }`,
@@ -233,20 +237,16 @@ export const action = async ({ request }) => {
                 variables: {
                   id: editId,
                   lineItemId: calcLi.id,
-                  discount: {
-                    fixedValue: {
-                      amount: String(amount),
-                      currencyCode: "NZD"
-                    },
-                    description: "Wholesale Catalog Discount"
-                  }
+                  attributes: [
+                    { key: "Retail Price", value: fmt(retailPrice) }
+                  ]
                 }
               }
             );
-            const addDiscountData = await addDiscountRes.json();
-            const liUserErrors = addDiscountData?.data?.orderEditAddLineItemDiscount?.userErrors ?? [];
-            if (liUserErrors.length > 0) {
-              console.error(`[orders/create] orderEditAddLineItemDiscount userErrors for line ${li.id}:`, JSON.stringify(liUserErrors));
+            const updatePropsData = await updatePropsRes.json();
+            const propsUserErrors = updatePropsData?.data?.orderEditUpdateLineItem?.userErrors ?? [];
+            if (propsUserErrors.length > 0) {
+              console.error(`[orders/create] orderEditUpdateLineItem userErrors for line ${li.id}:`, JSON.stringify(propsUserErrors));
             }
           }
         }
