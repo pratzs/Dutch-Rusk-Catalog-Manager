@@ -13,7 +13,6 @@ async function metafieldsSet(adminOrFetch, metafields) {
     const result = await gql(adminOrFetch, `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { field message code } } }`, { metafields: batch });
     const errors = result?.data?.metafieldsSet?.userErrors ?? [];
     if (errors.length > 0) console.error("[catalog-sync] metafieldsSet errors:", JSON.stringify(errors));
-    // Small delay to avoid hitting rate limits in high-volume situations
     if (metafields.length > BATCH) await new Promise(r => setTimeout(r, 100));
   }
 }
@@ -23,7 +22,7 @@ async function fetchAllPriceLists(admin) {
   let cursor = null;
   const log = (...args) => console.log("[catalog-sync]", ...args);
   do {
-    const { data } = await gql(admin, `query GetPriceLists($cursor: String) { priceLists(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id name updatedAt parent { adjustment { type value } } } } }`, { cursor });
+    const { data } = await gql(admin, `query GetPriceLists($cursor: String) { priceLists(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id name parent { adjustment { type value } } } } }`, { cursor });
     const page = data?.priceLists;
     if (!page) break;
     lists.push(...page.nodes);
@@ -96,14 +95,13 @@ async function runSync(admin, shop, options = {}) {
     allOverridesByList[pl.id] = {};
   }
 
-  // ── 1. Variant Metafields Sync ───────────────────────────────────────────
   let updatedVariants = 0;
   if (!companyOnly) {
     const toSync = forceAll ? priceLists : priceLists.filter((pl) => {
       const db = dbMap[pl.id];
       if (!db) return true;
       const adj = allAdjustments[pl.id];
-      return db.adjustmentType !== adj.type || db.adjustmentValue !== adj.value || db.shopifyUpdatedAt !== pl.updatedAt;
+      return db.adjustmentType !== adj.type || db.adjustmentValue !== adj.value;
     });
 
     log(`${toSync.length} price list(s) need exhaustive variant sync`);
@@ -142,7 +140,6 @@ async function runSync(admin, shop, options = {}) {
       updatedVariants = metafieldsToWrite.length;
     }
 
-    // Persist list states
     for (const pl of toSync) {
       const adj = allAdjustments[pl.id];
       await prisma.catalogSyncState.upsert({
@@ -151,14 +148,12 @@ async function runSync(admin, shop, options = {}) {
           shop, 
           priceListId: pl.id, 
           priceListName: pl.name, 
-          shopifyUpdatedAt: pl.updatedAt,
           adjustmentType: adj?.type ?? "", 
           adjustmentValue: adj?.value ?? 0, 
           overriddenVariantIds: JSON.stringify([...new Set(Object.keys(allOverridesByList[pl.id] ?? {}))]) 
         },
         update: { 
           priceListName: pl.name, 
-          shopifyUpdatedAt: pl.updatedAt,
           adjustmentType: adj?.type ?? "", 
           adjustmentValue: adj?.value ?? 0, 
           overriddenVariantIds: JSON.stringify([...new Set(Object.keys(allOverridesByList[pl.id] ?? {}))]) 
@@ -167,7 +162,6 @@ async function runSync(admin, shop, options = {}) {
     }
   }
 
-  // ── 2. Company Metafields Sync ───────────────────────────────────────────
   log("Updating company mapping...");
   const catalogCompanyMap = await fetchCatalogCompanyMap(admin);
   const companyMetafields = [];
@@ -184,11 +178,9 @@ async function runSync(admin, shop, options = {}) {
       updatedCompanies++;
     }
   }
-  if (companyMetafields.length > 0) {
-    await metafieldsSet(admin, companyMetafields);
-  }
+  if (companyMetafields.length > 0) await metafieldsSet(admin, companyMetafields);
 
-  log("Sync cycle complete.");
+  log("Sync complete.");
   return { success: true, updatedCompanies, updatedVariants };
 }
 
@@ -211,11 +203,7 @@ export async function action({ request }) {
     shop = auth.session.shop;
   }
   try {
-    const result = await runSync(admin, shop, { 
-      forceAll: body.forceAll === true, 
-      variantIds: Array.isArray(body.variantIds) ? body.variantIds : null,
-      companyOnly: body.companyOnly === true
-    });
+    const result = await runSync(admin, shop, { forceAll: body.forceAll === true, variantIds: Array.isArray(body.variantIds) ? body.variantIds : null, companyOnly: body.companyOnly === true });
     return Response.json({ success: true, ...result });
   } catch (err) {
     console.error("[catalog-sync] Error:", err);
