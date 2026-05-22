@@ -71,15 +71,15 @@ function CartLineSavings() {
   return (
     <BlockStack spacing="none">
       <InlineStack spacing="tight" blockAlignment="center">
-        <Text size="small" appearance="subdued" textDecoration="line-through">
-          Retail {formatMoney(originalPerUnit, currency)}
+        <Text size="small" textDecoration="line-through">
+          {formatMoney(originalPerUnit, currency)}
         </Text>
         <Text appearance="success" size="small" emphasis="bold">
           {formatMoney(currentPrice, currency)}
         </Text>
       </InlineStack>
       <Text appearance="success" size="extraSmall">
-        B2B Savings: {formatMoney(totalSavings, currency)} total
+        Total B2B Savings: {formatMoney(totalSavings, currency)}
       </Text>
     </BlockStack>
   );

@@ -39,12 +39,12 @@ function TotalSavings() {
     currency = line.cost.amountPerQuantity?.currencyCode ?? line.cost.totalAmount?.currencyCode ?? 'NZD';
     const variantId = line.merchandise?.id;
 
-    // Source 1: metafield retail_price for this variant
+    // Source 1: metafield standard_retail_price for this variant
     const retailMeta = appMetafields?.find(
       (m) =>
         m.target?.id === variantId &&
         m.metafield?.namespace === 'custom' &&
-        m.metafield?.key === 'retail_price'
+        m.metafield?.key === 'standard_retail_price'
     );
     const metafieldPrice = retailMeta ? parseFloat(retailMeta.metafield.value) : null;
 
