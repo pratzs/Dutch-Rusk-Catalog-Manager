@@ -211,57 +211,37 @@ export const action = async ({ request }) => {
           const paidPrice = parseFloat(li.price ?? "0");
 
           if (retailPrice > paidPrice) {
-            // 1. Set unit price to wholesale rate
-            console.log(`[orders/create] #${order.order_number}: Setting unit price to wholesale rate ($${paidPrice.toFixed(2)})...`);
-            const updatePriceRes = await admin.graphql(
-              `mutation UpdateLineItemPrice($id: ID!, $lineItemId: ID!, $price: MoneyInput!) {
-                orderEditUpdateLineItemPrice(id: $id, lineItemId: $lineItemId, price: $price) {
+            // Use the unified 2025-10 orderEditUpdateLineItem mutation to set both price and properties
+            console.log(`[orders/create] #${order.order_number}: Updating line ${li.id} (Price=$${paidPrice.toFixed(2)}, Retail=$${retailPrice.toFixed(2)})`);
+            
+            const existingProps = (li.properties ?? []).filter(p => p.name !== "Retail Price");
+            const updateRes = await admin.graphql(
+              `mutation UpdateLineItem($calculatedOrderId: ID!, $lineItemId: ID!, $input: OrderEditUpdateLineItemInput!) {
+                orderEditUpdateLineItem(calculatedOrderId: $calculatedOrderId, lineItemId: $lineItemId, input: $input) {
                   userErrors { field message }
                 }
               }`,
               {
                 variables: {
-                  id: editId,
+                  calculatedOrderId: editId,
                   lineItemId: calcLi.id,
-                  price: {
-                    amount: paidPrice.toFixed(2),
-                    currencyCode: "NZD"
+                  input: {
+                    price: paidPrice.toFixed(2),
+                    customAttributes: [
+                      ...existingProps.map(p => ({ key: p.name, value: String(p.value) })),
+                      { key: "Retail Price", value: fmt(retailPrice) }
+                    ]
                   }
                 }
               }
             );
-            const updatePriceData = await updatePriceRes.json();
-            console.log(`[orders/create] #${order.order_number} UpdatePrice raw response:`, JSON.stringify(updatePriceData, null, 2));
+            
+            const updateData = await updateRes.json();
+            console.log(`[orders/create] #${order.order_number} UpdateLineItem raw response:`, JSON.stringify(updateData, null, 2));
 
-            const priceUserErrors = updatePriceData?.data?.orderEditUpdateLineItemPrice?.userErrors ?? [];
-            if (priceUserErrors.length > 0) {
-              console.error(`[orders/create] orderEditUpdateLineItemPrice userErrors for line ${li.id}:`, JSON.stringify(priceUserErrors));
-            }
-
-            // 2. Record retail baseline as a visual property
-            console.log(`[orders/create] #${order.order_number}: Recording retail baseline as a visual property ($${retailPrice.toFixed(2)})...`);
-            const updatePropsRes = await admin.graphql(
-              `mutation UpdateLineItemProperties($id: ID!, $lineItemId: ID!, $attributes: [AttributeInput!]!) {
-                orderEditUpdateLineItem(id: $id, lineItemId: $lineItemId, customAttributes: $attributes) {
-                  userErrors { field message }
-                }
-              }`,
-              {
-                variables: {
-                  id: editId,
-                  lineItemId: calcLi.id,
-                  attributes: [
-                    { key: "Retail Price", value: fmt(retailPrice) }
-                  ]
-                }
-              }
-            );
-            const updatePropsData = await updatePropsRes.json();
-            console.log(`[orders/create] #${order.order_number} UpdateProps raw response:`, JSON.stringify(updatePropsData, null, 2));
-
-            const propsUserErrors = updatePropsData?.data?.orderEditUpdateLineItem?.userErrors ?? [];
-            if (propsUserErrors.length > 0) {
-              console.error(`[orders/create] orderEditUpdateLineItem userErrors for line ${li.id}:`, JSON.stringify(propsUserErrors));
+            const userErrors = updateData?.data?.orderEditUpdateLineItem?.userErrors ?? [];
+            if (userErrors.length > 0) {
+              console.error(`[orders/create] orderEditUpdateLineItem userErrors for line ${li.id}:`, JSON.stringify(userErrors));
             }
           }
         }
