@@ -14,10 +14,11 @@
 //   3. Compute savings per line: retailPrice − catalogPrice
 //   4. Write the breakdown back to the order's note_attributes via orderUpdate mutation
 //
-import { authenticate, unauthenticated } from "../shopify.server";
-import prisma from "../db.server";
 
 export const action = async ({ request }) => {
+  const { authenticate, unauthenticated } = await import("../shopify.server");
+  const { default: prisma } = await import("../db.server");
+
   const hmacHeader = request.headers.get("x-shopify-hmac-sha256") || request.headers.get("X-Shopify-Hmac-Sha256");
   let topic, admin, payload;
 
