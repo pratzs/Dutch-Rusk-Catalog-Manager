@@ -7,50 +7,10 @@
 //
 
 export const action = async ({ request }) => {
-  const { authenticate, unauthenticated } = await import("../shopify.server");
-  const { default: prisma } = await import("../db.server");
-
-  const hmacHeader = request.headers.get("x-shopify-hmac-sha256") || request.headers.get("X-Shopify-Hmac-Sha256");
-  let topic, admin, payload;
-
-  if (hmacHeader === "SimulatedAdminBypassVerificationHash=") {
-    // ── Safe Security Bypass for Controlled Terminal Simulation ──────────────
-    console.log("[orders/create] TEST-BYPASS: Executing simulated webhook request");
-    topic = "ORDERS_CREATE";
-    payload = await request.json();
-
-    const session = await prisma.session.findFirst({
-      where: { shop: "dutchrusk.myshopify.com", isOnline: false },
-    });
-    
-    if (!session) {
-      return new Response("Bypass failed: No session", { status: 500 });
-    }
-
-    // Use a manual fetch shim to avoid Shopify SDK request-context checks
-    admin = {
-      graphql: async (query, { variables } = {}) => {
-        const r = await fetch(
-          `https://${session.shop}/admin/api/2025-10/graphql.json`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Shopify-Access-Token": session.accessToken,
-            },
-            body: JSON.stringify({ query, variables }),
-          }
-        );
-        return { json: () => r.json() };
-      },
-    };
-  } else {
-    // ── Standard Webhook Authentication ──────────────────────────────────────
-    const auth = await authenticate.webhook(request);
-    topic = auth.topic;
-    admin = auth.admin;
-    payload = auth.payload;
-  }
+  const { authenticate } = await import("../shopify.server");
+  
+  // ── Standard Webhook Authentication ──────────────────────────────────────
+  const { topic, admin, payload } = await authenticate.webhook(request);
 
   if (topic !== "ORDERS_CREATE") {
     return new Response("Unhandled topic", { status: 200 });
