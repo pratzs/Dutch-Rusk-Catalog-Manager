@@ -37,7 +37,7 @@ export async function action({ request }) {
   // ── Step 2: Create the Cart Transform ──────────────────────────────────────
   try {
     const response = await admin.graphql(`
-      mutation cartTransformCreate($functionId: ID!) {
+      mutation cartTransformCreate($functionId: String!) {
         cartTransformCreate(functionId: $functionId) {
           cartTransform {
             id
