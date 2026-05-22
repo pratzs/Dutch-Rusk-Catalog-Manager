@@ -4,13 +4,14 @@ import { authenticate } from "../shopify.server";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
-  // ── Step 1: Query for the b2b-custom-prices function ID ────────────────────
+  // ── Step 1: Query for the b2b-custom-prices function details ──────────────
   const response = await admin.graphql(`
     query {
       shopifyFunctions(first: 50) {
         nodes {
           id
           title
+          handle
           apiType
         }
       }
@@ -23,19 +24,19 @@ export async function loader({ request }) {
   // Find our specific function by title
   const targetFunction = functions.find(f => f.title === "b2b-custom-prices");
 
-  return { functionId: targetFunction?.id ?? null };
+  return { functionHandle: targetFunction?.handle ?? null };
 }
 
 export async function action({ request }) {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
-  const functionId = formData.get("functionId");
+  const functionHandle = formData.get("functionHandle");
 
-  if (!functionId) {
-    return { error: "Function ID not found. Ensure the extension is deployed." };
+  if (!functionHandle) {
+    return { error: "Function Handle not found. Ensure the extension is deployed." };
   }
 
-  // ── Step 2: Create the Automatic Discount ──────────────────────────────────
+  // ── Step 2: Create the Automatic Discount (using functionHandle + discountClasses) ─
   const response = await admin.graphql(`
     mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
       discountCreate: discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
@@ -52,7 +53,8 @@ export async function action({ request }) {
     variables: {
       automaticAppDiscount: {
         title: "B2B Wholesale Custom Pricing",
-        functionId,
+        functionHandle,
+        discountClasses: ["PRODUCT"],
         startsAt: new Date().toISOString(),
       }
     }
@@ -62,7 +64,7 @@ export async function action({ request }) {
   const userErrors = data.data?.discountCreate?.userErrors ?? [];
 
   if (data.errors || userErrors.length > 0) {
-    console.log("Full GraphQL Response Errors:", JSON.stringify(data.errors || data.data.discountCreate.userErrors, null, 2));
+    console.log("Full GraphQL Response Errors:", JSON.stringify(data.errors || data.data?.discountCreate?.userErrors, null, 2));
     if (userErrors.length > 0) {
       return { error: userErrors.map(e => e.message).join(", ") };
     }
@@ -73,7 +75,7 @@ export async function action({ request }) {
 }
 
 export default function ActivatePricing() {
-  const { functionId } = useLoaderData();
+  const { functionHandle } = useLoaderData();
   const actionData = useActionData();
 
   return (
@@ -88,7 +90,7 @@ export default function ActivatePricing() {
                 This will enable specialized wholesale pricing for your B2B customers based on your catalog overrides.
               </s-text>
 
-              {!functionId ? (
+              {!functionHandle ? (
                 <s-box padding="base" background="bg-critical" borderRadius="base">
                   <s-text color="critical">
                     Error: The "b2b-custom-prices" extension was not found. Please ensure it has been deployed using "shopify app deploy".
@@ -96,7 +98,7 @@ export default function ActivatePricing() {
                 </s-box>
               ) : (
                 <Form method="post">
-                  <input type="hidden" name="functionId" value={functionId} />
+                  <input type="hidden" name="functionHandle" value={functionHandle} />
                   <s-button variant="primary" type="submit">
                     Activate B2B Pricing Function
                   </s-button>
