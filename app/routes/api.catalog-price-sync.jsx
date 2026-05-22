@@ -51,7 +51,7 @@ async function fetchCatalogAdjustmentMap(admin) {
   const map = {};
   let cursor = null;
   do {
-    const { data } = await gql(admin, `query GetCatalogs($cursor: String) { catalogs(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { priceList { id } ... on CompanyLocationCatalog { adjustment { type value } } ... on MarketCatalog { adjustment { type value } } } } }`, { cursor });
+    const { data } = await gql(admin, `query GetCatalogs($cursor: String) { catalogs(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { priceList { id } ... on MarketCatalog { adjustment { type value } } } } }`, { cursor });
     const page = data?.catalogs;
     if (!page) break;
     for (const cat of page.nodes) {
