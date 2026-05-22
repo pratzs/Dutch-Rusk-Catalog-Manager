@@ -21,8 +21,11 @@ export function run(input) {
   const priceListId = input.cart.buyerIdentity?.purchasingCompany?.company?.metafield?.value;
 
   if (!priceListId) {
+    console.log("No priceListId found on company, skipping transformation.");
     return NO_CHANGES;
   }
+
+  console.log(`Processing transformation for priceListId: ${priceListId}`);
 
   const operations = [];
 
@@ -38,6 +41,7 @@ export function run(input) {
     // 4. Parse the custom.catalog_fixed_prices metafield
     const fixedPricesRaw = variant.metafield?.value;
     if (!fixedPricesRaw) {
+      console.log(`No fixed prices found for variant: ${variant.id}`);
       continue;
     }
 
@@ -54,6 +58,8 @@ export function run(input) {
         // Final transaction price is our overridePrice
         const retailBaseline = (standardRetail > overridePrice) ? standardRetail : catalogPrice;
 
+        console.log(`Applying override to line ${line.id}: Price=${overridePrice.toFixed(2)}, CompareAt=${retailBaseline.toFixed(2)} (StandardRetail=${standardRetail})`);
+
         operations.push({
           update: {
             cartLineId: line.id,
@@ -65,11 +71,14 @@ export function run(input) {
             },
           },
         });
+      } else {
+        console.log(`No override for variant ${variant.id} in list ${priceListId}`);
       }
     } catch (e) {
       console.error("Error processing line transformation:", line.id, e);
     }
   }
 
+  console.log(`Total transformation operations: ${operations.length}`);
   return { operations };
 };
