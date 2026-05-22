@@ -38,9 +38,9 @@ export async function action({ request }) {
   // ── Step 2: Create the Automatic Discount ──────────────────────────────────
   const response = await admin.graphql(`
     mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
-      discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
+      discountCreate: discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
         automaticAppDiscount {
-          discountId
+          id
         }
         userErrors {
           field
@@ -59,13 +59,13 @@ export async function action({ request }) {
   });
 
   const data = await response.json();
-  const userErrors = data.data.discountAutomaticAppCreate.userErrors;
+  const userErrors = data.data.discountCreate.userErrors;
 
   if (userErrors.length > 0) {
     return { error: userErrors.map(e => e.message).join(", ") };
   }
 
-  return { success: true, discountId: data.data.discountAutomaticAppCreate.automaticAppDiscount.discountId };
+  return { success: true, discountId: data.data.discountCreate.automaticAppDiscount.id };
 }
 
 export default function ActivatePricing() {
