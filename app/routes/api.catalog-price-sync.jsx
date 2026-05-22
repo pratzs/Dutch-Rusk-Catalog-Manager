@@ -21,7 +21,7 @@ async function fetchAllPriceLists(admin) {
   let cursor = null;
   const log = (...args) => console.log("[catalog-sync]", ...args);
   do {
-    const { data } = await gql(admin, `query GetPriceLists($cursor: String) { priceLists(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id name parent { adjustment { type value } } } } }`, { cursor });
+    const { data } = await gql(admin, `query GetPriceLists($cursor: String) { priceLists(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id name updatedAt parent { adjustment { type value } } } } }`, { cursor });
     const page = data?.priceLists;
     if (!page) break;
     lists.push(...page.nodes);
@@ -81,7 +81,9 @@ async function runSync(admin, shop, options = {}) {
 
   log("Fetching price lists...");
   const priceLists = await fetchAllPriceLists(admin);
-  
+  const dbStates = await prisma.catalogSyncState.findMany({ where: { shop } });
+  const dbMap = Object.fromEntries(dbStates.map((s) => [s.priceListId, s]));
+
   const allOverridesByList = {}; 
   const allAdjustments = {}; 
 
@@ -91,15 +93,23 @@ async function runSync(admin, shop, options = {}) {
     allOverridesByList[pl.id] = {};
   }
 
-  log(`Exhaustively syncing ${priceLists.length} price list(s)`);
+  const toSync = forceAll ? priceLists : priceLists.filter((pl) => {
+    const db = dbMap[pl.id];
+    if (!db) return true;
+    const adj = allAdjustments[pl.id];
+    return db.adjustmentType !== adj.type || db.adjustmentValue !== adj.value || db.shopifyUpdatedAt !== pl.updatedAt;
+  });
 
-  for (const pl of priceLists) {
+  log(`${toSync.length} price list(s) need syncing`);
+  if (toSync.length === 0 && !specificVariantIds) return { updatedPriceLists: 0, updatedCompanies: 0, updatedVariants: 0, message: "Nothing changed" };
+
+  for (const pl of toSync) {
     const prices = await fetchPriceListPrices(admin, pl.id);
     for (const { variantId, price } of prices) { allOverridesByList[pl.id][variantId] = price; }
   }
 
   const affectedVariantIds = new Set();
-  for (const pl of priceLists) {
+  for (const pl of toSync) {
     for (const id of Object.keys(allOverridesByList[pl.id] ?? {})) affectedVariantIds.add(id);
   }
   if (specificVariantIds) { for (const id of specificVariantIds) affectedVariantIds.add(id); }
@@ -115,10 +125,13 @@ async function runSync(admin, shop, options = {}) {
       const standardPrice = vData?.compareAtPrice || vData?.price || "0";
       let merged = {};
       try { if (vData?.metaValue) merged = JSON.parse(vData.metaValue); } catch { merged = {}; }
-      for (const pl of priceLists) {
+      
+      // ONLY update/delete keys for lists that were actually synced in this run
+      for (const pl of toSync) {
         const price = allOverridesByList[pl.id]?.[variantId];
         if (price !== undefined) merged[pl.id] = price; else delete merged[pl.id];
       }
+      
       metafieldsToWrite.push(
         { ownerId: variantId, namespace: "custom", key: "catalog_fixed_prices", type: "json", value: JSON.stringify(merged) },
         { ownerId: variantId, namespace: "custom", key: "standard_retail_price", type: "number_decimal", value: String(standardPrice) }
@@ -143,17 +156,31 @@ async function runSync(admin, shop, options = {}) {
   }
   if (companyMetafields.length > 0) await metafieldsSet(admin, companyMetafields);
 
-  for (const pl of priceLists) {
+  for (const pl of toSync) {
     const adj = allAdjustments[pl.id];
     await prisma.catalogSyncState.upsert({
       where: { shop_priceListId: { shop, priceListId: pl.id } },
-      create: { shop, priceListId: pl.id, priceListName: pl.name, adjustmentType: adj?.type ?? "", adjustmentValue: adj?.value ?? 0, overriddenVariantIds: JSON.stringify([...new Set(Object.keys(allOverridesByList[pl.id] ?? {}))]) },
-      update: { shop, priceListId: pl.id, priceListName: pl.name, adjustmentType: adj?.type ?? "", adjustmentValue: adj?.value ?? 0, overriddenVariantIds: JSON.stringify([...new Set(Object.keys(allOverridesByList[pl.id] ?? {}))]) },
+      create: { 
+        shop, 
+        priceListId: pl.id, 
+        priceListName: pl.name, 
+        shopifyUpdatedAt: pl.updatedAt,
+        adjustmentType: adj?.type ?? "", 
+        adjustmentValue: adj?.value ?? 0, 
+        overriddenVariantIds: JSON.stringify([...new Set(Object.keys(allOverridesByList[pl.id] ?? {}))]) 
+      },
+      update: { 
+        priceListName: pl.name, 
+        shopifyUpdatedAt: pl.updatedAt,
+        adjustmentType: adj?.type ?? "", 
+        adjustmentValue: adj?.value ?? 0, 
+        overriddenVariantIds: JSON.stringify([...new Set(Object.keys(allOverridesByList[pl.id] ?? {}))]) 
+      },
     });
   }
 
-  log("Exhaustive sync complete.");
-  return { success: true, message: `Synced ${priceLists.length} price list(s)` };
+  log("Sync complete.");
+  return { success: true, message: `Synced ${toSync.length} price list(s)` };
 }
 
 export async function action({ request }) {
