@@ -15,6 +15,9 @@ query RunInput {
     lines {
       id
       quantity
+      targetB2BPrice: attribute(key: "_target_b2b_price") {
+        value
+      }
       cost {
         amountPerQuantity {
           amount
