@@ -37,41 +37,51 @@ export async function action({ request }) {
   }
 
   // ── Step 2: Create the Automatic Discount (using functionHandle + discountClasses) ─
-  const response = await admin.graphql(`
-    mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
-      discountCreate: discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
-        automaticAppDiscount {
-          discountId
-        }
-        userErrors {
-          field
-          message
+  try {
+    const response = await admin.graphql(`
+      mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
+        discountCreate: discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
+          automaticAppDiscount {
+            discountId
+          }
+          userErrors {
+            field
+            message
+          }
         }
       }
-    }
-  `, {
-    variables: {
-      automaticAppDiscount: {
-        title: "B2B Wholesale Custom Pricing",
-        functionHandle,
-        discountClasses: ["PRODUCT"],
-        startsAt: new Date().toISOString(),
+    `, {
+      variables: {
+        automaticAppDiscount: {
+          title: "B2B Wholesale Custom Pricing",
+          functionHandle,
+          discountClasses: ["PRODUCT"],
+          startsAt: new Date().toISOString(),
+        }
       }
-    }
-  });
+    });
 
-  const data = await response.json();
-  const userErrors = data.data?.discountCreate?.userErrors ?? [];
+    const data = await response.json();
+    const userErrors = data.data?.discountCreate?.userErrors ?? [];
 
-  if (data.errors || userErrors.length > 0) {
-    console.log("Full GraphQL Response Errors:", JSON.stringify(data.errors || data.data?.discountCreate?.userErrors, null, 2));
-    if (userErrors.length > 0) {
-      return { error: userErrors.map(e => e.message).join(", ") };
+    if (data.errors || userErrors.length > 0) {
+      console.log("Full GraphQL Response Errors:", JSON.stringify(data.errors || data.data?.discountCreate?.userErrors, null, 2));
+      if (userErrors.length > 0) {
+        return { error: userErrors.map(e => e.message).join(", ") };
+      }
+      return { error: "An unexpected GraphQL error occurred." };
     }
-    return { error: "An unexpected GraphQL error occurred." };
+
+    return { success: true, discountId: data.data.discountCreate.automaticAppDiscount.discountId };
+  } catch (err) {
+    console.error("Discount Activation Exception:", err);
+    if (err.response) {
+      const errorData = await err.response.json().catch(() => ({}));
+      console.error("Full GraphQL Error Response:", JSON.stringify(errorData, null, 2));
+      return { error: `GraphQL Error: ${JSON.stringify(errorData.errors || "Unknown error")}` };
+    }
+    return { error: `Activation Failed: ${err.message}` };
   }
-
-  return { success: true, discountId: data.data.discountCreate.automaticAppDiscount.discountId };
 }
 
 export default function ActivatePricing() {
