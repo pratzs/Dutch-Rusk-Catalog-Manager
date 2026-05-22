@@ -184,6 +184,28 @@ export const action = async ({ request }) => {
           const paidPrice = parseFloat(li.price ?? "0");
 
           if (retailPrice > paidPrice) {
+            // 1. Reset baseline price to retail total
+            console.log(`[orders/create] #${order.order_number}: Resetting baseline price to retail total...`);
+            await admin.graphql(
+              `mutation ResetLineItemPrice($id: ID!, $lineItemId: ID!, $price: MoneyInput!) {
+                orderEditUpdateLineItemPrice(id: $id, lineItemId: $lineItemId, price: $price) {
+                  userErrors { field message }
+                }
+              }`,
+              {
+                variables: {
+                  id: editId,
+                  lineItemId: calcLi.id,
+                  price: {
+                    amount: retailPrice.toFixed(2),
+                    currencyCode: "NZD"
+                  }
+                }
+              }
+            );
+
+            // 2. Applying line catalog discount markdown
+            console.log(`[orders/create] #${order.order_number}: Applying line catalog discount markdown...`);
             const amount = (retailPrice - paidPrice).toFixed(2);
             const addDiscountRes = await admin.graphql(
               `mutation AddLineItemDiscount($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
