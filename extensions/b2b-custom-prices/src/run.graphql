@@ -3,7 +3,10 @@ query RunInput {
     buyerIdentity {
       purchasingCompany {
         company {
-          metafield(namespace: "custom", key: "catalog_pricelist_id") {
+          priceListId: metafield(namespace: "custom", key: "catalog_pricelist_id") {
+            value
+          }
+          discountPct: metafield(namespace: "custom", key: "catalog_discount_pct") {
             value
           }
         }

@@ -19,8 +19,9 @@ const EMPTY_DISCOUNT = {
  * @returns {FunctionRunResult}
  */
 export function run(input) {
-  // 1. Extract the catalog_pricelist_id from purchasing company metafield
-  const priceListId = input.cart.buyerIdentity?.purchasingCompany?.company?.metafield?.value;
+  const company = input.cart.buyerIdentity?.purchasingCompany?.company;
+  const priceListId = company?.priceListId?.value;
+  const discountPct = parseFloat(company?.discountPct?.value ?? "0");
 
   if (!priceListId) {
     return EMPTY_DISCOUNT;
@@ -28,64 +29,60 @@ export function run(input) {
 
   const discounts = [];
 
-  // 2. Iterate through cart lines
   for (const line of input.cart.lines) {
     const variant = line.merchandise;
+    if (variant.__typename !== "ProductVariant") continue;
 
-    // 3. Check if the merchandise is a ProductVariant
-    if (variant.__typename !== "ProductVariant") {
-      continue;
-    }
+    // Current price (raised to Retail by the Transformer)
+    const currentPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
+    const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
 
-    // 4. Parse the custom.catalog_fixed_prices metafield (which is a JSON string map)
+    let targetWholesalePrice = null;
+
+    // 1. Check for Fixed Override
     const fixedPricesRaw = variant.metafield?.value;
-    if (!fixedPricesRaw) {
-      continue;
+    if (fixedPricesRaw) {
+      try {
+        const fixedPricesMap = JSON.parse(fixedPricesRaw);
+        const fixedPrice = fixedPricesMap[priceListId];
+        if (fixedPrice !== undefined && fixedPrice !== null) {
+          targetWholesalePrice = parseFloat(fixedPrice);
+        }
+      } catch (e) {}
     }
 
-    try {
-      const fixedPricesMap = JSON.parse(fixedPricesRaw);
+    // 2. Fallback to blanket percentage
+    if (targetWholesalePrice === null && discountPct > 0) {
+      const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
+      targetWholesalePrice = baseline * (1 - discountPct / 100);
+    }
 
-      // 5. Look up the catalog_pricelist_id inside that JSON map to find the fixedPrice
-      const fixedPrice = fixedPricesMap[priceListId];
+    // APPLY DISCOUNT: delta between (Retail or Current) and Target Wholesale
+    if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice) {
+      const discountAmount = currentPrice - targetWholesalePrice;
 
-      if (fixedPrice !== undefined && fixedPrice !== null) {
-        const catalogPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
-        const overridePrice = parseFloat(fixedPrice);
-        const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
-
-        // 6. Calculate the discount amount: standard retail - override price
-        // If standard retail is not found or is less than catalog price, fallback to catalog price baseline
-        const basePrice = (standardRetail > catalogPrice) ? standardRetail : catalogPrice;
-        const discountAmount = basePrice - overridePrice;
-
-        if (discountAmount > 0.001) {
-          discounts.push({
-            targets: [
-              {
-                cartLine: {
-                  id: line.id,
-                  quantity: line.quantity,
-                },
-              },
-            ],
-            value: {
-              fixedAmount: {
-                amount: discountAmount.toFixed(2),
-                appliesToEachItem: true,
+      if (discountAmount > 0.001) {
+        discounts.push({
+          targets: [
+            {
+              cartLine: {
+                id: line.id,
+                quantity: line.quantity,
               },
             },
-            message: "Wholesale Custom Price",
-          });
-        }
+          ],
+          value: {
+            fixedAmount: {
+              amount: discountAmount.toFixed(2),
+              appliesToEachItem: true,
+            },
+          },
+          message: "B2B Wholesale Price",
+        });
       }
-    } catch (e) {
-      // Robust against invalid JSON
-      console.error("Error parsing fixed prices for variant:", variant.id, e);
     }
   }
 
-  // 7. Return the discount results
   return {
     discountApplicationStrategy: DiscountApplicationStrategy.First,
     discounts,
