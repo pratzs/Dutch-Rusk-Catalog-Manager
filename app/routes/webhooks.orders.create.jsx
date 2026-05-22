@@ -122,23 +122,6 @@ export const action = async ({ request }) => {
       return new Response("OK", { status: 200 });
     }
 
-    // ── Step 3: Update Order with line properties and note attributes ────────
-    const totalSaved = totalRetailValue - totalPaidValue;
-    const overallPct =
-      totalRetailValue > 0
-        ? ((totalSaved / totalRetailValue) * 100).toFixed(1)
-        : "0.0";
-
-    discountNotes.unshift({
-      name: "B2B Total Savings",
-      value: `${fmt(totalSaved)} saved — ${overallPct}% off retail (retail total: ${fmt(totalRetailValue)})`,
-    });
-
-    const existingNotes = (order.note_attributes ?? []).filter(
-      (n) => !String(n.name).startsWith("B2B ")
-    );
-    const mergedNotes = [...existingNotes, ...discountNotes];
-
     const orderId = `gid://shopify/Order/${order.id}`;
 
     // ── Step 4: Trigger explicit orderEdit mutation for historical baseline ──
