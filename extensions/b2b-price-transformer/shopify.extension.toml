@@ -8,9 +8,9 @@ uid = "ca95c4c2-f6bc-c09a-1a2c-fb27a244c39177702368"
 description = "t:description"
 
   [[extensions.targeting]]
-  target = "cart.transform.run"
-  input_query = "src/cart_transform_run.graphql"
-  export = "cart-transform-run"
+  target = "purchase.cart-transform.run"
+  input_query = "src/run.graphql"
+  export = "run"
 
   [extensions.build]
   command = ""

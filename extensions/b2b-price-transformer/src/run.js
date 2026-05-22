@@ -22,8 +22,11 @@ export function run(input) {
   const discountPct = parseFloat(company?.discountPct?.value ?? "0");
 
   if (!priceListId) {
+    console.log("[transformer] No priceListId found on company, skipping.");
     return NO_CHANGES;
   }
+
+  console.log(`[transformer] Run for List: ${priceListId} | Blanket: ${discountPct}%`);
 
   const operations = [];
 
@@ -44,23 +47,27 @@ export function run(input) {
         const fixedPrice = fixedPricesMap[priceListId];
         if (fixedPrice !== undefined && fixedPrice !== null) {
           targetWholesalePrice = parseFloat(fixedPrice);
+          console.log(`[transformer] Line ${line.id}: Found fixed override ${targetWholesalePrice}`);
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error(`[transformer] JSON Error for variant ${variant.id}:`, e);
+      }
     }
 
     // 2. Fallback to Blanket Percentage
     if (targetWholesalePrice === null && discountPct > 0) {
       const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
       targetWholesalePrice = baseline * (1 - discountPct / 100);
+      console.log(`[transformer] Line ${line.id}: Applied blanket pct -> ${targetWholesalePrice}`);
     }
 
     const finalWholesale = targetWholesalePrice ?? currentPrice;
     const finalRetail = (standardRetail > finalWholesale) ? standardRetail : 0;
 
-    // STRATEGY: We RAISE the price to the Retail baseline.
-    // The Discount function (b2b-custom-prices) will then apply the markdown.
-    // This sequence triggers the native Shopify strikethrough UI.
+    // STRATEGY: We RAISE the price to the Retail baseline ($31.30).
+    // The Discount function will then apply the markdown to reach finalWholesale ($25.04).
     if (finalRetail > finalWholesale) {
+      console.log(`[transformer] Line ${line.id}: Raising Price ${currentPrice.toFixed(2)} -> ${finalRetail.toFixed(2)} (WholesaleTarget=${finalWholesale.toFixed(2)})`);
       operations.push({
         update: {
           cartLineId: line.id,
@@ -69,8 +76,11 @@ export function run(input) {
           },
         },
       });
+    } else {
+      console.log(`[transformer] Line ${line.id}: No raise needed. Retail(${finalRetail.toFixed(2)}) <= WholesaleTarget(${finalWholesale.toFixed(2)})`);
     }
   }
 
+  console.log(`[transformer] Total operations: ${operations.length}`);
   return { operations };
 };
