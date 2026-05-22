@@ -74,7 +74,10 @@ async function fetchAllPriceLists(admin) {
     );
     const page = data?.priceLists;
     if (!page) break;
-    lists.push(...page.nodes);
+    for (const pl of page.nodes) {
+      log(`Fetched List: ${pl.name} (${pl.id}) | Adj: ${pl.parent?.adjustment?.type} = ${pl.parent?.adjustment?.value}`);
+      lists.push(pl);
+    }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
   return lists;
