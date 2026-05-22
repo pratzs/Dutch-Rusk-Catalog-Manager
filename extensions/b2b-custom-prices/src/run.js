@@ -50,10 +50,13 @@ export function run(input) {
       const fixedPrice = fixedPricesMap[priceListId];
 
       if (fixedPrice !== undefined && fixedPrice !== null) {
-        const basePrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
+        const catalogPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
         const overridePrice = parseFloat(fixedPrice);
+        const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
 
-        // 6. Calculate the discount amount: current unit price - fixedPrice
+        // 6. Calculate the discount amount: standard retail - override price
+        // If standard retail is not found or is less than catalog price, fallback to catalog price baseline
+        const basePrice = (standardRetail > catalogPrice) ? standardRetail : catalogPrice;
         const discountAmount = basePrice - overridePrice;
 
         if (discountAmount > 0.001) {
@@ -62,12 +65,14 @@ export function run(input) {
               {
                 cartLine: {
                   id: line.id,
+                  quantity: line.quantity,
                 },
               },
             ],
             value: {
               fixedAmount: {
                 amount: discountAmount.toFixed(2),
+                appliesToEachItem: true,
               },
             },
             message: "Wholesale Custom Price",
