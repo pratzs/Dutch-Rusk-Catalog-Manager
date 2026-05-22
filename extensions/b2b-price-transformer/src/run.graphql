@@ -24,7 +24,7 @@ query RunInput {
         __typename
         ... on ProductVariant {
           id
-          metafield(namespace: "custom", key: "catalog_fixed_prices") {
+          fixedPrices: metafield(namespace: "custom", key: "catalog_fixed_prices") {
             value
           }
           standardRetail: metafield(namespace: "custom", key: "standard_retail_price") {

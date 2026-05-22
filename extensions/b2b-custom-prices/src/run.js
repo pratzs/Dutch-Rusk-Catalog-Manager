@@ -33,14 +33,14 @@ export function run(input) {
     const variant = line.merchandise;
     if (variant.__typename !== "ProductVariant") continue;
 
-    // Current price (raised to Retail by the Transformer)
+    // The currentPrice here will be the price RAISED to Retail by the Transformer.
     const currentPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
     const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
 
     let targetWholesalePrice = null;
 
     // 1. Check for Fixed Override
-    const fixedPricesRaw = variant.metafield?.value;
+    const fixedPricesRaw = variant.fixedPrices?.value;
     if (fixedPricesRaw) {
       try {
         const fixedPricesMap = JSON.parse(fixedPricesRaw);
@@ -51,13 +51,13 @@ export function run(input) {
       } catch (e) {}
     }
 
-    // 2. Fallback to blanket percentage
+    // 2. Fallback to Blanket Percentage
     if (targetWholesalePrice === null && discountPct > 0) {
       const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
       targetWholesalePrice = baseline * (1 - discountPct / 100);
     }
 
-    // APPLY DISCOUNT: delta between (Retail or Current) and Target Wholesale
+    // APPLY DISCOUNT: calculate the markdown from currentPrice (Retail) to Target Wholesale
     if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice) {
       const discountAmount = currentPrice - targetWholesalePrice;
 

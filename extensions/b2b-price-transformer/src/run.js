@@ -19,6 +19,7 @@ const NO_CHANGES = {
 export function run(input) {
   const company = input.cart.buyerIdentity?.purchasingCompany?.company;
   const priceListId = company?.priceListId?.value;
+  const discountPct = parseFloat(company?.discountPct?.value ?? "0");
 
   if (!priceListId) {
     return NO_CHANGES;
@@ -35,8 +36,8 @@ export function run(input) {
 
     let targetWholesalePrice = null;
 
-    // Check for Fixed Override
-    const fixedPricesRaw = variant.metafield?.value;
+    // 1. Check for Fixed Override
+    const fixedPricesRaw = variant.fixedPrices?.value;
     if (fixedPricesRaw) {
       try {
         const fixedPricesMap = JSON.parse(fixedPricesRaw);
@@ -47,14 +48,19 @@ export function run(input) {
       } catch (e) {}
     }
 
+    // 2. Fallback to Blanket Percentage
+    if (targetWholesalePrice === null && discountPct > 0) {
+      const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
+      targetWholesalePrice = baseline * (1 - discountPct / 100);
+    }
+
     const finalWholesale = targetWholesalePrice ?? currentPrice;
     const finalRetail = (standardRetail > finalWholesale) ? standardRetail : 0;
 
     // STRATEGY: We RAISE the price to the Retail baseline.
-    // The Discount function will then apply the markdown to reach finalWholesale.
-    // This triggers the native strikethrough UI.
+    // The Discount function (b2b-custom-prices) will then apply the markdown.
+    // This sequence triggers the native Shopify strikethrough UI.
     if (finalRetail > finalWholesale) {
-      console.log(`Raising line ${line.id} to Retail: ${finalRetail.toFixed(2)} (Wholesale target: ${finalWholesale.toFixed(2)})`);
       operations.push({
         update: {
           cartLineId: line.id,
