@@ -25,11 +25,7 @@ function CartLineSavings() {
   // Reads the custom.retail_price metafield set on the variant by the sync tool
   const appMetafields = useAppMetafields();
 
-  console.log("[checkout-ui] Processing line:", line.id, {
-    cost: line.cost,
-    metafields: appMetafields,
-    quantity: line.quantity
-  });
+  console.log("[checkout-ui] CartLineSavings initialized", { lineId: line.id });
 
   // For B2B Net 30 orders amountPerQuantity may be 0 (due today = $0).
   // Fall back to totalAmount / quantity which always reflects the real catalog price.
