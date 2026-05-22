@@ -164,108 +164,7 @@ export const action = async ({ request }) => {
 
     const orderId = `gid://shopify/Order/${order.id}`;
 
-    // ── Step 4: Trigger explicit orderEdit mutation for historical baseline ──
-    const editBeginRes = await admin.graphql(
-      `mutation BeginOrderEdit($id: ID!) {
-        orderEditBegin(id: $id) {
-          calculatedOrder {
-            id
-            lineItems(first: 50) {
-              nodes {
-                id
-                variant { id }
-              }
-            }
-          }
-          userErrors { field message }
-        }
-      }`,
-      { variables: { id: orderId } }
-    );
-
-    const editBeginData = await editBeginRes.json();
-    console.log("[orders/create] orderEditBegin raw response:", JSON.stringify(editBeginData, null, 2));
-
-    if (editBeginData.errors) {
-      console.error("[orders/create] orderEditBegin GraphQL errors:", JSON.stringify(editBeginData.errors));
-    }
-
-    const editId = editBeginData?.data?.orderEditBegin?.calculatedOrder?.id;
-    const calcLines = editBeginData?.data?.orderEditBegin?.calculatedOrder?.lineItems?.nodes ?? [];
-    const editUserErrors = editBeginData?.data?.orderEditBegin?.userErrors ?? [];
-
-    if (editUserErrors.length > 0) {
-      console.error("[orders/create] orderEditBegin userErrors:", JSON.stringify(editUserErrors));
-    }
-
-    if (editId) {
-      // Map original variant IDs to their new CalculatedLineItem IDs
-      for (const li of lineItems) {
-        if (!li.variant_id) continue;
-        const vGid = `gid://shopify/ProductVariant/${li.variant_id}`;
-        const calcLi = calcLines.find(cl => cl.variant?.id === vGid);
-        const variant = variantMap[String(li.variant_id)];
-
-        if (calcLi && variant) {
-          const retailPrice = parseFloat(variant.standardRetail?.value ?? variant.compareAtPrice ?? variant.price ?? "0");
-          const paidPrice = parseFloat(li.price ?? "0");
-
-          if (retailPrice > paidPrice) {
-            // Use the unified 2025-10 orderEditUpdateLineItem mutation to set both price and properties
-            console.log(`[orders/create] #${order.order_number}: Updating line ${li.id} (Price=$${paidPrice.toFixed(2)}, Retail=$${retailPrice.toFixed(2)})`);
-            
-            const existingProps = (li.properties ?? []).filter(p => p.name !== "Retail Price");
-            const updateRes = await admin.graphql(
-              `mutation UpdateLineItem($calculatedOrderId: ID!, $lineItemId: ID!, $input: OrderEditUpdateLineItemInput!) {
-                orderEditUpdateLineItem(calculatedOrderId: $calculatedOrderId, lineItemId: $lineItemId, input: $input) {
-                  userErrors { field message }
-                }
-              }`,
-              {
-                variables: {
-                  calculatedOrderId: editId,
-                  lineItemId: calcLi.id,
-                  input: {
-                    price: paidPrice.toFixed(2),
-                    customAttributes: [
-                      ...existingProps.map(p => ({ key: p.name, value: String(p.value) })),
-                      { key: "Retail Price", value: fmt(retailPrice) }
-                    ]
-                  }
-                }
-              }
-            );
-            
-            const updateData = await updateRes.json();
-            console.log(`[orders/create] #${order.order_number} UpdateLineItem raw response:`, JSON.stringify(updateData, null, 2));
-
-            const userErrors = updateData?.data?.orderEditUpdateLineItem?.userErrors ?? [];
-            if (userErrors.length > 0) {
-              console.error(`[orders/create] orderEditUpdateLineItem userErrors for line ${li.id}:`, JSON.stringify(userErrors));
-            }
-          }
-        }
-      }
-
-      // Commit the edit to solidify the historical baseline
-      const commitRes = await admin.graphql(
-        `mutation CommitOrderEdit($id: ID!) {
-          orderEditCommit(id: $id, notifyCustomer: false, staffNote: "Wholesale Catalog Discount Alignment") {
-            userErrors { field message }
-          }
-        }`,
-        { variables: { id: editId } }
-      );
-      const commitData = await commitRes.json();
-      console.log(`[orders/create] #${order.order_number} Commit raw response:`, JSON.stringify(commitData, null, 2));
-
-      const commitUserErrors = commitData?.data?.orderEditCommit?.userErrors ?? [];
-      if (commitUserErrors.length > 0) {
-        console.error("[orders/create] orderEditCommit userErrors:", JSON.stringify(commitUserErrors));
-      }
-    }
-
-    // ── Step 5: Update Order with note attributes ───────────────────────────
+    // ── Step 3: Update Order with note attributes ───────────────────────────
     const totalSaved = totalRetailValue - totalPaidValue;
     const overallPct = totalRetailValue > 0 ? ((totalSaved / totalRetailValue) * 100).toFixed(1) : "0.0";
 
@@ -304,7 +203,7 @@ export const action = async ({ request }) => {
       console.error(`[orders/create] update errors for order ${order.id}:`, JSON.stringify(userErrors));
     } else {
       const orderName = updateData?.data?.orderUpdate?.order?.name ?? `#${order.order_number}`;
-      console.log(`[orders/create] ${orderName}: completed orderEdit and wrote ${discountNotes.length} note(s).`);
+      console.log(`[orders/create] ${orderName}: labeled order with ${discountNotes.length} B2B discount note(s).`);
     }
   } catch (err) {
     // Log but always return 200 — a non-200 causes Shopify to retry 19 times
