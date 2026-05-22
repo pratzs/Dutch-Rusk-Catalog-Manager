@@ -11,7 +11,6 @@ export async function loader({ request }) {
         nodes {
           id
           title
-          handle
           apiType
         }
       }
@@ -24,19 +23,19 @@ export async function loader({ request }) {
   // Find our specific function by title
   const targetFunction = functions.find(f => f.title === "b2b-custom-prices");
 
-  return { functionHandle: targetFunction?.handle ?? null };
+  return { functionId: targetFunction?.id ?? null };
 }
 
 export async function action({ request }) {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
-  const functionHandle = formData.get("functionHandle");
+  const functionId = formData.get("functionId");
 
-  if (!functionHandle) {
-    return { error: "Function Handle not found. Ensure the extension is deployed." };
+  if (!functionId) {
+    return { error: "Function ID not found. Ensure the extension is deployed." };
   }
 
-  // ── Step 2: Create the Automatic Discount (using functionHandle + discountClasses) ─
+  // ── Step 2: Create the Automatic Discount (using functionId + discountClasses) ──
   try {
     const response = await admin.graphql(`
       mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
@@ -54,7 +53,7 @@ export async function action({ request }) {
       variables: {
         automaticAppDiscount: {
           title: "B2B Wholesale Custom Pricing",
-          functionHandle,
+          functionId,
           discountClasses: ["PRODUCT"],
           startsAt: new Date().toISOString(),
         }
@@ -92,7 +91,7 @@ export async function action({ request }) {
 }
 
 export default function ActivatePricing() {
-  const { functionHandle } = useLoaderData();
+  const { functionId } = useLoaderData();
   const actionData = useActionData();
 
   return (
@@ -107,7 +106,7 @@ export default function ActivatePricing() {
                 This will enable specialized wholesale pricing for your B2B customers based on your catalog overrides.
               </s-text>
 
-              {!functionHandle ? (
+              {!functionId ? (
                 <s-box padding="base" background="bg-critical" borderRadius="base">
                   <s-text color="critical">
                     Error: The "b2b-custom-prices" extension was not found. Please ensure it has been deployed using "shopify app deploy".
@@ -115,7 +114,7 @@ export default function ActivatePricing() {
                 </s-box>
               ) : (
                 <Form method="post">
-                  <input type="hidden" name="functionHandle" value={functionHandle} />
+                  <input type="hidden" name="functionId" value={functionId} />
                   <s-button variant="primary" type="submit">
                     Activate B2B Pricing Function
                   </s-button>
