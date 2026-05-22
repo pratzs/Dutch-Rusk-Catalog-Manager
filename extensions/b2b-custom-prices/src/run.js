@@ -10,7 +10,7 @@ import { DiscountApplicationStrategy } from "../generated/api";
  * @type {FunctionRunResult}
  */
 const EMPTY_DISCOUNT = {
-  discountApplicationStrategy: DiscountApplicationStrategy.First,
+  discountApplicationStrategy: DiscountApplicationStrategy.All,
   discounts: [],
 };
 
@@ -102,7 +102,7 @@ export function run(input) {
   }
 
   return {
-    discountApplicationStrategy: DiscountApplicationStrategy.First,
+    discountApplicationStrategy: DiscountApplicationStrategy.All,
     discounts,
   };
 };
