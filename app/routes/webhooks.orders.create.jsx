@@ -175,6 +175,8 @@ export const action = async ({ request }) => {
     );
 
     const editBeginData = await editBeginRes.json();
+    console.log("[orders/create] orderEditBegin raw response:", JSON.stringify(editBeginData, null, 2));
+
     if (editBeginData.errors) {
       console.error("[orders/create] orderEditBegin GraphQL errors:", JSON.stringify(editBeginData.errors));
     }
@@ -220,6 +222,8 @@ export const action = async ({ request }) => {
               }
             );
             const updatePriceData = await updatePriceRes.json();
+            console.log(`[orders/create] #${order.order_number} UpdatePrice raw response:`, JSON.stringify(updatePriceData, null, 2));
+
             const priceUserErrors = updatePriceData?.data?.orderEditUpdateLineItemPrice?.userErrors ?? [];
             if (priceUserErrors.length > 0) {
               console.error(`[orders/create] orderEditUpdateLineItemPrice userErrors for line ${li.id}:`, JSON.stringify(priceUserErrors));
@@ -244,6 +248,8 @@ export const action = async ({ request }) => {
               }
             );
             const updatePropsData = await updatePropsRes.json();
+            console.log(`[orders/create] #${order.order_number} UpdateProps raw response:`, JSON.stringify(updatePropsData, null, 2));
+
             const propsUserErrors = updatePropsData?.data?.orderEditUpdateLineItem?.userErrors ?? [];
             if (propsUserErrors.length > 0) {
               console.error(`[orders/create] orderEditUpdateLineItem userErrors for line ${li.id}:`, JSON.stringify(propsUserErrors));
@@ -262,6 +268,8 @@ export const action = async ({ request }) => {
         { variables: { id: editId } }
       );
       const commitData = await commitRes.json();
+      console.log(`[orders/create] #${order.order_number} Commit raw response:`, JSON.stringify(commitData, null, 2));
+
       const commitUserErrors = commitData?.data?.orderEditCommit?.userErrors ?? [];
       if (commitUserErrors.length > 0) {
         console.error("[orders/create] orderEditCommit userErrors:", JSON.stringify(commitUserErrors));
