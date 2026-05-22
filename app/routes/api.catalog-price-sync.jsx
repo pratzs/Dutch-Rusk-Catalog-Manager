@@ -80,10 +80,10 @@ async function fetchAllPriceLists(admin) {
   return lists;
 }
 
-// ─── fetch fixed-price overrides for one price list (paginated) ──────────────
+// ─── fetch all prices for one price list (paginated) ───────────────────────
 
-async function fetchPriceListOverrides(admin, priceListId) {
-  const overrides = []; // [{variantId, fixedPrice}]
+async function fetchPriceListPrices(admin, priceListId) {
+  const prices = []; // [{variantId, price}]
   let cursor = null;
   do {
     const { data } = await gql(
@@ -105,15 +105,15 @@ async function fetchPriceListOverrides(admin, priceListId) {
     if (!page) break;
     for (const node of page.nodes) {
       if (node.variant?.id && node.price?.amount) {
-        overrides.push({
+        prices.push({
           variantId: node.variant.id,
-          fixedPrice: node.price.amount,
+          price: node.price.amount,
         });
       }
     }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
-  return overrides;
+  return prices;
 }
 
 // ─── fetch catalog→company mapping (all B2B catalogs) ───────────────────────
@@ -248,15 +248,13 @@ async function runSync(admin, shop, options = {}) {
     allOverridesByList[pl.id] = {};
   }
 
-  // Only fetch override details for changed lists (others keep DB state)
+  // Only fetch price details for changed lists (others keep DB state)
   for (const pl of toSync) {
-    log(`Fetching overrides for price list: ${pl.name}`);
-    const overrides = await fetchPriceListOverrides(admin, pl.id);
-    for (const { variantId, fixedPrice } of overrides) {
-      allOverridesByList[pl.id][variantId] = fixedPrice;
+    log(`Fetching all prices for price list: ${pl.name}`);
+    const prices = await fetchPriceListPrices(admin, pl.id);
+    for (const { variantId, price } of prices) {
+      allOverridesByList[pl.id][variantId] = price;
     }
-    // Also load DB-cached overrides for UNCHANGED lists
-    // (so we have a complete picture for merge step)
   }
 
   // For unchanged lists, use DB-stored override info
@@ -293,6 +291,20 @@ async function runSync(admin, shop, options = {}) {
     const previous = previousOverriddenByList[pl.id] ?? new Set();
     for (const id of current) affectedVariantIds.add(id);
     for (const id of previous) affectedVariantIds.add(id); // removed ones need clearing
+  }
+
+  // ── 5.5 GATHER ALL VARIANTS IN THE PRICE LISTS (UNIVERSAL STRATEGY) ──────
+  // To ensure native strikethroughs work for ALL B2B lines, we must populate
+  // the 'catalog_fixed_prices' metafield for EVERY variant in the price list,
+  // not just the overridden ones.
+  if (toSync.length > 0) {
+    log("Identifying all variants in synced price lists for universal coverage...");
+    for (const pl of toSync) {
+      const allPricesInList = allOverridesByList[pl.id] ?? {};
+      for (const variantId of Object.keys(allPricesInList)) {
+        affectedVariantIds.add(variantId);
+      }
+    }
   }
 
   // If called with specific variant IDs (from products/update webhook), add those
