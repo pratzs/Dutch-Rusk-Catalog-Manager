@@ -131,13 +131,18 @@
       return val || (el.textContent || "").trim();
     };
 
-    const isBlockedEl = (el) => {
-      const val = elText(el);
-      // Use startsWith so that hiding "Outer" never accidentally hides "Shipper (6 Outer)".
-      return validTypes.some(t => val.startsWith(t)) || validIds.includes(val);
-    };
-
-    const blockedEls = allVariantEls.filter(isBlockedEl);
+    const blockedEls = allVariantEls.filter(el => {
+        const val = elText(el);
+        const isBlocked = validTypes.some(t => val.startsWith(t)) || validIds.includes(val);
+        console.log(`[CVH] Checking element:`, { 
+            tag: el.tagName, 
+            type: el.type, 
+            text: val, 
+            isBlocked,
+            id: el.id
+        });
+        return isBlocked;
+    });
 
     // Exclude placeholder / "Select..." options from the non-blocked check.
     // A theme's <select> often has <option value="">Select Pack Size</option> as the
