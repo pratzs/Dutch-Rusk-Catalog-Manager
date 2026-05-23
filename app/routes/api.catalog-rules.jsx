@@ -139,48 +139,53 @@ export async function loader({ request }) {
         hiddenVariantTypes: [], 
         hiddenVariantIds: [], 
         hasOverride: false,
-        debug: { strategy: "failed", version: "217", locationId, customerId } 
+        debug: { strategy: "failed", version: "219", locationId, customerId } 
     }), { status: 200, headers: CORS_HEADERS });
   }
 
-  // Resolve blanket rules and overrides in parallel
   const [rule, override] = await Promise.all([
       findRule(prisma, catalogId),
       productId ? findOverride(prisma, catalogId, productId) : Promise.resolve(null)
   ]);
 
-  let hiddenTypes = [];
-  let hiddenIds = [];
+  const hiddenTypes = new Set((rule?.hiddenVariantTypes ?? []).filter(t => t && String(t).trim()));
+  const hiddenIds = new Set((rule?.hiddenVariantIds ?? []).filter(id => id && String(id).trim()));
+
+  let overrideActive = false;
 
   // ── RULE PRECEDENCE ──────────────────────────────────────────────────────
-  // If an override exists for this product, it COMPLETELY replaces 
-  // the blanket catalog rules. This allows 'un-hiding' variants 
-  // like 'Shipper' for specific products.
   if (override) {
       const vals = (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
-      for (const val of vals) {
-          if (isLegacyId(val)) hiddenIds.push(val);
-          else hiddenTypes.push(val);
+      
+      if (vals.includes("__SHOW_ALL__")) {
+          // USER EXPLICITLY WANTS EVERYTHING VISIBLE
+          hiddenTypes.clear();
+          hiddenIds.clear();
+          overrideActive = true;
+      } else if (vals.length > 0) {
+          // MERGE: Global Rules + Product Specific Rules
+          for (const val of vals) {
+              if (isLegacyId(val)) hiddenIds.add(val);
+              else hiddenTypes.add(val);
+          }
+          overrideActive = true;
       }
-  } else if (rule) {
-      hiddenTypes = (rule.hiddenVariantTypes ?? []).filter(v => v && String(v).trim());
-      hiddenIds = (rule.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
   }
 
   return new Response(
     JSON.stringify({ 
-      hiddenVariantTypes: hiddenTypes, 
-      hiddenVariantIds: hiddenIds, 
-      hasOverride: !!override,
+      hiddenVariantTypes: Array.from(hiddenTypes), 
+      hiddenVariantIds: Array.from(hiddenIds), 
+      hasOverride: overrideActive,
       debug: {
-          version: "217",
+          version: "219",
           strategy,
           resolvedCatalogId: catalogId,
           ruleFound: !!rule,
           ruleName: rule?.catalogName,
           locationId,
-          b2bContext,
-          overrideFound: !!override
+          overrideFound: !!override,
+          overrideHiddenCount: override?.hiddenVariantIds?.length
       }
     }), 
     { status: 200, headers: CORS_HEADERS }
