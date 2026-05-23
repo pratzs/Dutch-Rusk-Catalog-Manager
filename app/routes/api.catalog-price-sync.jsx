@@ -34,6 +34,7 @@ async function fetchAllPriceLists(admin) {
 async function fetchPriceListPrices(admin, priceListId) {
   const prices = [];
   let cursor = null;
+  console.log(`[catalog-sync] Fetching all prices for price list: ${priceListId}`);
   do {
     const { data } = await gql(admin, `query GetPriceListPrices($id: ID!, $cursor: String) { priceList(id: $id) { prices(first: 250, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { price { amount } variant { id } } } } }`, { id: priceListId, cursor });
     const page = data?.priceList?.prices;
@@ -47,16 +48,24 @@ async function fetchPriceListPrices(admin, priceListId) {
 }
 
 async function fetchCatalogCompanyMap(admin) {
+  // Returns: [{priceListId, catalogId, companyIds: [...], locationIds: [...]}]
   const result = [];
   let cursor = null;
   do {
-    const { data } = await gql(admin, `query GetCatalogs($cursor: String) { catalogs(first: 20, after: $cursor, type: COMPANY_LOCATION) { pageInfo { hasNextPage endCursor } nodes { priceList { id } ... on CompanyLocationCatalog { companyLocations(first: 100) { nodes { company { id } } } } } } }`, { cursor });
+    const { data } = await gql(admin, `query GetCatalogs($cursor: String) { catalogs(first: 20, after: $cursor, type: COMPANY_LOCATION) { pageInfo { hasNextPage endCursor } nodes { id priceList { id } ... on CompanyLocationCatalog { companyLocations(first: 100) { nodes { id company { id } } } } } } }`, { cursor });
     const page = data?.catalogs;
     if (!page) break;
     for (const cat of page.nodes) {
       if (!cat.priceList?.id) continue;
-      const companyIds = [...new Set((cat.companyLocations?.nodes ?? []).map((loc) => loc.company?.id).filter(Boolean))];
-      result.push({ priceListId: cat.priceList.id, companyIds });
+      const locations = cat.companyLocations?.nodes ?? [];
+      const companyIds = [...new Set(locations.map((loc) => loc.company?.id).filter(Boolean))];
+      const locationIds = locations.map(loc => loc.id).filter(Boolean);
+      result.push({ 
+        priceListId: cat.priceList.id, 
+        catalogId: cat.id.split("/").pop(),
+        companyIds,
+        locationIds
+      });
     }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
@@ -107,7 +116,6 @@ async function runSync(admin, shop, options = {}) {
 
     let updatedVariants = 0;
     if (!companyOnly) {
-      // Determine price lists to sync
       const toSync = forceAll ? priceLists : priceLists.filter((pl) => {
         const db = dbMap[pl.id];
         if (!db) return true;
@@ -117,37 +125,29 @@ async function runSync(admin, shop, options = {}) {
 
       if (toSync.length > 0 || specificVariantIds) {
         log(`Processing ${toSync.length} price list(s) for variants...`);
-
-        // Fetch all prices into memory (maps are relatively lightweight compared to GQL objects)
         for (const pl of toSync) {
           const prices = await fetchPriceListPrices(admin, pl.id);
           for (const { variantId, price } of prices) { allOverridesByList[pl.id][variantId] = price; }
         }
-
         const affectedVariantIds = new Set();
         for (const pl of toSync) { for (const id of Object.keys(allOverridesByList[pl.id] ?? {})) affectedVariantIds.add(id); }
         if (specificVariantIds) { for (const id of specificVariantIds) affectedVariantIds.add(id); }
 
         const variantIdArray = [...affectedVariantIds];
         log(`Iteratively updating ${variantIdArray.length} variant(s) in batches of ${VARIANT_BATCH}...`);
-
-        // ── ITERATIVE BATCH PROCESSING ───────────────────────────────────────
         for (let i = 0; i < variantIdArray.length; i += VARIANT_BATCH) {
           const batchIds = variantIdArray.slice(i, i + VARIANT_BATCH);
           const existingMetaBatch = await fetchVariantFixedPriceMetaBatch(admin, batchIds);
-          
           const metafieldsToWrite = [];
           for (const variantId of batchIds) {
             const vData = existingMetaBatch[variantId];
             const standardPrice = vData?.compareAtPrice || vData?.price || "0";
             let merged = {};
             try { if (vData?.metaValue) merged = JSON.parse(vData.metaValue); } catch { merged = {}; }
-            
             for (const pl of toSync) {
               const price = allOverridesByList[pl.id]?.[variantId];
               if (price !== undefined) merged[pl.id] = price; else delete merged[pl.id];
             }
-            
             metafieldsToWrite.push(
               { ownerId: variantId, namespace: "custom", key: "catalog_fixed_prices", type: "json", value: JSON.stringify(merged) },
               { ownerId: variantId, namespace: "custom", key: "standard_retail_price", type: "number_decimal", value: String(standardPrice) }
@@ -155,10 +155,7 @@ async function runSync(admin, shop, options = {}) {
           }
           await metafieldsSet(admin, metafieldsToWrite);
           updatedVariants += metafieldsToWrite.length;
-          log(`...processed ${i + batchIds.length} / ${variantIdArray.length} variants`);
         }
-
-        // Persist list states
         for (const pl of toSync) {
           const adj = allAdjustments[pl.id];
           await prisma.catalogSyncState.upsert({
@@ -170,14 +167,24 @@ async function runSync(admin, shop, options = {}) {
       }
     }
 
-    log("Updating company mapping...");
-    const catalogCompanyMap = await fetchCatalogCompanyMap(admin);
+    log("Updating B2B mapping (Companies & Locations)...");
+    const catalogDataMap = await fetchCatalogCompanyMap(admin);
     const companyMetafields = [];
     let updatedCompanies = 0;
-    for (const { priceListId, companyIds } of catalogCompanyMap) {
+    const locationUpserts = [];
+
+    for (const { priceListId, catalogId, companyIds, locationIds } of catalogDataMap) {
       const adj = allAdjustments[priceListId];
-      if (!adj) continue;
-      const pct = adj.type === "PERCENTAGE_DECREASE" ? String(adj.value) : adj.type === "PERCENTAGE_INCREASE" ? String(-adj.value) : "0";
+      const pct = adj ? (adj.type === "PERCENTAGE_DECREASE" ? String(adj.value) : adj.type === "PERCENTAGE_INCREASE" ? String(-adj.value) : "0") : "0";
+
+      for (const locId of locationIds) {
+        locationUpserts.push(prisma.locationCatalogMap.upsert({
+          where: { locationGid: locId },
+          update: { catalogId },
+          create: { locationGid: locId, catalogId },
+        }));
+      }
+
       for (const companyId of companyIds) {
         companyMetafields.push(
           { ownerId: companyId, namespace: "custom", key: "catalog_pricelist_id", type: "single_line_text_field", value: priceListId },
@@ -186,13 +193,14 @@ async function runSync(admin, shop, options = {}) {
         updatedCompanies++;
       }
     }
-    if (companyMetafields.length > 0) await metafieldsSet(admin, companyMetafields);
+
+    if (locationUpserts.length > 0) { log(`Updating ${locationUpserts.length} location mappings...`); await Promise.all(locationUpserts); }
+    if (companyMetafields.length > 0) { log(`Updating ${updatedCompanies} company metafields...`); await metafieldsSet(admin, companyMetafields); }
 
     log("Sync cycle complete.");
     return { success: true, updatedCompanies, updatedVariants };
 
   } finally {
-    // Release the lock
     await prisma.catalogSyncState.deleteMany({ where: { shop, priceListId: lockKey } });
   }
 }
@@ -206,7 +214,6 @@ export async function action({ request }) {
 
   if (incomingSecret && incomingSecret === cronSecret) {
     const { default: prisma } = await import("../db.server");
-    // Find the most recent offline session (primary shop access)
     const session = await prisma.session.findFirst({
       where: { isOnline: false, accessToken: { not: "" } },
       orderBy: { id: "desc" },

@@ -34,6 +34,13 @@ export const action = async ({ request }) => {
       body: JSON.stringify({ companyOnly: true }),
     });
 
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      const text = await res.text();
+      console.error(`[webhooks/companies_sync] Expected JSON but got ${contentType}. Body: ${text.substring(0, 200)}`);
+      return new Response("OK", { status: 200 });
+    }
+
     const data = await res.json();
     console.log(`[webhooks/companies_sync] Sync result:`, JSON.stringify(data));
   } catch (err) {

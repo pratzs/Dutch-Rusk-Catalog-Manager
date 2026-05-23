@@ -109,7 +109,7 @@
     // CSS-hide radio inputs and show styled <label> buttons instead, so
     // :not([style*="none"]) would wrongly return 0 and disable the product.
     const allVariantEls = Array.from(
-      container.querySelectorAll('input[type="radio"], option')
+      container.querySelectorAll('input[type="radio"], option, button[data-variant-id], .variant-input input')
     );
 
     // For <option> elements el.value is a Shopify numeric variant ID — use textContent.
@@ -119,8 +119,9 @@
     // use value="Outer", value="Shipper", etc.).
     const elText = (el) => {
       if (el.tagName === "OPTION") return (el.textContent || el.value || "").trim();
+      if (el.tagName === "BUTTON") return (el.textContent || el.getAttribute("aria-label") || "").trim();
       const val = (el.value || "").trim();
-      if (el.type === "radio" && /^\d{8,}$/.test(val)) {
+      if ((el.type === "radio" || el.type === "checkbox") && /^\d{8,}$/.test(val)) {
         const lbl = el.id
           ? container.querySelector(`label[for="${el.id}"]`)
           : el.closest("label");
