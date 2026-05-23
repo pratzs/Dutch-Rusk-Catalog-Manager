@@ -384,9 +384,12 @@
       };
 
       applyAll();
+      console.log("[CVH] Observer starting on product page");
       new MutationObserver(mutations => {
-        if (mutations.some(m => !m.target.closest || !m.target.closest("[data-cvh-processed]")))
-          applyAll();
+        if (mutations.some(m => !m.target.closest || !m.target.closest("[data-cvh-processed]"))) {
+           // console.log("[CVH] DOM Mutation detected, re-applying rules");
+           applyAll();
+        }
       }).observe(document.body, { childList: true, subtree: true });
 
     } else {
