@@ -101,17 +101,12 @@
 
     const blockedEls = allVariantEls.filter(isBlockedEl);
 
-    // ── PURE HIDING LOGIC ──────────────────────────────────────────────────
-    // We only hide the elements that match the rules. 
-    // We DO NOT interfere with Buy buttons or stock labels for visible items.
-    
     const hideVariantEl = (el) => {
       el.style.setProperty("display", "none", "important");
       if (el.id) {
         const lbl = container.querySelector(`label[for="${el.id}"]`);
         if (lbl) lbl.style.setProperty("display", "none", "important");
       }
-      // Conservative wrapper hiding to avoid hiding valid neighboring variants
       const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
       if (wrap && !wrap.classList.contains("grid__item") && !wrap.classList.contains("product-form__input")) {
         wrap.style.setProperty("display", "none", "important");
@@ -131,8 +126,36 @@
       });
     };
 
-    blockedEls.forEach(hideVariantEl);
-    sweepBlockedLabels();
+    const isPlaceholder = (el) => {
+      const val = elText(el);
+      return val === "" || /^[-–—]|select|choose/i.test(val);
+    };
+    const realVariantEls    = allVariantEls.filter(el => !isPlaceholder(el));
+    const hasNonBlockedOpt  = realVariantEls.length > 0 && realVariantEls.some(el => !isBlockedEl(el));
+
+    // ── SAFE HIDING ────────────────────────────────────────────────────────
+    // We ONLY hide specific variant elements. 
+    // We NEVER modify buy buttons or inventory labels if valid options exist.
+    if (hasNonBlockedOpt) {
+      blockedEls.forEach(hideVariantEl);
+      sweepBlockedLabels();
+    } else if (realVariantEls.length > 0) {
+      // ALL real options are blocked. 
+      // Only now is it safe to show 'Back soon'.
+      const btn = Array.from(container.querySelectorAll('button, [type="submit"], a.btn')).find(b => {
+        if (b.name === "add") return true;
+        const t = (b.textContent || "").trim().toLowerCase();
+        return t.includes("add to cart") || t.includes("add to bag") || t.includes("buy now") || t === "add";
+      });
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Back soon";
+        btn.style.opacity = "0.5";
+        btn.style.setProperty("pointer-events", "none", "important");
+      }
+      blockedEls.forEach(hideVariantEl);
+      sweepBlockedLabels();
+    }
     
     injectStrikethroughPricing(container);
   }
@@ -140,8 +163,6 @@
   async function init() {
     const el = document.getElementById("catalog-variant-hider-data") || document.querySelector("[data-location-id]");
     if (!el) return;
-
-    if (!LOCATION_ID && !CUSTOMER_ID) return;
 
     const singleProductId = el.dataset.productId || null;
     let resolvedLocationId = LOCATION_ID;

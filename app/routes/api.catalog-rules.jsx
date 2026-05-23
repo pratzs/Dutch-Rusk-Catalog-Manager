@@ -120,7 +120,6 @@ export async function loader({ request }) {
   let b2bContext = null;
   if (customerId) {
       b2bContext = await resolveB2BContext(prisma, customerId, shop);
-      // PRIORITIZE CUSTOMER CONTEXT OVER LOCATION ID
       if (b2bContext?.resolvedCatalogId) {
           catalogId = b2bContext.resolvedCatalogId;
           strategy = "customerId";
@@ -140,42 +139,48 @@ export async function loader({ request }) {
         hiddenVariantTypes: [], 
         hiddenVariantIds: [], 
         hasOverride: false,
-        debug: { strategy: "failed", version: "210", locationId, customerId } 
+        debug: { strategy: "failed", version: "217", locationId, customerId } 
     }), { status: 200, headers: CORS_HEADERS });
   }
 
+  // Resolve blanket rules and overrides in parallel
   const [rule, override] = await Promise.all([
       findRule(prisma, catalogId),
       productId ? findOverride(prisma, catalogId, productId) : Promise.resolve(null)
   ]);
-const hiddenTypes = new Set((rule?.hiddenVariantTypes ?? []).filter(t => t && String(t).trim()));
-const hiddenIds = new Set((rule?.hiddenVariantIds ?? []).filter(id => id && String(id).trim()));
 
-if (override) {
-  if (override.hiddenVariantIds.length > 0) {
-    for (const val of override.hiddenVariantIds) {
-      if (!val || !String(val).trim()) continue;
-      if (isLegacyId(val)) {
-        hiddenIds.add(val);
-      } else {
-        hiddenTypes.add(val);
+  let hiddenTypes = [];
+  let hiddenIds = [];
+
+  // ── RULE PRECEDENCE ──────────────────────────────────────────────────────
+  // If an override exists for this product, it COMPLETELY replaces 
+  // the blanket catalog rules. This allows 'un-hiding' variants 
+  // like 'Shipper' for specific products.
+  if (override) {
+      const vals = (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
+      for (const val of vals) {
+          if (isLegacyId(val)) hiddenIds.push(val);
+          else hiddenTypes.push(val);
       }
-    }
+  } else if (rule) {
+      hiddenTypes = (rule.hiddenVariantTypes ?? []).filter(v => v && String(v).trim());
+      hiddenIds = (rule.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
   }
-}
+
   return new Response(
     JSON.stringify({ 
-      hiddenVariantTypes: Array.from(hiddenTypes), 
-      hiddenVariantIds: Array.from(hiddenIds), 
+      hiddenVariantTypes: hiddenTypes, 
+      hiddenVariantIds: hiddenIds, 
       hasOverride: !!override,
       debug: {
-          version: "210",
+          version: "217",
           strategy,
           resolvedCatalogId: catalogId,
           ruleFound: !!rule,
           ruleName: rule?.catalogName,
           locationId,
-          b2bContext
+          b2bContext,
+          overrideFound: !!override
       }
     }), 
     { status: 200, headers: CORS_HEADERS }
