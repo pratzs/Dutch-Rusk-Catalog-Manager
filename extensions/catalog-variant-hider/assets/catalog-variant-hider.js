@@ -67,12 +67,32 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
+    // Ensure we reset UI state if this is a re-application (un-hiding)
+    const resetHiding = () => {
+        container.querySelectorAll('[style*="display: none"]').forEach(el => {
+            if (el.style.display === "none") el.style.removeProperty("display");
+        });
+        const btn = container.querySelector('button[disabled]');
+        if (btn && (btn.textContent.includes("soon") || btn.textContent === "Back soon")) {
+            btn.disabled = false;
+            btn.style.removeProperty("opacity");
+            btn.style.removeProperty("pointer-events");
+            // Theme will likely re-calculate text automatically on next update
+        }
+    };
+
     if (validTypes.length === 0 && validIds.length === 0) {
+      resetHiding();
       injectStrikethroughPricing(container);
       return;
     }
 
     container.setAttribute("data-cvh-processed", "1");
+    const content = container.textContent || "";
+
+    const currentSkuEl = container.querySelector(".product__sku, [data-sku]");
+    const currentSku   = currentSkuEl ? currentSkuEl.textContent.trim() : "";
+    const isForbiddenSkuSelected = validIds.includes(currentSku);
 
     const allVariantEls = Array.from(
       container.querySelectorAll('input[type="radio"], option, button[data-variant-id], .variant-input input, label[data-value]')
@@ -92,14 +112,20 @@
     };
 
     const isBlockedEl = (el) => {
-      const val = elText(el);
+      const val = elText(el).toLowerCase();
       if (!val) return false;
-      const valLower = val.toLowerCase();
-      return validTypes.some(t => valLower.startsWith(t.toLowerCase())) || 
-             validIds.some(id => valLower === id.toLowerCase());
+      return validTypes.some(t => val.startsWith(t.toLowerCase())) || 
+             validIds.some(id => val === id.toLowerCase());
     };
 
     const blockedEls = allVariantEls.filter(isBlockedEl);
+
+    const isPlaceholder = (el) => {
+      const val = elText(el);
+      return val === "" || /^[-–—]|select|choose/i.test(val);
+    };
+    const realVariantEls    = allVariantEls.filter(el => !isPlaceholder(el));
+    const hasNonBlockedOpt  = realVariantEls.length > 0 && realVariantEls.some(el => !isBlockedEl(el));
 
     const hideVariantEl = (el) => {
       el.style.setProperty("display", "none", "important");
@@ -126,27 +152,19 @@
       });
     };
 
-    const isPlaceholder = (el) => {
-      const val = elText(el);
-      return val === "" || /^[-–—]|select|choose/i.test(val);
-    };
-    const realVariantEls    = allVariantEls.filter(el => !isPlaceholder(el));
-    const hasNonBlockedOpt  = realVariantEls.length > 0 && realVariantEls.some(el => !isBlockedEl(el));
-
-    // ── SAFE HIDING ────────────────────────────────────────────────────────
-    // We ONLY hide specific variant elements. 
-    // We NEVER modify buy buttons or inventory labels if valid options exist.
-    if (hasNonBlockedOpt) {
-      blockedEls.forEach(hideVariantEl);
-      sweepBlockedLabels();
-    } else if (realVariantEls.length > 0) {
-      // ALL real options are blocked. 
-      // Only now is it safe to show 'Back soon'.
-      const btn = Array.from(container.querySelectorAll('button, [type="submit"], a.btn')).find(b => {
+    const _findBtn = (root) =>
+      Array.from(root.querySelectorAll('button, [type="submit"], a.btn')).find(b => {
         if (b.name === "add") return true;
         const t = (b.textContent || "").trim().toLowerCase();
         return t.includes("add to cart") || t.includes("add to bag") || t.includes("buy now") || t === "add";
-      });
+      }) || root.querySelector('form[action*="/cart/add"] button');
+
+    if (hasNonBlockedOpt && !isForbiddenSkuSelected) {
+      resetHiding(); // Show previously hidden items if they are now allowed
+      blockedEls.forEach(hideVariantEl);
+      sweepBlockedLabels();
+    } else if (realVariantEls.length > 0 || isForbiddenSkuSelected) {
+      const btn = _findBtn(container);
       if (btn) {
         btn.disabled = true;
         btn.textContent = "Back soon";
@@ -183,16 +201,35 @@
       applyAll();
       new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
     } else {
+      // ══ COLLECTION PAGE ══════════════════════════════════════════════════════
+      const blanketRules = await fetchRules(resolvedLocationId, "");
+      
       const processBatch = async () => {
         const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
         if (pidElements.length === 0) return;
+        
+        // Mark as seen immediately
         pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
-        const rules = await fetchRules(resolvedLocationId, "");
-        pidElements.forEach(el => {
-          const card = el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || el;
-          applyRulesToContainer(card, rules);
-        });
+        
+        await Promise.all(pidElements.map(async (pidEl) => {
+            const pid = pidEl.dataset.productId;
+            const container = pidEl.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || pidEl;
+            
+            let fullPid = pid;
+            if (fullPid && !fullPid.includes("/")) fullPid = `gid://shopify/Product/${fullPid}`;
+            
+            const rules = await fetchRules(resolvedLocationId, fullPid);
+            
+            // If this product has an override, apply its specific rules.
+            // If it doesn't, apply the blanket rules.
+            if (rules.hasOverride) {
+                applyRulesToContainer(container, rules);
+            } else {
+                applyRulesToContainer(container, blanketRules);
+            }
+        }));
       };
+
       processBatch();
       new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
     }
