@@ -365,11 +365,22 @@
 
     if (singleProductId) {
       // ══ PRODUCT PAGE ═════════════════════════════════════════════════════
+      console.log(`[CVH] Fetching rules for Product: ${singleProductId} | Location: ${resolvedLocationId}`);
       const rules = await fetchRules(resolvedLocationId, singleProductId);
-      console.log("[CVH] Product page rules:", rules);
+      console.log("[CVH] RAW API Response:", JSON.stringify(rules, null, 2));
+      
+      if (rules.debug) {
+          console.log(`[CVH] Server Debug | Version: ${rules.debug.version} | Resolved Catalog: ${rules.debug.resolvedCatalogId} | Strategy: ${rules.debug.strategy} | Rule Found: ${rules.debug.ruleFound} (${rules.debug.ruleName || 'None'})`);
+      }
+
       const validTypes = rules.hiddenVariantTypes || [];
       const validIds   = rules.hiddenVariantIds   || [];
-      if (validTypes.length === 0 && validIds.length === 0) return;
+      console.log(`[CVH] Final Rules to Apply | Types: ${validTypes.join(", ") || "None"} | IDs: ${validIds.length}`);
+
+      if (validTypes.length === 0 && validIds.length === 0) {
+          console.log("[CVH] No rules found for this catalog/product combination.");
+          return;
+      }
 
       const SELECTORS =
         "#main-product, article[data-product-url], " +
