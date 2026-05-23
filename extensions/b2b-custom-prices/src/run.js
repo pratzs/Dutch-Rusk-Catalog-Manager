@@ -21,12 +21,11 @@ const EMPTY_DISCOUNT = {
 export function run(input) {
   const company = input.cart.buyerIdentity?.purchasingCompany?.company;
   const priceListId = company?.priceListId?.value;
+  const discountPct = parseFloat(company?.discountPct?.value ?? "0");
 
   if (!priceListId) {
     return EMPTY_DISCOUNT;
   }
-
-  console.log(`[b2b-custom-prices] Pure Catalog Resolution for List: ${priceListId}`);
 
   const discounts = [];
 
@@ -40,8 +39,7 @@ export function run(input) {
 
     let targetWholesalePrice = null;
 
-    // ── THE SOURCE OF TRUTH ──────────────────────────────────────────────────
-    // We strictly use the map synced from the Shopify Catalog Price Lists.
+    // ── 1. PRIMARY: Explicit Fixed Price from Sync Map ─────────────────────
     const fixedPricesRaw = variant.fixedPrices?.value;
     if (fixedPricesRaw) {
       try {
@@ -53,12 +51,16 @@ export function run(input) {
       } catch (e) {}
     }
 
+    // ── 2. SECONDARY: Independent Calculation (Flicker Protection) ────────
+    // If the sync map hasn't loaded yet but we have a raised retail price,
+    // we use the Company's blanket discount percentage to calculate the target.
+    if (targetWholesalePrice === null && discountPct > 0 && standardRetail > 0) {
+      targetWholesalePrice = standardRetail * (1 - discountPct / 100);
+    }
+
     // APPLY DISCOUNT: calculate the markdown from currentPrice (Retail) to Target Wholesale.
-    // If no target is found, we assume full retail (0 discount).
     if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice + 0.01) {
       const discountAmount = currentPrice - targetWholesalePrice;
-
-      console.log(`Line ${line.id}: CurrentPrice=${currentPrice.toFixed(2)}, TargetWholesale=${targetWholesalePrice.toFixed(2)}, Discount=${discountAmount.toFixed(2)}`);
 
       discounts.push({
         targets: [
