@@ -5,18 +5,19 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Cache-Control": "no-store",
+  "X-CVH-Version": "205"
 };
 
 async function catalogIdFromLocationGid(prisma, locationGid) {
   if (!locationGid) return null;
-  const normalized = locationGid.includes("/") ? locationGid : `gid://shopify/CompanyLocation/${locationGid}`;
+  const normalized = String(locationGid).includes("/") ? locationGid : `gid://shopify/CompanyLocation/${locationGid}`;
   const mapping = await prisma.locationCatalogMap.findUnique({ where: { locationGid: normalized } });
   return mapping?.catalogId ?? null;
 }
 
 async function catalogIdFromCustomer(prisma, customerId, shop) {
   if (!customerId || !shop) return null;
-  const customerGid = customerId.includes("/") ? customerId : `gid://shopify/Customer/${customerId}`;
+  const customerGid = String(customerId).includes("/") ? customerId : `gid://shopify/Customer/${customerId}`;
   
   const session = await prisma.session.findFirst({ where: { shop, isOnline: false } });
   if (!session?.accessToken) return null;
@@ -44,11 +45,11 @@ async function catalogIdFromCustomer(prisma, customerId, shop) {
   return null;
 }
 
-function isLegacyId(value) { return value.includes("/") || /^\d{10,}$/.test(value); }
+function isLegacyId(value) { return String(value).includes("/") || /^\d{10,}$/.test(String(value)); }
 
 async function findRule(prisma, catalogId) {
     if (!catalogId) return null;
-    const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
+    const cleanId = String(catalogId).includes("/") ? catalogId.split("/").pop() : catalogId;
     return await prisma.catalogRule.findFirst({
         where: {
             OR: [
@@ -63,8 +64,8 @@ async function findRule(prisma, catalogId) {
 
 async function findOverride(prisma, catalogId, productId) {
     if (!catalogId || !productId) return null;
-    const cleanCat = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
-    const cleanProd = productId.includes("/") ? productId.split("/").pop() : productId;
+    const cleanCat = String(catalogId).includes("/") ? catalogId.split("/").pop() : catalogId;
+    const cleanProd = String(productId).includes("/") ? productId.split("/").pop() : productId;
     const fullProd = `gid://shopify/Product/${cleanProd}`;
 
     return await prisma.productOverride.findFirst({
@@ -102,16 +103,17 @@ export async function loader({ request }) {
     strategy = "customerId";
   }
 
+  console.log(`[CVH-API] Request Resolved | Strategy: ${strategy} | Resolved Catalog: ${catalogId} | Location: ${locationId}`);
+
   if (!catalogId) {
     return new Response(JSON.stringify({ 
         hiddenVariantTypes: [], 
         hiddenVariantIds: [], 
         hasOverride: false,
-        debug: { strategy: "failed", resolved: false } 
+        debug: { strategy: "failed", resolved: false, version: "205" } 
     }), { status: 200, headers: CORS_HEADERS });
   }
 
-  // Resolve blanket rules and overrides in parallel
   const [rule, override] = await Promise.all([
       findRule(prisma, catalogId),
       productId ? findOverride(prisma, catalogId, productId) : Promise.resolve(null)
@@ -130,20 +132,22 @@ export async function loader({ request }) {
       }
   }
 
-  return new Response(
-    JSON.stringify({ 
-      hiddenVariantTypes: Array.from(hiddenTypes), 
-      hiddenVariantIds: Array.from(hiddenIds), 
-      hasOverride: !!override,
-      debug: {
-          strategy,
-          resolvedCatalogId: catalogId,
-          ruleFound: !!rule,
-          ruleName: rule?.catalogName,
-          overrideFound: !!override,
-          productId
-      }
-    }), 
-    { status: 200, headers: CORS_HEADERS }
-  );
+  const responsePayload = { 
+    hiddenVariantTypes: Array.from(hiddenTypes), 
+    hiddenVariantIds: Array.from(hiddenIds), 
+    hasOverride: !!override,
+    debug: {
+        version: "205",
+        strategy,
+        resolvedCatalogId: catalogId,
+        ruleFound: !!rule,
+        ruleName: rule?.catalogName,
+        overrideFound: !!override,
+        productId
+    }
+  };
+
+  console.log(`[CVH-API] Response Payload:`, JSON.stringify(responsePayload));
+
+  return new Response(JSON.stringify(responsePayload), { status: 200, headers: CORS_HEADERS });
 }

@@ -26,5 +26,6 @@
   style="display:none;"
   aria-hidden="true"
 ></div>
-<script src="{{ 'catalog-variant-hider.js' | asset_url }}" defer></script>
+{%- assign cvh_now = "now" | date: "%S" -%}
+<script src="{{ 'catalog-variant-hider.js' | asset_url }}?v={{ cvh_now }}" defer></script>
 {% endif %}
