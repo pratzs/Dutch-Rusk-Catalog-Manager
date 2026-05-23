@@ -67,32 +67,12 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // Ensure we reset UI state if this is a re-application (un-hiding)
-    const resetHiding = () => {
-        container.querySelectorAll('[style*="display: none"]').forEach(el => {
-            if (el.style.display === "none") el.style.removeProperty("display");
-        });
-        const btn = container.querySelector('button[disabled]');
-        if (btn && (btn.textContent.includes("soon") || btn.textContent === "Back soon")) {
-            btn.disabled = false;
-            btn.style.removeProperty("opacity");
-            btn.style.removeProperty("pointer-events");
-            // Theme will likely re-calculate text automatically on next update
-        }
-    };
-
     if (validTypes.length === 0 && validIds.length === 0) {
-      resetHiding();
       injectStrikethroughPricing(container);
       return;
     }
 
     container.setAttribute("data-cvh-processed", "1");
-    const content = container.textContent || "";
-
-    const currentSkuEl = container.querySelector(".product__sku, [data-sku]");
-    const currentSku   = currentSkuEl ? currentSkuEl.textContent.trim() : "";
-    const isForbiddenSkuSelected = validIds.includes(currentSku);
 
     const allVariantEls = Array.from(
       container.querySelectorAll('input[type="radio"], option, button[data-variant-id], .variant-input input, label[data-value]')
@@ -112,29 +92,31 @@
     };
 
     const isBlockedEl = (el) => {
-      const val = elText(el).toLowerCase();
-      if (!val) return false;
-      return validTypes.some(t => val.startsWith(t.toLowerCase())) || 
-             validIds.some(id => val === id.toLowerCase());
-    };
-
-    const blockedEls = allVariantEls.filter(isBlockedEl);
-
-    const isPlaceholder = (el) => {
       const val = elText(el);
-      return val === "" || /^[-–—]|select|choose/i.test(val);
+      if (!val) return false;
+      const valLower = val.toLowerCase();
+      
+      const typeMatch = validTypes.some(t => valLower.startsWith(t.toLowerCase()));
+      const idMatch = validIds.some(id => valLower === id.toLowerCase());
+      
+      const isBlocked = typeMatch || idMatch;
+      if (isBlocked) console.log(`[CVH] Detected forbidden element: "${val}"`);
+      return isBlocked;
     };
-    const realVariantEls    = allVariantEls.filter(el => !isPlaceholder(el));
-    const hasNonBlockedOpt  = realVariantEls.length > 0 && realVariantEls.some(el => !isBlockedEl(el));
 
+    // ── HIDE-ONLY POLICY ──────────────────────────────────────────────────
+    // We only hide specific elements. We DO NOT touch buttons or stock.
+    // The theme will naturally handle the rest.
+    
     const hideVariantEl = (el) => {
       el.style.setProperty("display", "none", "important");
       if (el.id) {
         const lbl = container.querySelector(`label[for="${el.id}"]`);
         if (lbl) lbl.style.setProperty("display", "none", "important");
       }
+      // Reverted to more conservative wrapper hiding
       const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
-      if (wrap && !wrap.classList.contains("grid__item") && !wrap.classList.contains("product-form__input")) {
+      if (wrap && !wrap.classList.contains("grid__item")) {
         wrap.style.setProperty("display", "none", "important");
       }
     };
@@ -152,28 +134,9 @@
       });
     };
 
-    const _findBtn = (root) =>
-      Array.from(root.querySelectorAll('button, [type="submit"], a.btn')).find(b => {
-        if (b.name === "add") return true;
-        const t = (b.textContent || "").trim().toLowerCase();
-        return t.includes("add to cart") || t.includes("add to bag") || t.includes("buy now") || t === "add";
-      }) || root.querySelector('form[action*="/cart/add"] button');
-
-    if (hasNonBlockedOpt && !isForbiddenSkuSelected) {
-      resetHiding(); // Show previously hidden items if they are now allowed
-      blockedEls.forEach(hideVariantEl);
-      sweepBlockedLabels();
-    } else if (realVariantEls.length > 0 || isForbiddenSkuSelected) {
-      const btn = _findBtn(container);
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = "Back soon";
-        btn.style.opacity = "0.5";
-        btn.style.setProperty("pointer-events", "none", "important");
-      }
-      blockedEls.forEach(hideVariantEl);
-      sweepBlockedLabels();
-    }
+    const blockedEls = allVariantEls.filter(isBlockedEl);
+    blockedEls.forEach(hideVariantEl);
+    sweepBlockedLabels();
     
     injectStrikethroughPricing(container);
   }
@@ -181,6 +144,10 @@
   async function init() {
     const el = document.getElementById("catalog-variant-hider-data") || document.querySelector("[data-location-id]");
     if (!el) return;
+
+    if (!LOCATION_ID && !CUSTOMER_ID) return;
+
+    console.log("[CVH] Running | Location:", LOCATION_ID, "| Customer:", CUSTOMER_ID);
 
     const singleProductId = el.dataset.productId || null;
     let resolvedLocationId = LOCATION_ID;
@@ -194,24 +161,24 @@
 
     if (singleProductId) {
       const rules = await fetchRules(resolvedLocationId, singleProductId);
+      console.log("[CVH] Rules for Product:", rules);
+      
       const applyAll = () => {
         const SELECTORS = "#main-product, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container, article";
         document.querySelectorAll(SELECTORS).forEach(c => applyRulesToContainer(c, rules));
       };
       applyAll();
       new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
+
     } else {
-      // ══ COLLECTION PAGE ══════════════════════════════════════════════════════
-      const blanketRules = await fetchRules(resolvedLocationId, "");
-      
       const processBatch = async () => {
         const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
         if (pidElements.length === 0) return;
         
-        // Mark as seen immediately
         pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
-        
-        await Promise.all(pidElements.map(async (pidEl) => {
+        const blanketRules = await fetchRules(resolvedLocationId, "");
+
+        pidElements.forEach(async (pidEl) => {
             const pid = pidEl.dataset.productId;
             const container = pidEl.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || pidEl;
             
@@ -220,16 +187,13 @@
             
             const rules = await fetchRules(resolvedLocationId, fullPid);
             
-            // If this product has an override, apply its specific rules.
-            // If it doesn't, apply the blanket rules.
             if (rules.hasOverride) {
                 applyRulesToContainer(container, rules);
             } else {
                 applyRulesToContainer(container, blanketRules);
             }
-        }));
+        });
       };
-
       processBatch();
       new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
     }
