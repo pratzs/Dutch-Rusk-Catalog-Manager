@@ -97,10 +97,16 @@
     };
 
     const isBlockedEl = (el) => {
-      const val = elText(el).toLowerCase();
+      const val = elText(el);
       if (!val) return false;
-      return validTypes.some(t => val.startsWith(t.toLowerCase())) || 
-             validIds.some(id => val.startsWith(id.toLowerCase()));
+      const valLower = val.toLowerCase();
+      
+      const typeMatch = validTypes.some(t => valLower.startsWith(t.toLowerCase()));
+      const idMatch = validIds.includes(val); // Exact match for IDs/SKUs
+      
+      const isBlocked = typeMatch || idMatch;
+      if (val.length < 50) console.log(`[CVH] Checking "${val}": Blocked=${isBlocked}`);
+      return isBlocked;
     };
 
     const blockedEls = allVariantEls.filter(isBlockedEl);
@@ -118,7 +124,8 @@
         const lbl = container.querySelector(`label[for="${el.id}"]`);
         if (lbl) lbl.style.setProperty("display", "none", "important");
       }
-      const wrap = el.closest(".swatch-element, .variant-input, li, .option__item, .product-form__input");
+      // Reverted to more conservative wrapper hiding
+      const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
       if (wrap && !wrap.classList.contains("grid__item")) {
         wrap.style.setProperty("display", "none", "important");
       }
@@ -129,7 +136,7 @@
         if (el.style.display === "none") return;
         if (isBlockedEl(el)) {
           el.style.setProperty("display", "none", "important");
-          const wrap = el.closest(".swatch-element, .variant-input, li, .option__item, .product-form__input");
+          const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
           if (wrap && !wrap.classList.contains("grid__item")) {
             wrap.style.setProperty("display", "none", "important");
           }
@@ -157,7 +164,6 @@
       blockedEls.forEach(hideVariantEl);
       sweepBlockedLabels();
     } else if (realVariantEls.length > 0 || isForbiddenSkuSelected) {
-      // ── All real options blocked: disable product ───────────────────────
       let btn = _findBtn(container);
       if (btn) {
         btn.disabled = true;
@@ -179,6 +185,8 @@
 
     if (!LOCATION_ID && !CUSTOMER_ID) return;
 
+    console.log("[CVH] Running | Location:", LOCATION_ID, "| Customer:", CUSTOMER_ID);
+
     const singleProductId = el.dataset.productId || null;
     let resolvedLocationId = LOCATION_ID;
 
@@ -191,12 +199,15 @@
 
     if (singleProductId) {
       const rules = await fetchRules(resolvedLocationId, singleProductId);
+      console.log("[CVH] Rules for Product:", rules);
+      
       const applyAll = () => {
         const SELECTORS = "#main-product, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container, article";
         document.querySelectorAll(SELECTORS).forEach(c => applyRulesToContainer(c, rules));
       };
       applyAll();
       new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
+
     } else {
       const processBatch = async () => {
         const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));

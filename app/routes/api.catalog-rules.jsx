@@ -147,20 +147,21 @@ export async function loader({ request }) {
       findRule(prisma, catalogId),
       productId ? findOverride(prisma, catalogId, productId) : Promise.resolve(null)
   ]);
+const hiddenTypes = new Set((rule?.hiddenVariantTypes ?? []).filter(t => t && String(t).trim()));
+const hiddenIds = new Set((rule?.hiddenVariantIds ?? []).filter(id => id && String(id).trim()));
 
-  const hiddenTypes = new Set(rule?.hiddenVariantTypes ?? []);
-  const hiddenIds = new Set(rule?.hiddenVariantIds ?? []);
-
-  if (override && override.hiddenVariantIds.length > 0) {
-      for (const val of override.hiddenVariantIds) {
-          if (isLegacyId(val)) {
-              hiddenIds.add(val);
-          } else {
-              hiddenTypes.add(val);
-          }
+if (override) {
+  if (override.hiddenVariantIds.length > 0) {
+    for (const val of override.hiddenVariantIds) {
+      if (!val || !String(val).trim()) continue;
+      if (isLegacyId(val)) {
+        hiddenIds.add(val);
+      } else {
+        hiddenTypes.add(val);
       }
+    }
   }
-
+}
   return new Response(
     JSON.stringify({ 
       hiddenVariantTypes: Array.from(hiddenTypes), 
