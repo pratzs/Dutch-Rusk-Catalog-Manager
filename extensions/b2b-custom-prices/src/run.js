@@ -21,13 +21,12 @@ const EMPTY_DISCOUNT = {
 export function run(input) {
   const company = input.cart.buyerIdentity?.purchasingCompany?.company;
   const priceListId = company?.priceListId?.value;
-  const discountPct = parseFloat(company?.discountPct?.value ?? "0");
 
   if (!priceListId) {
     return EMPTY_DISCOUNT;
   }
 
-  console.log(`[b2b-custom-prices] Run for List: ${priceListId} | Blanket: ${discountPct}%`);
+  console.log(`[b2b-custom-prices] Pure Catalog Resolution for List: ${priceListId}`);
 
   const discounts = [];
 
@@ -41,7 +40,8 @@ export function run(input) {
 
     let targetWholesalePrice = null;
 
-    // 1. Check for Fixed Override (Priority 1)
+    // ── THE SOURCE OF TRUTH ──────────────────────────────────────────────────
+    // We strictly use the map synced from the Shopify Catalog Price Lists.
     const fixedPricesRaw = variant.fixedPrices?.value;
     if (fixedPricesRaw) {
       try {
@@ -53,20 +53,8 @@ export function run(input) {
       } catch (e) {}
     }
 
-    // 2. Fallback to blanket percentage calculation (Priority 2)
-    if (targetWholesalePrice === null && discountPct > 0) {
-      const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
-      targetWholesalePrice = baseline * (1 - discountPct / 100);
-    }
-
-    // ── 3. PRICE GUARD ───────────────────────────────────────────────────────
-    // If the final wholesale price is lower than the price Shopify naturally 
-    // calculated for the catalog, we should favor the catalog price unless 
-    // it was an explicit fixed override.
-    // NOTE: Because the Transformer raised the price, we can't easily see the 
-    // original catalog price here. However, we know that if we haven't found 
-    // a target yet, the discount should be 0.
-    
+    // APPLY DISCOUNT: calculate the markdown from currentPrice (Retail) to Target Wholesale.
+    // If no target is found, we assume full retail (0 discount).
     if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice + 0.01) {
       const discountAmount = currentPrice - targetWholesalePrice;
 

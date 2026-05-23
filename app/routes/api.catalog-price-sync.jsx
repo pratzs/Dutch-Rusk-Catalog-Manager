@@ -48,12 +48,9 @@ async function fetchPriceListPrices(admin, priceListId) {
 }
 
 async function fetchExhaustiveB2BMap(admin) {
-  // Returns: [{priceListId, catalogId, companyIds: [...], locationIds: [...]}]
   const resultByCatalog = {};
   let cursor = null;
-  
   console.log("[catalog-sync] Fetching exhaustive B2B Location structure...");
-  
   do {
     const { data } = await gql(admin, `query GetB2BStructure($cursor: String) {
       companyLocations(first: 50, after: $cursor) {
@@ -70,22 +67,14 @@ async function fetchExhaustiveB2BMap(admin) {
         }
       }
     }`, { cursor });
-    
     const page = data?.companyLocations;
     if (!page) break;
-
     for (const loc of page.nodes) {
       for (const cat of loc.catalogs?.nodes ?? []) {
         if (!cat.priceList?.id) continue;
-        
         const cId = cat.id;
         if (!resultByCatalog[cId]) {
-          resultByCatalog[cId] = {
-            catalogId: cId.split("/").pop(),
-            priceListId: cat.priceList.id,
-            companyIds: new Set(),
-            locationIds: new Set()
-          };
+          resultByCatalog[cId] = { catalogId: cId.split("/").pop(), priceListId: cat.priceList.id, companyIds: new Set(), locationIds: new Set() };
         }
         if (loc.company?.id) resultByCatalog[cId].companyIds.add(loc.company.id);
         resultByCatalog[cId].locationIds.add(loc.id);
@@ -93,21 +82,14 @@ async function fetchExhaustiveB2BMap(admin) {
     }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
-  
-  return Object.values(resultByCatalog).map(item => ({
-    ...item,
-    companyIds: Array.from(item.companyIds),
-    locationIds: Array.from(item.locationIds)
-  }));
+  return Object.values(resultByCatalog).map(item => ({ ...item, companyIds: Array.from(item.companyIds), locationIds: Array.from(item.locationIds) }));
 }
 
 async function fetchVariantFixedPriceMetaBatch(admin, variantIds) {
   const map = {};
   const { data } = await gql(admin, `query GetVariantMeta($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id price compareAtPrice meta: metafield(namespace: "custom", key: "catalog_fixed_prices") { value } } } }`, { ids: variantIds });
   for (const node of data?.nodes ?? []) {
-    if (node?.id) {
-      map[node.id] = { metaValue: node.meta?.value ?? null, price: node.price, compareAtPrice: node.compareAtPrice };
-    }
+    if (node?.id) map[node.id] = { metaValue: node.meta?.value ?? null, price: node.price, compareAtPrice: node.compareAtPrice };
   }
   return map;
 }
@@ -117,18 +99,14 @@ async function runSync(admin, shop, options = {}) {
   const log = (...args) => console.log("[catalog-sync]", ...args);
   const { default: prisma } = await import("../db.server");
 
-  // ── 0. Concurrency Lock ──────────────────────────────────────────────────
   const lockKey = "GLOBAL_SYNC_LOCK";
   const lastSync = await prisma.catalogSyncState.findFirst({ where: { shop, priceListId: lockKey } });
   const now = Date.now();
-  if (lastSync && now - lastSync.lastSyncedAt.getTime() < 8 * 60 * 1000) {
-    log("Sync already in progress (locked). Skipping.");
-    return { success: false, message: "Locked" };
-  }
+  if (lastSync && now - lastSync.lastSyncedAt.getTime() < 8 * 60 * 1000) { log("Locked."); return { success: false, message: "Locked" }; }
   await prisma.catalogSyncState.upsert({ where: { shop_priceListId: { shop, priceListId: lockKey } }, create: { shop, priceListId: lockKey, lastSyncedAt: new Date() }, update: { lastSyncedAt: new Date() } });
 
   try {
-    log(`Starting sync | CompanyOnly: ${companyOnly} | Force: ${forceAll}`);
+    log(`Starting Pure Catalog Truth Sync | CompanyOnly: ${companyOnly}`);
 
     const priceLists = await fetchAllPriceLists(admin);
     const dbStates = await prisma.catalogSyncState.findMany({ where: { shop } });
@@ -138,97 +116,88 @@ async function runSync(admin, shop, options = {}) {
     const allAdjustments = {}; 
 
     for (const pl of priceLists) {
-      const adj = pl.parent?.adjustment || { type: "PERCENTAGE_DECREASE", value: 0 };
-      allAdjustments[pl.id] = adj;
+      allAdjustments[pl.id] = pl.parent?.adjustment || { type: "PERCENTAGE_DECREASE", value: 0 };
       allOverridesByList[pl.id] = {};
     }
 
     let updatedVariants = 0;
     if (!companyOnly) {
-      const toSync = forceAll ? priceLists : priceLists.filter((pl) => {
-        const db = dbMap[pl.id];
-        if (!db) return true;
-        const adj = allAdjustments[pl.id];
-        return db.adjustmentType !== adj.type || db.adjustmentValue !== adj.value;
-      });
+      const toSync = priceLists; // Always sync for truth during rollout
 
-      if (toSync.length > 0 || specificVariantIds) {
-        log(`Processing ${toSync.length} price list(s) for variants...`);
-        for (const pl of toSync) {
-          const prices = await fetchPriceListPrices(admin, pl.id);
-          for (const { variantId, price } of prices) { allOverridesByList[pl.id][variantId] = price; }
-        }
-        const affectedVariantIds = new Set();
-        for (const pl of toSync) { for (const id of Object.keys(allOverridesByList[pl.id] ?? {})) affectedVariantIds.add(id); }
-        if (specificVariantIds) { for (const id of specificVariantIds) affectedVariantIds.add(id); }
+      log(`Exhaustively syncing ${toSync.length} price list(s)`);
+      for (const pl of toSync) {
+        const prices = await fetchPriceListPrices(admin, pl.id);
+        for (const { variantId, price } of prices) { allOverridesByList[pl.id][variantId] = price; }
+      }
 
-        const variantIdArray = [...affectedVariantIds];
-        log(`Iteratively updating ${variantIdArray.length} variant(s) in batches of ${VARIANT_BATCH}...`);
-        for (let i = 0; i < variantIdArray.length; i += VARIANT_BATCH) {
-          const batchIds = variantIdArray.slice(i, i + VARIANT_BATCH);
-          const existingMetaBatch = await fetchVariantFixedPriceMetaBatch(admin, batchIds);
-          const metafieldsToWrite = [];
-          for (const variantId of batchIds) {
-            const vData = existingMetaBatch[variantId];
-            const standardPrice = vData?.compareAtPrice || vData?.price || "0";
-            let merged = {};
-            try { if (vData?.metaValue) merged = JSON.parse(vData.metaValue); } catch { merged = {}; }
-            for (const pl of toSync) {
-              const price = allOverridesByList[pl.id]?.[variantId];
-              if (price !== undefined) merged[pl.id] = price; else delete merged[pl.id];
+      const affectedVariantIds = new Set();
+      for (const pl of toSync) { for (const id of Object.keys(allOverridesByList[pl.id] ?? {})) affectedVariantIds.add(id); }
+      if (specificVariantIds) { for (const id of specificVariantIds) affectedVariantIds.add(id); }
+
+      const variantIdArray = [...affectedVariantIds];
+      log(`Updating ${variantIdArray.length} variants...`);
+
+      for (let i = 0; i < variantIdArray.length; i += VARIANT_BATCH) {
+        const batchIds = variantIdArray.slice(i, i + VARIANT_BATCH);
+        const existingMetaBatch = await fetchVariantFixedPriceMetaBatch(admin, batchIds);
+        const metafieldsToWrite = [];
+
+        for (const variantId of batchIds) {
+          const vData = existingMetaBatch[variantId];
+          const standardPrice = parseFloat(vData?.compareAtPrice || vData?.price || "0");
+          let merged = {};
+          try { if (vData?.metaValue) merged = JSON.parse(vData.metaValue); } catch { merged = {}; }
+          
+          for (const pl of toSync) {
+            let price = allOverridesByList[pl.id]?.[variantId];
+            
+            // If Shopify didn't return an explicit price for this variant in the list,
+            // we calculate the "Truth" by applying the catalog's percentage adjustment
+            // to the standard retail price.
+            if (price === undefined) {
+                const adj = allAdjustments[pl.id];
+                const retail = standardPrice;
+                if (adj.type === "PERCENTAGE_DECREASE") {
+                    price = (retail * (1 - adj.value / 100)).toFixed(2);
+                } else if (adj.type === "PERCENTAGE_INCREASE") {
+                    price = (retail * (1 + adj.value / 100)).toFixed(2);
+                } else {
+                    price = retail.toFixed(2);
+                }
             }
-            metafieldsToWrite.push(
-              { ownerId: variantId, namespace: "custom", key: "catalog_fixed_prices", type: "json", value: JSON.stringify(merged) },
-              { ownerId: variantId, namespace: "custom", key: "standard_retail_price", type: "number_decimal", value: String(standardPrice) }
-            );
+            merged[pl.id] = price;
           }
-          await metafieldsSet(admin, metafieldsToWrite);
-          updatedVariants += metafieldsToWrite.length;
+          
+          metafieldsToWrite.push(
+            { ownerId: variantId, namespace: "custom", key: "catalog_fixed_prices", type: "json", value: JSON.stringify(merged) },
+            { ownerId: variantId, namespace: "custom", key: "standard_retail_price", type: "number_decimal", value: String(standardPrice) }
+          );
         }
-        for (const pl of toSync) {
-          const adj = allAdjustments[pl.id];
-          await prisma.catalogSyncState.upsert({
-            where: { shop_priceListId: { shop, priceListId: pl.id } },
-            create: { shop, priceListId: pl.id, priceListName: pl.name, adjustmentType: adj?.type ?? "", adjustmentValue: adj?.value ?? 0 },
-            update: { priceListName: pl.name, adjustmentType: adj?.type ?? "", adjustmentValue: adj?.value ?? 0 },
-          });
-        }
+        await metafieldsSet(admin, metafieldsToWrite);
+        updatedVariants += metafieldsToWrite.length;
       }
     }
 
-    log("Updating B2B mapping (Companies & Locations)...");
+    log("Updating mapping...");
     const catalogDataMap = await fetchExhaustiveB2BMap(admin);
     const companyMetafields = [];
     let updatedCompanies = 0;
     const locationUpserts = [];
 
     for (const { priceListId, catalogId, companyIds, locationIds } of catalogDataMap) {
-      const adj = allAdjustments[priceListId];
-      const pct = adj ? (adj.type === "PERCENTAGE_DECREASE" ? String(adj.value) : adj.type === "PERCENTAGE_INCREASE" ? String(-adj.value) : "0") : "0";
-
       for (const locId of locationIds) {
-        locationUpserts.push(prisma.locationCatalogMap.upsert({
-          where: { locationGid: locId },
-          update: { catalogId },
-          create: { locationGid: locId, catalogId },
-        }));
+        locationUpserts.push(prisma.locationCatalogMap.upsert({ where: { locationGid: locId }, update: { catalogId }, create: { locationGid: locId, catalogId } }));
       }
-
       for (const companyId of companyIds) {
-        companyMetafields.push(
-          { ownerId: companyId, namespace: "custom", key: "catalog_pricelist_id", type: "single_line_text_field", value: priceListId },
-          { ownerId: companyId, namespace: "custom", key: "catalog_discount_pct", type: "number_decimal", value: pct }
-        );
+        companyMetafields.push({ ownerId: companyId, namespace: "custom", key: "catalog_pricelist_id", type: "single_line_text_field", value: priceListId });
         updatedCompanies++;
       }
     }
 
-    if (locationUpserts.length > 0) { log(`Updating ${locationUpserts.length} location mappings...`); await Promise.all(locationUpserts); }
-    if (companyMetafields.length > 0) { log(`Updating ${updatedCompanies} company metafields...`); await metafieldsSet(admin, companyMetafields); }
+    if (locationUpserts.length > 0) await Promise.all(locationUpserts);
+    if (companyMetafields.length > 0) await metafieldsSet(admin, companyMetafields);
 
-    log("Sync cycle complete.");
     return { success: true, updatedCompanies, updatedVariants };
-
   } finally {
     await prisma.catalogSyncState.deleteMany({ where: { shop, priceListId: lockKey } });
   }
@@ -240,44 +209,21 @@ export async function action({ request }) {
   const incomingSecret = request.headers.get("x-cron-secret") ?? "";
   const body = await request.json().catch(() => ({}));
   let admin, shop;
-
   if (incomingSecret && incomingSecret === cronSecret) {
     const { default: prisma } = await import("../db.server");
-    const session = await prisma.session.findFirst({
-      where: { isOnline: false, accessToken: { not: "" } },
-      orderBy: { id: "desc" },
-    });
-    if (!session) {
-      console.error("[catalog-sync] Error: No offline session found in DB");
-      return Response.json({ error: "Configuration Error" }, { status: 500 });
-    }
+    const session = await prisma.session.findFirst({ where: { isOnline: false, accessToken: { not: "" } }, orderBy: { id: "desc" } });
+    if (!session) return Response.json({ error: "No session" }, { status: 500 });
     shop = session.shop;
-    const token = session.accessToken;
-    admin = {
-      graphql: async (query, { variables } = {}) => {
-        const r = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-          body: JSON.stringify({ query, variables }),
-        });
-        return { json: () => r.json() };
-      },
-    };
+    admin = { graphql: async (query, { variables } = {}) => { const r = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, { method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken }, body: JSON.stringify({ query, variables }) }); return { json: () => r.json() }; } };
   } else {
     const auth = await authenticate.admin(request);
     admin = auth.admin;
     shop = auth.session.shop;
   }
-
   try {
-    const result = await runSync(admin, shop, { 
-      forceAll: body.forceAll === true, 
-      variantIds: Array.isArray(body.variantIds) ? body.variantIds : null,
-      companyOnly: body.companyOnly === true
-    });
-    return Response.json({ success: true, ...result });
+    return Response.json({ success: true, ...(await runSync(admin, shop, { forceAll: body.forceAll === true, variantIds: Array.isArray(body.variantIds) ? body.variantIds : null, companyOnly: body.companyOnly === true })) });
   } catch (err) {
-    console.error("[catalog-sync] Error:", err);
+    console.error(err);
     return Response.json({ error: err.message }, { status: 500 });
   }
 }
