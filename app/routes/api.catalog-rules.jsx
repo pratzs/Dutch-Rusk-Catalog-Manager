@@ -85,20 +85,30 @@ export async function loader({ request }) {
   const shop = url.searchParams.get("shop");
 
   let locationId = url.searchParams.get("locationId");
+  let strategy = "locationId";
   let catalogId = locationId ? await catalogIdFromLocationGid(prisma, locationId) : null;
 
   if (!catalogId) {
     const catalogIdParam = url.searchParams.get("catalogId");
-    if (catalogIdParam) catalogId = catalogIdParam;
+    if (catalogIdParam) {
+        catalogId = catalogIdParam;
+        strategy = "catalogIdParam";
+    }
   }
 
   if (!catalogId) {
     const customerId = url.searchParams.get("customerId");
     catalogId = await catalogIdFromCustomer(prisma, customerId, shop);
+    strategy = "customerId";
   }
 
   if (!catalogId) {
-    return new Response(JSON.stringify({ hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false }), { status: 200, headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ 
+        hiddenVariantTypes: [], 
+        hiddenVariantIds: [], 
+        hasOverride: false,
+        debug: { strategy: "failed", resolved: false } 
+    }), { status: 200, headers: CORS_HEADERS });
   }
 
   // Resolve blanket rules and overrides in parallel
@@ -124,7 +134,15 @@ export async function loader({ request }) {
     JSON.stringify({ 
       hiddenVariantTypes: Array.from(hiddenTypes), 
       hiddenVariantIds: Array.from(hiddenIds), 
-      hasOverride: !!override 
+      hasOverride: !!override,
+      debug: {
+          strategy,
+          resolvedCatalogId: catalogId,
+          ruleFound: !!rule,
+          ruleName: rule?.catalogName,
+          overrideFound: !!override,
+          productId
+      }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );
