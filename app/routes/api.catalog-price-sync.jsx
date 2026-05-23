@@ -47,19 +47,40 @@ async function fetchPriceListPrices(admin, priceListId) {
   return prices;
 }
 
-async function fetchCatalogCompanyMap(admin) {
+async function fetchExhaustiveCatalogMap(admin) {
   // Returns: [{priceListId, catalogId, companyIds: [...], locationIds: [...]}]
   const result = [];
   let cursor = null;
   do {
-    const { data } = await gql(admin, `query GetCatalogs($cursor: String) { catalogs(first: 20, after: $cursor, type: COMPANY_LOCATION) { pageInfo { hasNextPage endCursor } nodes { id priceList { id } ... on CompanyLocationCatalog { companyLocations(first: 100) { nodes { id company { id } } } } } } }`, { cursor });
+    const { data } = await gql(admin, `query GetCatalogs($cursor: String) { 
+        catalogs(first: 50, after: $cursor) { 
+            pageInfo { hasNextPage endCursor } 
+            nodes { 
+                id 
+                title
+                priceList { id } 
+                ... on CompanyLocationCatalog { 
+                    companyLocations(first: 100) { 
+                        nodes { 
+                            id 
+                            company { id } 
+                        } 
+                    } 
+                } 
+            } 
+        } 
+    }`, { cursor });
+    
     const page = data?.catalogs;
     if (!page) break;
+
     for (const cat of page.nodes) {
       if (!cat.priceList?.id) continue;
+      
       const locations = cat.companyLocations?.nodes ?? [];
       const companyIds = [...new Set(locations.map((loc) => loc.company?.id).filter(Boolean))];
       const locationIds = locations.map(loc => loc.id).filter(Boolean);
+      
       result.push({ 
         priceListId: cat.priceList.id, 
         catalogId: cat.id.split("/").pop(),
@@ -168,7 +189,7 @@ async function runSync(admin, shop, options = {}) {
     }
 
     log("Updating B2B mapping (Companies & Locations)...");
-    const catalogDataMap = await fetchCatalogCompanyMap(admin);
+    const catalogDataMap = await fetchExhaustiveCatalogMap(admin);
     const companyMetafields = [];
     let updatedCompanies = 0;
     const locationUpserts = [];
