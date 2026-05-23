@@ -47,50 +47,58 @@ async function fetchPriceListPrices(admin, priceListId) {
   return prices;
 }
 
-async function fetchExhaustiveCatalogMap(admin) {
+async function fetchExhaustiveB2BMap(admin) {
   // Returns: [{priceListId, catalogId, companyIds: [...], locationIds: [...]}]
-  const result = [];
+  const resultByCatalog = {};
   let cursor = null;
+  
+  console.log("[catalog-sync] Fetching exhaustive B2B Location structure...");
+  
   do {
-    const { data } = await gql(admin, `query GetCatalogs($cursor: String) { 
-        catalogs(first: 50, after: $cursor) { 
-            pageInfo { hasNextPage endCursor } 
-            nodes { 
-                id 
-                title
-                priceList { id } 
-                ... on CompanyLocationCatalog { 
-                    companyLocations(first: 100) { 
-                        nodes { 
-                            id 
-                            company { id } 
-                        } 
-                    } 
-                } 
-            } 
-        } 
+    const { data } = await gql(admin, `query GetB2BStructure($cursor: String) {
+      companyLocations(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          company { id }
+          catalogs(first: 5) {
+            nodes {
+              id
+              priceList { id }
+            }
+          }
+        }
+      }
     }`, { cursor });
     
-    const page = data?.catalogs;
+    const page = data?.companyLocations;
     if (!page) break;
 
-    for (const cat of page.nodes) {
-      if (!cat.priceList?.id) continue;
-      
-      const locations = cat.companyLocations?.nodes ?? [];
-      const companyIds = [...new Set(locations.map((loc) => loc.company?.id).filter(Boolean))];
-      const locationIds = locations.map(loc => loc.id).filter(Boolean);
-      
-      result.push({ 
-        priceListId: cat.priceList.id, 
-        catalogId: cat.id.split("/").pop(),
-        companyIds,
-        locationIds
-      });
+    for (const loc of page.nodes) {
+      for (const cat of loc.catalogs?.nodes ?? []) {
+        if (!cat.priceList?.id) continue;
+        
+        const cId = cat.id;
+        if (!resultByCatalog[cId]) {
+          resultByCatalog[cId] = {
+            catalogId: cId.split("/").pop(),
+            priceListId: cat.priceList.id,
+            companyIds: new Set(),
+            locationIds: new Set()
+          };
+        }
+        if (loc.company?.id) resultByCatalog[cId].companyIds.add(loc.company.id);
+        resultByCatalog[cId].locationIds.add(loc.id);
+      }
     }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
-  return result;
+  
+  return Object.values(resultByCatalog).map(item => ({
+    ...item,
+    companyIds: Array.from(item.companyIds),
+    locationIds: Array.from(item.locationIds)
+  }));
 }
 
 async function fetchVariantFixedPriceMetaBatch(admin, variantIds) {
@@ -189,7 +197,7 @@ async function runSync(admin, shop, options = {}) {
     }
 
     log("Updating B2B mapping (Companies & Locations)...");
-    const catalogDataMap = await fetchExhaustiveCatalogMap(admin);
+    const catalogDataMap = await fetchExhaustiveB2BMap(admin);
     const companyMetafields = [];
     let updatedCompanies = 0;
     const locationUpserts = [];

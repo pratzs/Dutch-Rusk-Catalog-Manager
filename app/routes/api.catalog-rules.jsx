@@ -5,7 +5,6 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Cache-Control": "no-store",
-  "X-CVH-Debug": "true"
 };
 
 async function catalogIdFromLocationGid(prisma, locationGid) {
@@ -42,7 +41,7 @@ async function resolveB2BContext(prisma, customerId, shop) {
       }),
     });
     const gqlData = await res.json();
-    if (gqlData.errors) return { error: gqlData.errors };
+    if (gqlData.errors) return null;
 
     const customer = gqlData.data?.customer;
     const profiles = customer?.companyContactProfiles ?? [];
@@ -69,7 +68,7 @@ async function resolveB2BContext(prisma, customerId, shop) {
         availableMappings
     };
   } catch (e) {
-    return { error: e.message };
+    return null;
   }
 }
 
@@ -140,7 +139,7 @@ export async function loader({ request }) {
         hiddenVariantTypes: [], 
         hiddenVariantIds: [], 
         hasOverride: false,
-        debug: { strategy: "failed", b2bContext } 
+        debug: { strategy: "failed", version: "210", locationId, customerId } 
     }), { status: 200, headers: CORS_HEADERS });
   }
 
@@ -168,10 +167,12 @@ export async function loader({ request }) {
       hiddenVariantIds: Array.from(hiddenIds), 
       hasOverride: !!override,
       debug: {
+          version: "210",
           strategy,
           resolvedCatalogId: catalogId,
           ruleFound: !!rule,
           ruleName: rule?.catalogName,
+          locationId,
           b2bContext
       }
     }), 
