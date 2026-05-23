@@ -73,6 +73,11 @@
     }
 
     container.setAttribute("data-cvh-processed", "1");
+    const content = container.textContent || "";
+
+    const currentSkuEl = container.querySelector(".product__sku, [data-sku]");
+    const currentSku   = currentSkuEl ? currentSkuEl.textContent.trim() : "";
+    const isForbiddenSkuSelected = validIds.includes(currentSku);
 
     const allVariantEls = Array.from(
       container.querySelectorAll('input[type="radio"], option, button[data-variant-id], .variant-input input, label[data-value]')
@@ -92,14 +97,10 @@
     };
 
     const isBlockedEl = (el) => {
-      const val = elText(el);
-      const valLower = val.toLowerCase();
-      const isBlocked = validTypes.some(t => valLower.startsWith(t.toLowerCase())) || 
-                        validIds.some(id => valLower.startsWith(id.toLowerCase()));
-      
-      // LOG EVERY CHECK
-      if (val) console.log(`[CVH] Checking element "${val}": Blocked=${isBlocked}`);
-      return isBlocked;
+      const val = elText(el).toLowerCase();
+      if (!val) return false;
+      return validTypes.some(t => val.startsWith(t.toLowerCase())) || 
+             validIds.some(id => val.startsWith(id.toLowerCase()));
     };
 
     const blockedEls = allVariantEls.filter(isBlockedEl);
@@ -126,9 +127,7 @@
     const sweepBlockedLabels = () => {
       container.querySelectorAll("label, option, .swatch-element, [class*='option__label'], [class*='variant-label'], [class*='swatch-label'], [class*='option-value'], [data-option-value], [data-value]").forEach(el => {
         if (el.style.display === "none") return;
-        const val = elText(el);
-        const valLower = val.toLowerCase();
-        if (val && (validTypes.some(t => valLower.startsWith(t.toLowerCase())) || validIds.some(id => valLower.startsWith(id.toLowerCase())))) {
+        if (isBlockedEl(el)) {
           el.style.setProperty("display", "none", "important");
           const wrap = el.closest(".swatch-element, .variant-input, li, .option__item, .product-form__input");
           if (wrap && !wrap.classList.contains("grid__item")) {
@@ -138,15 +137,28 @@
       });
     };
 
-    if (hasNonBlockedOpt) {
-      blockedEls.forEach(hideVariantEl);
-      sweepBlockedLabels();
-    } else if (realVariantEls.length > 0) {
-      const btn = Array.from(container.querySelectorAll('button, [type="submit"], a.btn')).find(b => {
+    const _findBtn = (root) =>
+      Array.from(root.querySelectorAll('button, [type="submit"], a.btn')).find(b => {
         if (b.name === "add") return true;
         const t = (b.textContent || "").trim().toLowerCase();
         return t.includes("add to cart") || t.includes("add to bag") || t.includes("buy now") || t === "add";
-      });
+      }) || root.querySelector('form[action*="/cart/add"] button');
+
+    const _hideStock = (root) => root.querySelectorAll(
+      '.inventory, .stock, .variant-wrapper, [id^="Inventory"], [class*="stock"], [class*="inventory"]'
+    ).forEach(item => {
+      const itemText = (item.textContent || "").toLowerCase();
+      if (validTypes.some(t => itemText.includes(t.toLowerCase()))) {
+        item.style.setProperty("display", "none", "important");
+      }
+    });
+
+    if (hasNonBlockedOpt && !isForbiddenSkuSelected) {
+      blockedEls.forEach(hideVariantEl);
+      sweepBlockedLabels();
+    } else if (realVariantEls.length > 0 || isForbiddenSkuSelected) {
+      // ── All real options blocked: disable product ───────────────────────
+      let btn = _findBtn(container);
       if (btn) {
         btn.disabled = true;
         btn.textContent = "Back soon";
@@ -155,6 +167,7 @@
       }
       blockedEls.forEach(hideVariantEl);
       sweepBlockedLabels();
+      _hideStock(container);
     }
     
     injectStrikethroughPricing(container);
@@ -164,7 +177,7 @@
     const el = document.getElementById("catalog-variant-hider-data") || document.querySelector("[data-location-id]");
     if (!el) return;
 
-    console.log("[CVH] Running | Location:", LOCATION_ID, "| Customer:", CUSTOMER_ID);
+    if (!LOCATION_ID && !CUSTOMER_ID) return;
 
     const singleProductId = el.dataset.productId || null;
     let resolvedLocationId = LOCATION_ID;
@@ -173,22 +186,17 @@
       try {
         const cartData = await (await fetch("/cart.js")).json();
         resolvedLocationId = cartData?.company_location?.id || cartData?.buyer_identity?.company_location?.id || null;
-        if (resolvedLocationId) console.log("[CVH] Got locationId from cart.js:", resolvedLocationId);
       } catch (_) {}
     }
 
     if (singleProductId) {
       const rules = await fetchRules(resolvedLocationId, singleProductId);
-      console.log("[CVH] Rules for Product:", rules);
-      
       const applyAll = () => {
         const SELECTORS = "#main-product, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container, article";
         document.querySelectorAll(SELECTORS).forEach(c => applyRulesToContainer(c, rules));
       };
-
       applyAll();
       new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
-
     } else {
       const processBatch = async () => {
         const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
