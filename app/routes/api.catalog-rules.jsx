@@ -12,48 +12,65 @@ async function catalogIdFromLocationGid(prisma, locationGid) {
   if (!locationGid) return null;
   const normalized = String(locationGid).includes("/") ? locationGid : `gid://shopify/CompanyLocation/${locationGid}`;
   const mapping = await prisma.locationCatalogMap.findUnique({ where: { locationGid: normalized } });
-  console.log(`[CVH-API] DB Lookup | locationGid: ${normalized} | Resolved Catalog: ${mapping?.catalogId || 'NONE'}`);
   return mapping?.catalogId ?? null;
 }
 
-async function catalogIdFromCustomer(prisma, customerId, shop) {
+async function resolveB2BContext(prisma, customerId, shop) {
   if (!customerId || !shop) return null;
   const customerGid = String(customerId).includes("/") ? customerId : `gid://shopify/Customer/${customerId}`;
   
-  console.log(`[CVH-API] Resolving catalog via Customer: ${customerGid}`);
-
   const session = await prisma.session.findFirst({ where: { shop, isOnline: false } });
-  if (!session?.accessToken) {
-    console.error(`[CVH-API] Auth failure: No offline session`);
-    return null;
-  }
+  if (!session?.accessToken) return null;
 
   try {
     const res = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
       body: JSON.stringify({
-        query: `query($id: ID!) { customer(id: $id) { companyContactProfiles { company { id locations(first: 50) { nodes { id } } } } } }`,
+        query: `query($id: ID!) { 
+            customer(id: $id) { 
+                firstName lastName email
+                companyContactProfiles { 
+                    company { 
+                        id name 
+                        locations(first: 50) { nodes { id name } } 
+                    } 
+                } 
+            } 
+        }`,
         variables: { id: customerGid },
       }),
     });
     const gqlData = await res.json();
-    if (gqlData.errors) {
-        console.error(`[CVH-API] Shopify Error:`, JSON.stringify(gqlData.errors));
-        return null;
-    }
+    if (gqlData.errors) return { error: gqlData.errors };
 
-    const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
+    const customer = gqlData.data?.customer;
+    const profiles = customer?.companyContactProfiles ?? [];
+    
+    let resolvedCatalogId = null;
+    const availableMappings = [];
+
     for (const profile of profiles) {
       for (const loc of profile.company?.locations?.nodes ?? []) {
         const id = await catalogIdFromLocationGid(prisma, loc.id);
-        if (id) return id;
+        availableMappings.push({ 
+            companyName: profile.company.name, 
+            locationName: loc.name, 
+            locationId: loc.id, 
+            catalogId: id 
+        });
+        if (!resolvedCatalogId && id) resolvedCatalogId = id;
       }
     }
+    
+    return {
+        customerName: `${customer?.firstName} ${customer?.lastName}`.trim(),
+        resolvedCatalogId,
+        availableMappings
+    };
   } catch (e) {
-    console.error(`[CVH-API] Resolution Exception:`, e);
+    return { error: e.message };
   }
-  return null;
 }
 
 function isLegacyId(value) { return String(value).includes("/") || /^\d{10,}$/.test(String(value)); }
@@ -61,8 +78,7 @@ function isLegacyId(value) { return String(value).includes("/") || /^\d{10,}$/.t
 async function findRule(prisma, catalogId) {
     if (!catalogId) return null;
     const cleanId = String(catalogId).includes("/") ? catalogId.split("/").pop() : catalogId;
-    
-    const rule = await prisma.catalogRule.findFirst({
+    return await prisma.catalogRule.findFirst({
         where: {
             OR: [
                 { catalogId: cleanId },
@@ -72,8 +88,6 @@ async function findRule(prisma, catalogId) {
             ]
         }
     });
-    console.log(`[CVH-API] Rule Search | catalogId: ${catalogId} | Result: ${rule ? 'FOUND' : 'MISSING'}`);
-    return rule;
 }
 
 async function findOverride(prisma, catalogId, productId) {
@@ -82,7 +96,7 @@ async function findOverride(prisma, catalogId, productId) {
     const cleanProd = String(productId).includes("/") ? productId.split("/").pop() : productId;
     const fullProd = `gid://shopify/Product/${cleanProd}`;
 
-    const override = await prisma.productOverride.findFirst({
+    return await prisma.productOverride.findFirst({
         where: {
             catalogId: cleanCat,
             OR: [
@@ -91,8 +105,6 @@ async function findOverride(prisma, catalogId, productId) {
             ]
         }
     });
-    console.log(`[CVH-API] Override Search | catalogId: ${cleanCat} | productId: ${cleanProd} | Result: ${override ? 'FOUND' : 'MISSING'}`);
-    return override;
 }
 
 export async function loader({ request }) {
@@ -106,6 +118,15 @@ export async function loader({ request }) {
   let strategy = "locationId";
   let catalogId = locationId ? await catalogIdFromLocationGid(prisma, locationId) : null;
 
+  let b2bContext = null;
+  if (customerId) {
+      b2bContext = await resolveB2BContext(prisma, customerId, shop);
+      if (!catalogId && b2bContext?.resolvedCatalogId) {
+          catalogId = b2bContext.resolvedCatalogId;
+          strategy = "customerId";
+      }
+  }
+
   if (!catalogId) {
     const catalogIdParam = url.searchParams.get("catalogId");
     if (catalogIdParam) {
@@ -114,18 +135,12 @@ export async function loader({ request }) {
     }
   }
 
-  if (!catalogId && customerId) {
-    catalogId = await catalogIdFromCustomer(prisma, customerId, shop);
-    strategy = "customerId";
-  }
-
   if (!catalogId) {
-    console.warn(`[CVH-API] Resolution FAILED for location: ${locationId}, customer: ${customerId}`);
     return new Response(JSON.stringify({ 
         hiddenVariantTypes: [], 
         hiddenVariantIds: [], 
         hasOverride: false,
-        debug: { strategy: "failed", locationId, customerId } 
+        debug: { strategy: "failed", b2bContext } 
     }), { status: 200, headers: CORS_HEADERS });
   }
 
@@ -147,20 +162,19 @@ export async function loader({ request }) {
       }
   }
 
-  const response = { 
-    hiddenVariantTypes: Array.from(hiddenTypes), 
-    hiddenVariantIds: Array.from(hiddenIds), 
-    hasOverride: !!override,
-    debug: {
-        strategy,
-        resolvedCatalogId: catalogId,
-        ruleFound: !!rule,
-        ruleName: rule?.catalogName,
-        overrideFound: !!override,
-        productId,
-        locationId
-    }
-  };
-
-  return new Response(JSON.stringify(response), { status: 200, headers: CORS_HEADERS });
+  return new Response(
+    JSON.stringify({ 
+      hiddenVariantTypes: Array.from(hiddenTypes), 
+      hiddenVariantIds: Array.from(hiddenIds), 
+      hasOverride: !!override,
+      debug: {
+          strategy,
+          resolvedCatalogId: catalogId,
+          ruleFound: !!rule,
+          ruleName: rule?.catalogName,
+          b2bContext
+      }
+    }), 
+    { status: 200, headers: CORS_HEADERS }
+  );
 }
