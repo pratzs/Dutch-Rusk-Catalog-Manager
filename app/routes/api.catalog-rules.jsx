@@ -31,7 +31,7 @@ async function catalogIdFromCustomer(prisma, customerId, shop) {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
       body: JSON.stringify({
-        query: `query($id: ID!) { customer(id: $id) { companyContactProfiles { company { locations(first: 50) { nodes { id } } } } } }`,
+        query: `query($id: ID!) { customer(id: $id) { companyContactProfiles { company { id name locations(first: 50) { nodes { id name } } } } } }`,
         variables: { id: customerGid },
       }),
     });
@@ -47,11 +47,11 @@ async function catalogIdFromCustomer(prisma, customerId, shop) {
 
     for (const profile of profiles) {
       const locations = profile.company?.locations?.nodes ?? [];
-      console.log(`[CVH-API] Company ${profile.company?.id} has ${locations.length} location(s)`);
+      console.log(`[CVH-API] Company ${profile.company?.id} (${profile.company?.name}) has ${locations.length} location(s)`);
       for (const loc of locations) {
         const id = await catalogIdFromLocationGid(prisma, loc.id);
         if (id) {
-            console.log(`[CVH-API] SUCCESS: Found catalog ${id} for location ${loc.id}`);
+            console.log(`[CVH-API] SUCCESS: Found catalog ${id} for location ${loc.id} (${loc.name})`);
             return id;
         }
       }
@@ -66,6 +66,24 @@ async function catalogIdFromCustomer(prisma, customerId, shop) {
 
 function isLegacyId(value) { return value.includes("/") || /^\d{10,}$/.test(value); }
 
+async function findRule(prisma, catalogId) {
+    if (!catalogId) return null;
+    const cleanId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
+    
+    // Try multiple ID formats to ensure we find the rule
+    const rule = await prisma.catalogRule.findFirst({
+        where: {
+            OR: [
+                { catalogId: cleanId },
+                { catalogId: `gid://shopify/MarketCatalog/${cleanId}` },
+                { catalogId: `gid://shopify/CompanyLocationCatalog/${cleanId}` },
+                { catalogId: `gid://shopify/AppCatalog/${cleanId}` }
+            ]
+        }
+    });
+    return rule;
+}
+
 export async function loader({ request }) {
   const { default: prisma } = await import("../db.server");
   const url = new URL(request.url);
@@ -79,7 +97,6 @@ export async function loader({ request }) {
 
   if (!catalogId) {
     catalogId = url.searchParams.get("catalogId") || null;
-    if (catalogId?.includes("/")) catalogId = catalogId.split("/").pop();
     if (catalogId) console.log(`[CVH-API] Resolved from catalogId param: ${catalogId}`);
   }
 
@@ -94,13 +111,17 @@ export async function loader({ request }) {
     return new Response(JSON.stringify({ hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false }), { status: 200, headers: CORS_HEADERS });
   }
 
-  if (catalogId.includes("/")) catalogId = catalogId.split("/").pop();
-  
-  const rule = await prisma.catalogRule.findUnique({ where: { catalogId } });
-  console.log(`[CVH-API] Rule for catalog ${catalogId}:`, rule ? "Found" : "NOT Found");
+  const rule = await findRule(prisma, catalogId);
+  console.log(`[CVH-API] Rule for catalog ${catalogId}:`, rule ? `Found (${rule.catalogName})` : "NOT Found");
 
   let override = null;
-  if (productId) override = await prisma.productOverride.findUnique({ where: { catalogId_productId: { catalogId, productId } } });
+  const cleanCatalogId = catalogId.includes("/") ? catalogId.split("/").pop() : catalogId;
+  if (productId) {
+      const cleanProductId = productId.includes("/") ? productId.split("/").pop() : productId;
+      override = await prisma.productOverride.findUnique({ 
+          where: { catalogId_productId: { catalogId: cleanCatalogId, productId: cleanProductId } } 
+      });
+  }
 
   const hiddenTypes = new Set(rule?.hiddenVariantTypes ?? []);
   const hiddenIds = new Set(rule?.hiddenVariantIds ?? []);

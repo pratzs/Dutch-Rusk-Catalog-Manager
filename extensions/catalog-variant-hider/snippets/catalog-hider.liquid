@@ -7,21 +7,11 @@
 {% endcomment %}
 {% if customer and customer.b2b? %}
   {%- comment -%}
-    Try every available B2B location source in order:
-    1. customer.company_location.id  (available when Shopify sets an active session location)
-    2. cart.company_location.id      (available when a B2B cart is active)
-    3. customer.company.locations    (fallback — pick the first assigned location)
-    If all Liquid sources are blank, the JS falls back to a server-side Admin API lookup
-    using customer.id so the correct catalog can still be resolved.
+    Get the active B2B location from the session.
   {%- endcomment -%}
-  {%- assign cvh_location_id = customer.company_location.id -%}
+  {%- assign cvh_location_id = customer.current_location.id -%}
   {%- if cvh_location_id == blank -%}
     {%- assign cvh_location_id = cart.company_location.id -%}
-  {%- endif -%}
-  {%- if cvh_location_id == blank -%}
-    {%- for loc in customer.company.locations -%}
-      {%- if cvh_location_id == blank -%}{%- assign cvh_location_id = loc.id -%}{%- endif -%}
-    {%- endfor -%}
   {%- endif -%}
 <div
   id="catalog-variant-hider-data"
