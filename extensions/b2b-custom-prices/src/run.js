@@ -35,13 +35,13 @@ export function run(input) {
     const variant = line.merchandise;
     if (variant.__typename !== "ProductVariant") continue;
 
-    // The currentPrice here will be the price RAISED to Retail by the Transformer.
+    // currentPrice here is the price RAISED to Retail by the Transformer.
     const currentPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
     const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
 
     let targetWholesalePrice = null;
 
-    // 1. Check for Fixed Override in metafields
+    // 1. Check for Fixed Override (Priority 1)
     const fixedPricesRaw = variant.fixedPrices?.value;
     if (fixedPricesRaw) {
       try {
@@ -53,27 +53,20 @@ export function run(input) {
       } catch (e) {}
     }
 
-    // 2. Fallback to blanket percentage calculation
+    // 2. Fallback to blanket percentage calculation (Priority 2)
     if (targetWholesalePrice === null && discountPct > 0) {
       const baseline = (standardRetail > 0) ? standardRetail : currentPrice;
       targetWholesalePrice = baseline * (1 - discountPct / 100);
     }
 
-    // ── 3. UNIVERSAL FALLBACK ───────────────────────────────────────────────
-    // If the Transformer raised the price to Retail ($31.30) but we still 
-    // haven't found a target wholesale price, we check if the retail price 
-    // is significantly higher than the current price. 
-    // This happens if the sync tool haven't populated the metafields yet.
-    if (targetWholesalePrice === null && standardRetail > 0 && currentPrice >= standardRetail - 0.01) {
-        // We know this item IS B2B (because we have a priceListId).
-        // If we don't have a specific target, we assume the B2B price should 
-        // be what it was BEFORE we raised it.
-        // But we don't know what that was. 
-        // For now, let's just log this case.
-        console.log(`Line ${line.id}: Raised to Retail but no target found. MetaValue: ${fixedPricesRaw}`);
-    }
-
-    // APPLY DISCOUNT: calculate the markdown from currentPrice (Retail) to Target Wholesale
+    // ── 3. PRICE GUARD ───────────────────────────────────────────────────────
+    // If the final wholesale price is lower than the price Shopify naturally 
+    // calculated for the catalog, we should favor the catalog price unless 
+    // it was an explicit fixed override.
+    // NOTE: Because the Transformer raised the price, we can't easily see the 
+    // original catalog price here. However, we know that if we haven't found 
+    // a target yet, the discount should be 0.
+    
     if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice + 0.01) {
       const discountAmount = currentPrice - targetWholesalePrice;
 
@@ -96,8 +89,6 @@ export function run(input) {
         },
         message: "B2B Wholesale Price",
       });
-    } else {
-      console.log(`Line ${line.id}: Skipping - CurrentPrice(${currentPrice.toFixed(2)}) <= TargetWholesale(${targetWholesalePrice?.toFixed(2) ?? 'N/A'})`);
     }
   }
 

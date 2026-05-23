@@ -119,12 +119,16 @@
     const hasNonBlockedOpt  = realVariantEls.length > 0 && realVariantEls.some(el => !isBlockedEl(el));
 
     const hideVariantEl = (el) => {
+      const val = elText(el);
+      console.log(`[CVH] HIDING element: "${val}"`, el);
       el.style.setProperty("display", "none", "important");
       if (el.id) {
         const lbl = container.querySelector(`label[for="${el.id}"]`);
-        if (lbl) lbl.style.setProperty("display", "none", "important");
+        if (lbl) {
+            console.log(`[CVH] HIDING label for ${el.id}`);
+            lbl.style.setProperty("display", "none", "important");
+        }
       }
-      // Reverted to more conservative wrapper hiding
       const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
       if (wrap && !wrap.classList.contains("grid__item")) {
         wrap.style.setProperty("display", "none", "important");

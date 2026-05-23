@@ -120,7 +120,8 @@ export async function loader({ request }) {
   let b2bContext = null;
   if (customerId) {
       b2bContext = await resolveB2BContext(prisma, customerId, shop);
-      if (!catalogId && b2bContext?.resolvedCatalogId) {
+      // PRIORITIZE CUSTOMER CONTEXT OVER LOCATION ID
+      if (b2bContext?.resolvedCatalogId) {
           catalogId = b2bContext.resolvedCatalogId;
           strategy = "customerId";
       }
