@@ -13,16 +13,16 @@
   LOG("Identity →", { LOCATION_ID, CUSTOMER_ID, SHOP, APP_URL });
 
   const rulesCache = {};
-  const SS_PRE = "cvh3:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
+  const SS_PRE = "cvh4:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
 
   try {
-    const prev = sessionStorage.getItem("cvh3:who");
+    const prev = sessionStorage.getItem("cvh4:who");
     if (prev !== (CUSTOMER_ID || LOCATION_ID || "")) {
-      const cleared = Object.keys(sessionStorage).filter(k => k.startsWith("cvh3:"));
+      const cleared = Object.keys(sessionStorage).filter(k => k.startsWith("cvh4:"));
       cleared.forEach(k => sessionStorage.removeItem(k));
       LOG("Session storage cleared (identity changed). Removed keys:", cleared);
     }
-    sessionStorage.setItem("cvh3:who", CUSTOMER_ID || LOCATION_ID || "");
+    sessionStorage.setItem("cvh4:who", CUSTOMER_ID || LOCATION_ID || "");
   } catch (_) {}
 
   async function fetchRules(locationId, productId) {
