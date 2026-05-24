@@ -86,14 +86,18 @@
     const isBlockedEl = (el) => {
       const val = elText(el);
       if (!val) return false;
+      
+      // Normalize string comparisons completely
       const valLower = val.trim().toLowerCase();
 
-      // FIX: Strictly protect standalone baseline "Outer" variants from being hidden
-      if (valLower === "outer") return false;
+      // Guard: Protect standalone baseline units
+      if (valLower === "outer" || valLower === "each" || valLower === "packet") return false;
 
-      // Check if this label matches our hidden types array (e.g., "shipper")
-      return validTypes.some(t => valLower.includes(t.toLowerCase())) || 
-             validIds.some(id => valLower === id.toLowerCase());
+      // Check against all rule configurations safely
+      return validTypes.some(t => {
+        const cleanType = t.trim().toLowerCase();
+        return valLower === cleanType || valLower.includes(cleanType) || cleanType.includes(valLower);
+      }) || validIds.some(id => valLower === id.trim().toLowerCase());
     };
 
     const visibleVariantEls = allVariantEls.filter(el => {
@@ -179,6 +183,35 @@
       processBatch();
       new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
     }
+
+    function watchCollectionGrid() {
+      const gridContainer = document.querySelector('.product-grid, #product-grid, main, #MainContent');
+      if (!gridContainer) return;
+
+      const observer = new MutationObserver((mutations) => {
+        let shouldRun = false;
+        for (const mutation of mutations) {
+          if (mutation.addedNodes.length > 0) {
+            shouldRun = true;
+            break;
+          }
+        }
+        if (shouldRun) {
+          document.querySelectorAll('.grid-product, .card-wrapper, .product-card, [data-cvh-processed]').forEach(container => {
+            if (typeof rulesCache !== 'undefined') {
+              const prodId = container.dataset.productId || container.querySelector('[data-product-id]')?.dataset.productId;
+              const cacheKey = `${resolvedLocationId || CUSTOMER_ID}::${prodId || ""}`;
+              if (rulesCache[cacheKey]) {
+                applyRulesToContainer(container, rulesCache[cacheKey]);
+              }
+            }
+          });
+        }
+      });
+
+      observer.observe(gridContainer, { childList: true, subtree: true });
+    }
+    watchCollectionGrid();
   }
   init();
 })();
