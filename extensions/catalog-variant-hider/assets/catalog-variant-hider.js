@@ -86,15 +86,14 @@
     const isBlockedEl = (el) => {
       const val = elText(el);
       if (!val) return false;
-      const valLower = val.toLowerCase();
-      
-      // PROTECTION: Never hide "Outer"
-      if (valLower.includes("outer")) return false;
+      const valLower = val.trim().toLowerCase();
 
-      const isBlocked = validTypes.some(t => valLower.startsWith(t.toLowerCase())) || 
-                        validIds.some(id => valLower === id.toLowerCase());
-      
-      return isBlocked;
+      // FIX: Strictly protect standalone baseline "Outer" variants from being hidden
+      if (valLower === "outer") return false;
+
+      // Check if this label matches our hidden types array (e.g., "shipper")
+      return validTypes.some(t => valLower.includes(t.toLowerCase())) || 
+             validIds.some(id => valLower === id.toLowerCase());
     };
 
     const visibleVariantEls = allVariantEls.filter(el => {

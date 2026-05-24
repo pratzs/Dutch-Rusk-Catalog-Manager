@@ -99,31 +99,43 @@ export async function loader({ request }) {
       productId ? findOverride(prisma, catalogId, productId) : Promise.resolve(null)
   ]);
 
-  let hiddenTypes = [];
-  let hiddenIds = [];
+  const hiddenTypes = new Set();
+  const hiddenIds = new Set();
 
-  // ── ABSOLUTE PRECEDENCE ──────────────────────────────────────────────────
-  // If an override exists, it is the EXCLUSIVE source of truth.
+  if (rule) {
+      (rule.hiddenVariantTypes ?? []).filter(v => v && String(v).trim()).forEach(v => hiddenTypes.add(v));
+      (rule.hiddenVariantIds ?? []).filter(v => v && String(v).trim()).forEach(v => hiddenIds.add(v));
+  }
+
+  let overrideActive = false;
+
+  // ── COHERENT OVERRIDE PRECEDENCE ────────────────────────────────────────
   if (override) {
       const vals = (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
+      
+      // Clear out blanket rules entirely; this product has an explicit individual mapping
+      hiddenTypes.clear();
+      hiddenIds.clear();
+      overrideActive = true;
+
       if (!vals.includes("__SHOW_ALL__")) {
           for (const val of vals) {
-              if (isLegacyId(val)) hiddenIds.push(val);
-              else hiddenTypes.push(val);
+              if (isLegacyId(val)) {
+                  hiddenIds.add(val);
+              } else {
+                  // Ensure values like 'Shipper' are treated as hidden types
+                  hiddenTypes.add(val);
+              }
           }
       }
-  } else if (rule) {
-      // Fallback to blanket only if no specific override exists.
-      hiddenTypes = rule.hiddenVariantTypes ?? [];
-      hiddenIds = rule.hiddenVariantIds ?? [];
   }
 
   return new Response(
     JSON.stringify({ 
-      hiddenVariantTypes: hiddenTypes, 
-      hiddenVariantIds: hiddenIds, 
-      hasOverride: !!override,
-      debug: { version: "225", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, strategy }
+      hiddenVariantTypes: Array.from(hiddenTypes), 
+      hiddenVariantIds: Array.from(hiddenIds), 
+      hasOverride: overrideActive,
+      debug: { version: "226", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );
