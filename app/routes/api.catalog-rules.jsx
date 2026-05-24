@@ -109,25 +109,26 @@ export async function loader({ request }) {
 
   let overrideActive = false;
 
-  // ── COHERENT OVERRIDE PRECEDENCE ────────────────────────────────────────
+  // ── COHERENT OVERRIDE PRECEDENCE WITH RED BADGE FALLBACK ─────────────────
   if (override) {
       const vals = (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
-      
-      // Clear out blanket rules entirely; this product has an explicit individual mapping
-      hiddenTypes.clear();
-      hiddenIds.clear();
       overrideActive = true;
 
-      if (!vals.includes("__SHOW_ALL__")) {
+      if (vals.includes("__SHOW_ALL__")) {
+          // Explicitly clear all restrictions if user chose "Show All"
+          hiddenTypes.clear();
+          hiddenIds.clear();
+      } else if (vals.length > 0) {
+          // Safe to clear global rules ONLY because we have explicit variant data to replace it with
+          hiddenTypes.clear();
+          hiddenIds.clear();
           for (const val of vals) {
               if (isLegacyId(val)) {
                   hiddenIds.add(val);
               } else {
-                  // FIX: Extract core variant identifiers safely (e.g., "Shipper (12 Outer)" -> "Shipper")
                   const cleanVal = String(val).trim();
                   hiddenTypes.add(cleanVal);
-                  
-                  // Add a clean fallback token to catch loose matching constraints
+
                   if (cleanVal.toLowerCase().includes('shipper')) {
                       hiddenTypes.add('shipper');
                   }
@@ -135,6 +136,12 @@ export async function loader({ request }) {
                       hiddenTypes.add('bag');
                   }
               }
+          }
+      } else {
+          // FIX: The override row exists but has no data mapping configurations.
+          // DO NOT CLEAR hiddenTypes! Retain the global red "🚫 Shipper" rules safely.
+          if (rule && rule.hiddenVariantTypes) {
+              rule.hiddenVariantTypes.forEach(t => hiddenTypes.add(t));
           }
       }
   }
@@ -144,7 +151,7 @@ export async function loader({ request }) {
       hiddenVariantTypes: Array.from(hiddenTypes), 
       hiddenVariantIds: Array.from(hiddenIds), 
       hasOverride: overrideActive,
-      debug: { version: "236", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive }
+      debug: { version: "237", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );
