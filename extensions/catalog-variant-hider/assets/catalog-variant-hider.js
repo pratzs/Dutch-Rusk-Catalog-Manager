@@ -87,17 +87,28 @@
       const val = elText(el);
       if (!val) return false;
       
-      // Normalize string comparisons completely
-      const valLower = val.trim().toLowerCase();
+      // Strip trailing whitespace and normalize lowercase structures completely
+      const valLower = val.trim().toLowerCase().replace(/\s+/g, ' ');
 
-      // Guard: Protect standalone baseline units
+      // Guard: Absolutely protect your target baseline distribution units
       if (valLower === "outer" || valLower === "each" || valLower === "packet") return false;
 
-      // Check against all rule configurations safely
-      return validTypes.some(t => {
-        const cleanType = t.trim().toLowerCase();
+      // 1. Direct validation check loop
+      const isDirectMatch = validTypes.some(t => {
+        const cleanType = t.trim().toLowerCase().replace(/\s+/g, ' ');
         return valLower === cleanType || valLower.includes(cleanType) || cleanType.includes(valLower);
       }) || validIds.some(id => valLower === id.trim().toLowerCase());
+
+      if (isDirectMatch) return true;
+
+      // 2. Keyword Split Verification (Fixes partial template renders like matching "Shipper" from "Shipper (12 Outer)")
+      return validTypes.some(t => {
+        const cleanType = t.trim().toLowerCase();
+        // Catch core identifiers safely (e.g., if rule contains 'shipper' and element string contains 'shipper')
+        if (cleanType.includes('shipper') && valLower.includes('shipper')) return true;
+        if (cleanType.includes('bag') && valLower.includes('bag')) return true;
+        return false;
+      });
     };
 
     const visibleVariantEls = allVariantEls.filter(el => {
@@ -151,55 +162,62 @@
     injectStrikethroughPricing(container);
   }
 
-  // ── HIGH-PERFORMANCE DYNAMIC PACK CONTEXT MUTATOR ───────────────────────
+  // ── FAULT-TOLERANT EXECUTION SANDBOX ENGINE ─────────────────────────────
   function processSingleCard(container) {
-    if (!container || container.hasAttribute('data-cvh-processed-final')) return;
+    try {
+      if (!container || container.hasAttribute('data-cvh-processed-final')) return;
 
-    // Extract product ID from the container data properties safely
-    const prodId = container.dataset.productId || container.querySelector('[data-product-id]')?.dataset.productId;
-    if (!prodId) return;
+      const prodId = container.dataset.productId || container.querySelector('[data-product-id]')?.dataset.productId;
+      if (!prodId) return;
 
-    const cacheKey = `${LOCATION_ID || CUSTOMER_ID}::${prodId}`;
+      const cacheKey = `${LOCATION_ID || CUSTOMER_ID}::${prodId}`;
 
-    // If rules are cached, execute the hiding configuration immediately
-    if (typeof rulesCache !== 'undefined' && rulesCache[cacheKey]) {
-      applyRulesToContainer(container, rulesCache[cacheKey]);
-      container.setAttribute('data-cvh-processed-final', '1');
-    } else {
-      // Fallback: Fetch real-time constraints if a custom grid intersection bypass occurred
-      fetchRules(LOCATION_ID, prodId).then(rules => {
-        if (rules) {
-          applyRulesToContainer(container, rules);
-          container.setAttribute('data-cvh-processed-final', '1');
-        }
-      });
+      if (typeof rulesCache !== 'undefined' && rulesCache[cacheKey]) {
+        applyRulesToContainer(container, rulesCache[cacheKey]);
+        container.setAttribute('data-cvh-processed-final', '1');
+      } else {
+        fetchRules(LOCATION_ID, prodId).then(rules => {
+          if (rules) {
+            applyRulesToContainer(container, rules);
+            container.setAttribute('data-cvh-processed-final', '1');
+          }
+        }).catch(() => {});
+      }
+    } catch (err) {
+      console.warn("[CVH] Intercepted template rendering block bypass:", err);
     }
   }
 
   function monitorInfiniteScroll() {
-    const mainView = document.querySelector('.product-grid, #product-grid, main, #MainContent') || document.body;
-    
-    // Process any cards present on early structural initialization
-    document.querySelectorAll('.grid-product, .card-wrapper, .product-card').forEach(processSingleCard);
+    try {
+      // Catch product wrappers on the detail page as well as standard grid components
+      const mainView = document.querySelector('.product-grid, #product-grid, [data-section], main, #MainContent') || document.body;
+      
+      // Initial baseline sweep
+      document.querySelectorAll('.grid-product, .card-wrapper, .product-card, .product__info-container, .product-form').forEach(processSingleCard);
 
-    const continuousObserver = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        // Line-by-line precise scanning of nested array elements
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType !== 1) continue; // Skip raw text segments
+      const continuousObserver = new MutationObserver((mutations) => {
+        try {
+          for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+              if (node.nodeType !== 1) continue;
 
-          // Catch if the node itself is a product card block
-          if (node.matches('.grid-product, .card-wrapper, .product-card')) {
-            processSingleCard(node);
-          } else {
-            // Traverse up and find deep nested cards within an appended row fragment
-            node.querySelectorAll('.grid-product, .card-wrapper, .product-card').forEach(processSingleCard);
+              if (node.matches('.grid-product, .card-wrapper, .product-card, .product__info-container, .product-form')) {
+                processSingleCard(node);
+              } else {
+                node.querySelectorAll('.grid-product, .card-wrapper, .product-card, .product__info-container, .product-form').forEach(processSingleCard);
+              }
+            }
           }
+        } catch (observerErr) {
+          // Silent catch to prevent cascade thread halts
         }
-      }
-    });
+      });
 
-    continuousObserver.observe(mainView, { childList: true, subtree: true });
+      continuousObserver.observe(mainView, { childList: true, subtree: true });
+    } catch (err) {
+      console.error("[CVH Core] Observers faulted out:", err);
+    }
   }
 
   async function init() {
