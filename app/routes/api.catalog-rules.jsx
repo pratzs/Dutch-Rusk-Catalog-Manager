@@ -120,35 +120,39 @@ export async function loader({ request }) {
       productId ? findOverride(prisma, catalogId, productId) : Promise.resolve(null)
   ]);
 
-  let hiddenTypes = [];
-  let hiddenIds = [];
+  const hiddenTypes = new Set((rule?.hiddenVariantTypes ?? []).filter(t => t && String(t).trim()));
+  const hiddenIds = new Set((rule?.hiddenVariantIds ?? []).filter(id => id && String(id).trim()));
 
-  // ── RULE PRECEDENCE ──────────────────────────────────────────────────────
-  // We strictly favor the OVERRIDE if it exists. 
-  // It is the definitive source of truth for the product.
+  let overrideActive = false;
+
+  // ── RULE PRECEDENCE (HYBRID MERGE) ────────────────────────────────────────
+  // We MERGE rules by default to ensure global 'Shipper' hiding works everywhere.
+  // We ONLY bypass blanket rules if the user explicitly clicked 'Show All'
+  // or unchecked everything for a specific product.
   if (override) {
       const vals = (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
       
-      // If user unchecked everything, we save ["__SHOW_ALL__"] to avoid falling back to blanket.
-      if (!vals.includes("__SHOW_ALL__")) {
+      if (vals.includes("__SHOW_ALL__")) {
+          // EXPLICIT CHOICE: Show everything for this specific product
+          hiddenTypes.clear();
+          hiddenIds.clear();
+          overrideActive = true;
+      } else if (vals.length > 0) {
+          // MERGE: Global Rules + Product Specific Rules
           for (const val of vals) {
-              if (isLegacyId(val)) hiddenIds.push(val);
-              else hiddenTypes.push(val);
+              if (isLegacyId(val)) hiddenIds.add(val);
+              else hiddenTypes.add(val);
           }
+          overrideActive = true;
       }
-      // If __SHOW_ALL__ is present, we return empty arrays (nothing hidden).
-  } else if (rule) {
-      // Fallback to Catalog-wide blanket rules if no override exists.
-      hiddenTypes = rule.hiddenVariantTypes ?? [];
-      hiddenIds = rule.hiddenVariantIds ?? [];
   }
 
   return new Response(
     JSON.stringify({ 
-      hiddenVariantTypes: hiddenTypes, 
-      hiddenVariantIds: hiddenIds, 
-      hasOverride: !!override,
-      debug: { version: "223", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override }
+      hiddenVariantTypes: Array.from(hiddenTypes), 
+      hiddenVariantIds: Array.from(hiddenIds), 
+      hasOverride: overrideActive,
+      debug: { version: "224", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );

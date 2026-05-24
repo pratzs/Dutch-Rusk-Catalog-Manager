@@ -47,7 +47,7 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // ── Reset ───────────────────────────────────────────────────────────────
+    // Reset visibility to allow theme to recalculate stock
     container.querySelectorAll('[style*="display: none"]').forEach(el => {
         if (el.style.display === "none") el.style.removeProperty("display");
     });
@@ -80,18 +80,22 @@
       const val = elText(el);
       if (!val) return false;
       const valLower = val.toLowerCase();
+      
+      // PROTECTION: Never hide "Outer" or variants containing "Outer"
+      if (valLower.includes("outer")) return false;
+
       return validTypes.some(t => valLower.startsWith(t.toLowerCase())) || 
              validIds.some(id => valLower === id.toLowerCase());
     };
 
+    const blockedEls = allVariantEls.filter(isBlockedEl);
     const visibleVariantEls = allVariantEls.filter(el => {
         const val = elText(el);
         if (!val || /^[-–—]|select|choose/i.test(val)) return false;
         return !isBlockedEl(el);
     });
 
-    // ── Auto-Select First Visible ──────────────────────────────────────────
-    // If current is blocked, click the first visible one to update theme state.
+    // ── AUTO-SELECT THEME SYNC ──────────────────────────────────────────
     const currentlySelected = allVariantEls.find(el => {
         if (el.tagName === "OPTION") return el.selected;
         if (el.type === "radio") return el.checked;
@@ -99,6 +103,7 @@
     });
 
     if (currentlySelected && isBlockedEl(currentlySelected) && visibleVariantEls.length > 0) {
+        console.log("[CVH] Auto-selecting visible variant to refresh theme state.");
         const target = visibleVariantEls[0];
         if (target.tagName === "OPTION") {
             target.selected = true;
@@ -120,7 +125,7 @@
       }
     };
 
-    allVariantEls.filter(isBlockedEl).forEach(hideVariantEl);
+    blockedEls.forEach(hideVariantEl);
     
     injectStrikethroughPricing(container);
   }
@@ -159,7 +164,6 @@
             const container = pidEl.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || pidEl;
             let fullPid = pid;
             if (fullPid && !fullPid.includes("/")) fullPid = `gid://shopify/Product/${fullPid}`;
-            
             const rules = await fetchRules(resolvedLocationId, fullPid);
             applyRulesToContainer(container, rules);
         }));
