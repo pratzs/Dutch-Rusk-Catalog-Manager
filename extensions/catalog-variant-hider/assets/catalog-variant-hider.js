@@ -13,7 +13,8 @@
   LOG("Identity →", { LOCATION_ID, CUSTOMER_ID, SHOP, APP_URL });
 
   const rulesCache = {};
-  const SS_PRE = "cvh4:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
+  const SS_PRE    = "cvh4:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
+  const SS_TTL_MS = 5 * 60 * 1000; // 5-minute TTL — admin changes propagate within 5 min
 
   try {
     const prev = sessionStorage.getItem("cvh4:who");
@@ -84,11 +85,13 @@
       const s = sessionStorage.getItem(ssKey);
       if (s) {
         const d = JSON.parse(s);
-        if (Array.isArray(d.hiddenVariantTypes)) {
+        if (Array.isArray(d.hiddenVariantTypes) && (!d._cvh_exp || Date.now() < d._cvh_exp)) {
           rulesCache[cacheKey] = d;
           LOG(`fetchRules [SS-CACHE HIT] key="${ssKey}"`, d);
           return d;
         }
+        sessionStorage.removeItem(ssKey); // Expired or invalid — bust it
+        LOG(`fetchRules [SS-CACHE EXPIRED] key="${ssKey}" — re-fetching`);
       }
     } catch (_) {}
 
@@ -109,7 +112,7 @@
 
       if (Array.isArray(data.hiddenVariantTypes)) {
         rulesCache[cacheKey] = data;
-        try { sessionStorage.setItem(ssKey, JSON.stringify(data)); } catch (_) {}
+        try { sessionStorage.setItem(ssKey, JSON.stringify({ ...data, _cvh_exp: Date.now() + SS_TTL_MS })); } catch (_) {}
       } else {
         WARN("fetchRules: API response missing hiddenVariantTypes array", data);
       }
@@ -139,6 +142,64 @@
       strikethrough.style.cssText = "text-decoration: line-through; color: #8c8c8c; margin-right: 8px; font-weight: normal;";
       strikethrough.textContent = `${currencySymbol}${retailPrice.toFixed(2)}`;
       priceEl.prepend(strikethrough);
+    }
+  }
+
+  // ── "Back Soon" state — called when ALL variants for a product are hidden ─────
+  // Hides pack-size section, inventory badge, quantity stepper, and replaces
+  // "Add to Cart" with a disabled "Back Soon" button.
+  function applyBackSoonState(scope) {
+    if (scope.dataset?.cvhBackSoon) return; // already applied
+    if (scope.dataset) scope.dataset.cvhBackSoon = "1";
+    LOG(`  → applyBackSoonState on <${scope.tagName}>`);
+
+    // 1. Hide variant-selects web component (Shopify 2.0 themes)
+    scope.querySelectorAll("variant-selects").forEach(el =>
+      el.style.setProperty("display", "none", "important")
+    );
+
+    // 2. Walk up from each radio input to find its section wrapper and hide it
+    //    (covers older themes or cards that don't use <variant-selects>)
+    scope.querySelectorAll('input[type="radio"]').forEach(radio => {
+      let el = radio.parentElement;
+      let depth = 0;
+      while (el && el !== scope && depth < 8) {
+        if (
+          el.tagName === "FIELDSET" ||
+          el.tagName === "VARIANT-SELECTS" ||
+          el.classList.contains("product-form__input") ||
+          el.classList.contains("product-variants") ||
+          el.classList.contains("variant-wrapper")
+        ) {
+          el.style.setProperty("display", "none", "important");
+          break;
+        }
+        el = el.parentElement;
+        depth++;
+      }
+    });
+
+    // 3. Hide inventory / stock badges
+    scope.querySelectorAll(
+      '[class*="inventory"], [class*="stock"], .product-availability, [data-inventory]'
+    ).forEach(el => el.style.setProperty("display", "none", "important"));
+
+    // 4. Hide quantity selector
+    scope.querySelectorAll(
+      'quantity-input, .quantity, [class*="quantity__"], .product-form__quantity'
+    ).forEach(el => el.style.setProperty("display", "none", "important"));
+
+    // 5. Replace Add to Cart button with "Back Soon"
+    const addBtn = scope.querySelector('button[name="add"], button[data-add-to-cart]');
+    if (addBtn && !addBtn.dataset.cvhBackSoon) {
+      addBtn.dataset.cvhBackSoon = "1";
+      addBtn.disabled = true;
+      addBtn.style.opacity = "0.7";
+      addBtn.style.cursor = "not-allowed";
+      addBtn.innerHTML = "Back Soon";
+      LOG(`  → "Back Soon" button applied`);
+    } else if (!addBtn) {
+      LOG(`  → applyBackSoonState: no add-to-cart button found in scope`);
     }
   }
 
@@ -289,6 +350,13 @@
         }
 
         LOG(`applyAll: processed ${containerCount} container(s) on product page`);
+
+        // If ALL variant radio inputs on the page are now hidden → "Back Soon" state
+        const pageRadios = Array.from(document.querySelectorAll('variant-selects input[type="radio"]'));
+        if (pageRadios.length > 0 && pageRadios.every(r => r.style.display === "none")) {
+          const mainEl = document.querySelector('#MainContent, main, [role="main"]') || document.body;
+          applyBackSoonState(mainEl);
+        }
       };
 
       applyAll();
@@ -330,6 +398,11 @@
             let rules = await fetchRules(resolvedLocationId, productId);
             rules = enrichRulesWithVariantIds(rules, variantIds);
             applyRulesToContainer(card, rules, `card:${productId}`);
+            // If ALL radio inputs on this card are now hidden → "Back Soon" state
+            const cardRadios = Array.from(card.querySelectorAll('input[type="radio"]'));
+            if (cardRadios.length > 0 && cardRadios.every(r => r.style.display === "none")) {
+              applyBackSoonState(card);
+            }
           } catch (err) {
             WARN(`  processBatch error for productId=${productId}:`, err);
           }
