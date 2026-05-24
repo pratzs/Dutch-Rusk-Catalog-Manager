@@ -47,26 +47,14 @@ async function resolveB2BContext(prisma, customerId, shop) {
     const profiles = customer?.companyContactProfiles ?? [];
     
     let resolvedCatalogId = null;
-    const availableMappings = [];
-
     for (const profile of profiles) {
       for (const loc of profile.company?.locations?.nodes ?? []) {
         const id = await catalogIdFromLocationGid(prisma, loc.id);
-        availableMappings.push({ 
-            companyName: profile.company.name, 
-            locationName: loc.name, 
-            locationId: loc.id, 
-            catalogId: id 
-        });
         if (!resolvedCatalogId && id) resolvedCatalogId = id;
       }
     }
     
-    return {
-        customerName: `${customer?.firstName} ${customer?.lastName}`.trim(),
-        resolvedCatalogId,
-        availableMappings
-    };
+    return { resolvedCatalogId };
   } catch (e) {
     return null;
   }
@@ -98,10 +86,7 @@ async function findOverride(prisma, catalogId, productId) {
     return await prisma.productOverride.findFirst({
         where: {
             catalogId: cleanCat,
-            OR: [
-                { productId: cleanProd },
-                { productId: fullProd }
-            ]
+            OR: [ { productId: cleanProd }, { productId: fullProd } ]
         }
     });
 }
@@ -114,33 +99,20 @@ export async function loader({ request }) {
   const customerId = url.searchParams.get("customerId");
 
   let locationId = url.searchParams.get("locationId");
-  let strategy = "locationId";
   let catalogId = locationId ? await catalogIdFromLocationGid(prisma, locationId) : null;
 
-  let b2bContext = null;
   if (customerId) {
-      b2bContext = await resolveB2BContext(prisma, customerId, shop);
-      if (b2bContext?.resolvedCatalogId) {
-          catalogId = b2bContext.resolvedCatalogId;
-          strategy = "customerId";
-      }
+      const b2bContext = await resolveB2BContext(prisma, customerId, shop);
+      if (b2bContext?.resolvedCatalogId) catalogId = b2bContext.resolvedCatalogId;
   }
 
   if (!catalogId) {
     const catalogIdParam = url.searchParams.get("catalogId");
-    if (catalogIdParam) {
-        catalogId = catalogIdParam;
-        strategy = "catalogIdParam";
-    }
+    if (catalogIdParam) catalogId = catalogIdParam;
   }
 
   if (!catalogId) {
-    return new Response(JSON.stringify({ 
-        hiddenVariantTypes: [], 
-        hiddenVariantIds: [], 
-        hasOverride: false,
-        debug: { strategy: "failed", version: "219", locationId, customerId } 
-    }), { status: 200, headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false }), { status: 200, headers: CORS_HEADERS });
   }
 
   const [rule, override] = await Promise.all([
@@ -148,45 +120,32 @@ export async function loader({ request }) {
       productId ? findOverride(prisma, catalogId, productId) : Promise.resolve(null)
   ]);
 
-  const hiddenTypes = new Set((rule?.hiddenVariantTypes ?? []).filter(t => t && String(t).trim()));
-  const hiddenIds = new Set((rule?.hiddenVariantIds ?? []).filter(id => id && String(id).trim()));
-
-  let overrideActive = false;
+  let hiddenTypes = [];
+  let hiddenIds = [];
 
   // ── RULE PRECEDENCE ──────────────────────────────────────────────────────
+  // If an override exists, it MUST REPLACE the blanket rules entirely.
+  // This allows staff to "Unhide" variants that are globally hidden.
   if (override) {
       const vals = (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
-      
-      if (vals.includes("__SHOW_ALL__")) {
-          // USER EXPLICITLY WANTS EVERYTHING VISIBLE
-          hiddenTypes.clear();
-          hiddenIds.clear();
-          overrideActive = true;
-      } else if (vals.length > 0) {
-          // MERGE: Global Rules + Product Specific Rules
+      if (!vals.includes("__SHOW_ALL__")) {
           for (const val of vals) {
-              if (isLegacyId(val)) hiddenIds.add(val);
-              else hiddenTypes.add(val);
+              if (isLegacyId(val)) hiddenIds.push(val);
+              else hiddenTypes.push(val);
           }
-          overrideActive = true;
       }
+      // If __SHOW_ALL__ is present, we return empty arrays (everything shows).
+  } else if (rule) {
+      hiddenTypes = rule.hiddenVariantTypes ?? [];
+      hiddenIds = rule.hiddenVariantIds ?? [];
   }
 
   return new Response(
     JSON.stringify({ 
-      hiddenVariantTypes: Array.from(hiddenTypes), 
-      hiddenVariantIds: Array.from(hiddenIds), 
-      hasOverride: overrideActive,
-      debug: {
-          version: "219",
-          strategy,
-          resolvedCatalogId: catalogId,
-          ruleFound: !!rule,
-          ruleName: rule?.catalogName,
-          locationId,
-          overrideFound: !!override,
-          overrideHiddenCount: override?.hiddenVariantIds?.length
-      }
+      hiddenVariantTypes: hiddenTypes, 
+      hiddenVariantIds: hiddenIds, 
+      hasOverride: !!override,
+      debug: { version: "221", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );
