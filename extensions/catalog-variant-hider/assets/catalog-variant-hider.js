@@ -10,11 +10,17 @@
   async function fetchRules(locationId, productId) {
     const cacheKey = `${locationId || CUSTOMER_ID}::${productId || ""}`;
     if (rulesCache[cacheKey]) return rulesCache[cacheKey];
+    
+    // Aggressive Cache Busting
+    const timestamp = Date.now();
+    
     try {
       const params = new URLSearchParams();
       if (locationId) { params.set("locationId", locationId); }
       if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
       if (productId) params.set("productId", productId);
+      params.set("_t", timestamp);
+      
       const res  = await fetch(`${APP_URL}/api/catalog-rules?${params}`);
       const data = await res.json();
       if (Array.isArray(data.hiddenVariantTypes)) rulesCache[cacheKey] = data;
@@ -47,7 +53,8 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // Reset visibility to allow theme to recalculate stock
+    // ── Full Reset ──────────────────────────────────────────────────────────
+    // Un-hide everything before applying new rules to prevent stale state.
     container.querySelectorAll('[style*="display: none"]').forEach(el => {
         if (el.style.display === "none") el.style.removeProperty("display");
     });
@@ -81,21 +88,22 @@
       if (!val) return false;
       const valLower = val.toLowerCase();
       
-      // PROTECTION: Never hide "Outer" or variants containing "Outer"
+      // PROTECTION: Never hide "Outer"
       if (valLower.includes("outer")) return false;
 
-      return validTypes.some(t => valLower.startsWith(t.toLowerCase())) || 
-             validIds.some(id => valLower === id.toLowerCase());
+      const isBlocked = validTypes.some(t => valLower.startsWith(t.toLowerCase())) || 
+                        validIds.some(id => valLower === id.toLowerCase());
+      
+      return isBlocked;
     };
 
-    const blockedEls = allVariantEls.filter(isBlockedEl);
     const visibleVariantEls = allVariantEls.filter(el => {
         const val = elText(el);
         if (!val || /^[-–—]|select|choose/i.test(val)) return false;
         return !isBlockedEl(el);
     });
 
-    // ── AUTO-SELECT THEME SYNC ──────────────────────────────────────────
+    // ── Selection Correction ───────────────────────────────────────────────
     const currentlySelected = allVariantEls.find(el => {
         if (el.tagName === "OPTION") return el.selected;
         if (el.type === "radio") return el.checked;
@@ -103,7 +111,7 @@
     });
 
     if (currentlySelected && isBlockedEl(currentlySelected) && visibleVariantEls.length > 0) {
-        console.log("[CVH] Auto-selecting visible variant to refresh theme state.");
+        console.log("[CVH] Selection Correction Triggered.");
         const target = visibleVariantEls[0];
         if (target.tagName === "OPTION") {
             target.selected = true;
@@ -125,7 +133,7 @@
       }
     };
 
-    blockedEls.forEach(hideVariantEl);
+    allVariantEls.filter(isBlockedEl).forEach(hideVariantEl);
     
     injectStrikethroughPricing(container);
   }
@@ -146,6 +154,7 @@
 
     if (singleProductId) {
       const rules = await fetchRules(resolvedLocationId, singleProductId);
+      console.log("[CVH] Rules for Product:", rules);
       const applyAll = () => {
         const SELECTORS = "#main-product, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container, article";
         document.querySelectorAll(SELECTORS).forEach(c => applyRulesToContainer(c, rules));

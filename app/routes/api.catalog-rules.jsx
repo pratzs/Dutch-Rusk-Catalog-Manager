@@ -4,7 +4,9 @@ const CORS_HEADERS = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Cache-Control": "no-store",
+  "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+  "Pragma": "no-cache",
+  "Expires": "0"
 };
 
 async function catalogIdFromLocationGid(prisma, locationGid) {
@@ -17,47 +19,28 @@ async function catalogIdFromLocationGid(prisma, locationGid) {
 async function resolveB2BContext(prisma, customerId, shop) {
   if (!customerId || !shop) return null;
   const customerGid = String(customerId).includes("/") ? customerId : `gid://shopify/Customer/${customerId}`;
-  
   const session = await prisma.session.findFirst({ where: { shop, isOnline: false } });
   if (!session?.accessToken) return null;
-
   try {
     const res = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
       body: JSON.stringify({
-        query: `query($id: ID!) { 
-            customer(id: $id) { 
-                firstName lastName email
-                companyContactProfiles { 
-                    company { 
-                        id name 
-                        locations(first: 50) { nodes { id name } } 
-                    } 
-                } 
-            } 
-        }`,
+        query: `query($id: ID!) { customer(id: $id) { companyContactProfiles { company { locations(first: 50) { nodes { id } } } } } }`,
         variables: { id: customerGid },
       }),
     });
     const gqlData = await res.json();
     if (gqlData.errors) return null;
-
-    const customer = gqlData.data?.customer;
-    const profiles = customer?.companyContactProfiles ?? [];
-    
-    let resolvedCatalogId = null;
+    const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
     for (const profile of profiles) {
       for (const loc of profile.company?.locations?.nodes ?? []) {
         const id = await catalogIdFromLocationGid(prisma, loc.id);
-        if (!resolvedCatalogId && id) resolvedCatalogId = id;
+        if (id) return id;
       }
     }
-    
-    return { resolvedCatalogId };
-  } catch (e) {
-    return null;
-  }
+  } catch (e) {}
+  return null;
 }
 
 function isLegacyId(value) { return String(value).includes("/") || /^\d{10,}$/.test(String(value)); }
@@ -82,12 +65,8 @@ async function findOverride(prisma, catalogId, productId) {
     const cleanCat = String(catalogId).includes("/") ? catalogId.split("/").pop() : catalogId;
     const cleanProd = String(productId).includes("/") ? productId.split("/").pop() : productId;
     const fullProd = `gid://shopify/Product/${cleanProd}`;
-
     return await prisma.productOverride.findFirst({
-        where: {
-            catalogId: cleanCat,
-            OR: [ { productId: cleanProd }, { productId: fullProd } ]
-        }
+        where: { catalogId: cleanCat, OR: [ { productId: cleanProd }, { productId: fullProd } ] }
     });
 }
 
@@ -99,16 +78,16 @@ export async function loader({ request }) {
   const customerId = url.searchParams.get("customerId");
 
   let locationId = url.searchParams.get("locationId");
+  let strategy = "locationId";
   let catalogId = locationId ? await catalogIdFromLocationGid(prisma, locationId) : null;
 
   if (customerId) {
       const b2bContext = await resolveB2BContext(prisma, customerId, shop);
-      if (b2bContext?.resolvedCatalogId) catalogId = b2bContext.resolvedCatalogId;
+      if (b2bContext) { catalogId = b2bContext; strategy = "customerId"; }
   }
-
   if (!catalogId) {
-    const catalogIdParam = url.searchParams.get("catalogId");
-    if (catalogIdParam) catalogId = catalogIdParam;
+    const pId = url.searchParams.get("catalogId");
+    if (pId) { catalogId = pId; strategy = "catalogIdParam"; }
   }
 
   if (!catalogId) {
@@ -120,39 +99,31 @@ export async function loader({ request }) {
       productId ? findOverride(prisma, catalogId, productId) : Promise.resolve(null)
   ]);
 
-  const hiddenTypes = new Set((rule?.hiddenVariantTypes ?? []).filter(t => t && String(t).trim()));
-  const hiddenIds = new Set((rule?.hiddenVariantIds ?? []).filter(id => id && String(id).trim()));
+  let hiddenTypes = [];
+  let hiddenIds = [];
 
-  let overrideActive = false;
-
-  // ── RULE PRECEDENCE (HYBRID MERGE) ────────────────────────────────────────
-  // We MERGE rules by default to ensure global 'Shipper' hiding works everywhere.
-  // We ONLY bypass blanket rules if the user explicitly clicked 'Show All'
-  // or unchecked everything for a specific product.
+  // ── ABSOLUTE PRECEDENCE ──────────────────────────────────────────────────
+  // If an override exists, it is the EXCLUSIVE source of truth.
   if (override) {
       const vals = (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
-      
-      if (vals.includes("__SHOW_ALL__")) {
-          // EXPLICIT CHOICE: Show everything for this specific product
-          hiddenTypes.clear();
-          hiddenIds.clear();
-          overrideActive = true;
-      } else if (vals.length > 0) {
-          // MERGE: Global Rules + Product Specific Rules
+      if (!vals.includes("__SHOW_ALL__")) {
           for (const val of vals) {
-              if (isLegacyId(val)) hiddenIds.add(val);
-              else hiddenTypes.add(val);
+              if (isLegacyId(val)) hiddenIds.push(val);
+              else hiddenTypes.push(val);
           }
-          overrideActive = true;
       }
+  } else if (rule) {
+      // Fallback to blanket only if no specific override exists.
+      hiddenTypes = rule.hiddenVariantTypes ?? [];
+      hiddenIds = rule.hiddenVariantIds ?? [];
   }
 
   return new Response(
     JSON.stringify({ 
-      hiddenVariantTypes: Array.from(hiddenTypes), 
-      hiddenVariantIds: Array.from(hiddenIds), 
-      hasOverride: overrideActive,
-      debug: { version: "224", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive }
+      hiddenVariantTypes: hiddenTypes, 
+      hiddenVariantIds: hiddenIds, 
+      hasOverride: !!override,
+      debug: { version: "225", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, strategy }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );
