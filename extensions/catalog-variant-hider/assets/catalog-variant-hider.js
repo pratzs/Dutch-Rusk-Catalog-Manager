@@ -10,8 +10,6 @@
   async function fetchRules(locationId, productId) {
     const cacheKey = `${locationId || CUSTOMER_ID}::${productId || ""}`;
     if (rulesCache[cacheKey]) return rulesCache[cacheKey];
-
-    // NOTE: SessionStorage caching DISABLED to ensure staff edits are instant
     try {
       const params = new URLSearchParams();
       if (locationId) { params.set("locationId", locationId); }
@@ -49,7 +47,7 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // Reset visibility before applying new rules
+    // ── Reset ───────────────────────────────────────────────────────────────
     container.querySelectorAll('[style*="display: none"]').forEach(el => {
         if (el.style.display === "none") el.style.removeProperty("display");
     });
@@ -86,16 +84,14 @@
              validIds.some(id => valLower === id.toLowerCase());
     };
 
-    const blockedEls = allVariantEls.filter(isBlockedEl);
-    const realVariantEls = allVariantEls.filter(el => {
+    const visibleVariantEls = allVariantEls.filter(el => {
         const val = elText(el);
-        return val !== "" && !/^[-–—]|select|choose/i.test(val);
+        if (!val || /^[-–—]|select|choose/i.test(val)) return false;
+        return !isBlockedEl(el);
     });
-    const visibleVariantEls = realVariantEls.filter(el => !isBlockedEl(el));
 
-    // ── AUTO-SELECT FIRST VISIBLE ──────────────────────────────────────────
-    // If the currently selected variant is blocked, we MUST switch the theme 
-    // to the first visible variant to update stock levels and buttons correctly.
+    // ── Auto-Select First Visible ──────────────────────────────────────────
+    // If current is blocked, click the first visible one to update theme state.
     const currentlySelected = allVariantEls.find(el => {
         if (el.tagName === "OPTION") return el.selected;
         if (el.type === "radio") return el.checked;
@@ -103,13 +99,12 @@
     });
 
     if (currentlySelected && isBlockedEl(currentlySelected) && visibleVariantEls.length > 0) {
-        console.log("[CVH] Current selection is blocked. Switching to first visible.");
         const target = visibleVariantEls[0];
         if (target.tagName === "OPTION") {
             target.selected = true;
             target.parentElement.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (target.type === "radio") {
-            target.click(); // Standard way to update theme state
+            target.click();
         }
     }
 
@@ -125,7 +120,7 @@
       }
     };
 
-    blockedEls.forEach(hideVariantEl);
+    allVariantEls.filter(isBlockedEl).forEach(hideVariantEl);
     
     injectStrikethroughPricing(container);
   }
@@ -158,14 +153,16 @@
         const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
         if (pidElements.length === 0) return;
         pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
-        pidElements.forEach(async (pidEl) => {
+        
+        await Promise.all(pidElements.map(async (pidEl) => {
             const pid = pidEl.dataset.productId;
             const container = pidEl.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || pidEl;
             let fullPid = pid;
             if (fullPid && !fullPid.includes("/")) fullPid = `gid://shopify/Product/${fullPid}`;
+            
             const rules = await fetchRules(resolvedLocationId, fullPid);
-            applyRulesToContainer(container, rules.hasOverride ? rules : blanketRules);
-        });
+            applyRulesToContainer(container, rules);
+        }));
       };
       processBatch();
       new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });

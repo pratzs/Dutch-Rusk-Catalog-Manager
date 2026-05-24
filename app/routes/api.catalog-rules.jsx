@@ -123,29 +123,44 @@ export async function loader({ request }) {
   let hiddenTypes = [];
   let hiddenIds = [];
 
+  // Start with Blanket Rules as the baseline.
+  if (rule) {
+      hiddenTypes = (rule.hiddenVariantTypes ?? []).filter(v => v && String(v).trim());
+      hiddenIds = (rule.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
+  }
+
+  let overrideActive = false;
+
   // ── RULE PRECEDENCE ──────────────────────────────────────────────────────
-  // If an override exists, it MUST REPLACE the blanket rules entirely.
-  // This allows staff to "Unhide" variants that are globally hidden.
+  // We ONLY treat the override as a "Replacement" if it's a "Fresh" record 
+  // (stored variant titles) or a sentinel.
+  // Legacy overrides (storing GIDs) are ignored to prevent accidentally
+  // breaking the blanket rules (e.g. for Beacon Frizzers).
   if (override) {
       const vals = (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim());
-      if (!vals.includes("__SHOW_ALL__")) {
-          for (const val of vals) {
-              if (isLegacyId(val)) hiddenIds.push(val);
-              else hiddenTypes.push(val);
-          }
+      
+      const containsLegacyIds = vals.some(v => isLegacyId(v));
+      const isShowAll = vals.includes("__SHOW_ALL__");
+
+      if (isShowAll) {
+          // EXPLICIT CHOICE: Show everything for this product
+          hiddenTypes = [];
+          hiddenIds = [];
+          overrideActive = true;
+      } else if (vals.length > 0 && !containsLegacyIds) {
+          // FRESH OVERRIDE: Replace blanket rules with these specific titles
+          hiddenTypes = vals;
+          hiddenIds = []; // reset GIDs as we use titles now
+          overrideActive = true;
       }
-      // If __SHOW_ALL__ is present, we return empty arrays (everything shows).
-  } else if (rule) {
-      hiddenTypes = rule.hiddenVariantTypes ?? [];
-      hiddenIds = rule.hiddenVariantIds ?? [];
   }
 
   return new Response(
     JSON.stringify({ 
       hiddenVariantTypes: hiddenTypes, 
       hiddenVariantIds: hiddenIds, 
-      hasOverride: !!override,
-      debug: { version: "221", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override }
+      hasOverride: overrideActive,
+      debug: { version: "222", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );
