@@ -53,7 +53,7 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // 1. Structural DOM Reset
+    // 1. Broad Structural DOM Reset
     container.querySelectorAll('[style*="display: none"]').forEach(el => {
       if (el.style.display === "none") el.style.removeProperty("display");
     });
@@ -64,30 +64,28 @@
     }
     container.setAttribute("data-cvh-processed", "1");
 
-    // 2. Target ALL potential variant label wrappers globally across both layouts
-    const allLabels = container.querySelectorAll(
-      'label.variant-pill, ' +
-      '.product-form__input label, ' +
-      '.variant-pills-wrapper label, ' +
-      'fieldset[class*="product-form__input"] label'
-    );
+    // 2. CATCH-ALL: Target EVERY label tag inside the product form container directly
+    const structuralLabels = container.querySelectorAll('label');
 
-    allLabels.forEach(label => {
-      // Read plain label text or inner text span overrides (handles swatch-input__label-inner)
-      const innerTextSpan = label.querySelector('.swatch-input__label-inner, .variant-pill-label');
-      const labelText = (innerTextSpan ? innerTextSpan.textContent : label.textContent || "").trim().toLowerCase();
+    structuralLabels.forEach(label => {
+      // Read plain label content, falling back to inner text spans (handles .swatch-input__label-inner)
+      const labelText = (label.textContent || "").trim().toLowerCase().replace(/\s+/g, ' ');
+      if (!labelText) return;
 
-      // Absolute Baseline Protection Guard: Never hide your primary Outer choices
-      if (labelText === "outer") return;
+      // Absolute Core Safety Guard: Never hide your standalone primary units
+      if (labelText === "outer" || labelText === "each" || labelText === "packet") return;
 
-      const shouldHide = validTypes.some(t => labelText.includes(t.toLowerCase())) ||
-                         validIds.some(id => labelText.includes(id.toLowerCase()));
+      // Deep-string validation lookup arrays
+      const shouldHide = validTypes.some(t => {
+        const cleanType = t.trim().toLowerCase().replace(/\s+/g, ' ');
+        return labelText.includes(cleanType) || cleanType.includes(labelText);
+      }) || validIds.some(id => labelText.includes(id.trim().toLowerCase()));
 
       if (shouldHide) {
-        // Hide the complete clickable visual label element wrapper card
+        // Force hide the entire clickable text label element block from the layout view
         label.style.setProperty("display", "none", "important");
         
-        // Also hide its companion structural input dot immediately
+        // Locate and disable any companion hidden inputs or checked state dots instantly
         const inputId = label.getAttribute('for');
         const linkedInput = inputId ? container.querySelector(`#${inputId}`) : label.querySelector('input');
         if (linkedInput) {
@@ -96,21 +94,20 @@
       }
     });
 
-    // ── SELECTION STATE CORRECTION ──────────────────────────────────────────
-    // Forcibly clear active selections if the template defaulted to a hidden asset
+    // ── SELECTION STATE ENGINE CORRECTION ────────────────────────────────────
+    // Correct active radio indexes if the layout defaulted to a hidden pack size
     const activeInput = container.querySelector('input[type="radio"]:checked');
     if (activeInput) {
-      const associatedLabel = container.querySelector(`label[for="${activeInput.id}"]`) || activeInput.closest('label');
-      if (associatedLabel && associatedLabel.style.display === 'none') {
+      const companionLabel = container.querySelector(`label[for="${activeInput.id}"]`) || activeInput.closest('label');
+      if (companionLabel && companionLabel.style.display === 'none') {
         
-        // Collect visible alternatives safely
-        const visibleLabels = Array.from(allLabels).filter(lbl => {
-          const text = (lbl.querySelector('.swatch-input__label-inner') || lbl).textContent.toLowerCase();
+        const availableLabels = Array.from(structuralLabels).filter(lbl => {
+          const text = (lbl.textContent || "").toLowerCase();
           return lbl.style.display !== 'none' && !text.includes('select') && !text.includes('choose');
         });
 
-        if (visibleLabels.length > 0) {
-          const fallbackLabel = visibleLabels[0];
+        if (availableLabels.length > 0) {
+          const fallbackLabel = availableLabels[0];
           const fallbackInput = container.querySelector(`#${fallbackLabel.getAttribute('for')}`) || fallbackLabel.querySelector('input');
           if (fallbackInput) {
             fallbackInput.checked = true;
