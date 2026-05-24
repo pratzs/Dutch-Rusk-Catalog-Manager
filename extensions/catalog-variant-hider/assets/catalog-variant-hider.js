@@ -17,16 +17,20 @@
   } catch (_) {}
 
   async function fetchRules(locationId, productId) {
-    const cacheKey = `${locationId || CUSTOMER_ID}::${productId || ""}`;
+    // Normalise productId so GID and numeric IDs share the same cache slot
+    const normPid = productId
+      ? (String(productId).includes("/") ? String(productId).split("/").pop() : String(productId))
+      : "";
+    const cacheKey = `${locationId || CUSTOMER_ID}::${normPid}`;
     if (rulesCache[cacheKey]) return rulesCache[cacheKey];
-    const ssKey = SS_PRE + (productId || "__blanket");
+    const ssKey = SS_PRE + (normPid || "__blanket");
     try {
       const s = sessionStorage.getItem(ssKey);
       if (s) { const d = JSON.parse(s); if (Array.isArray(d.hiddenVariantTypes)) { rulesCache[cacheKey] = d; return d; } }
     } catch (_) {}
     try {
       const params = new URLSearchParams();
-      if (locationId) { params.set("locationId", locationId); }
+      if (locationId) params.set("locationId", locationId);
       if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
       if (productId) params.set("productId", productId);
       params.set("_t", Date.now());
@@ -113,7 +117,10 @@
     };
 
     const sweepBlockedLabels = () => {
-      container.querySelectorAll("label, option, .swatch-element, [class*='option__label'], [class*='variant-label'], [class*='swatch-label'], [class*='option-value'], [data-option-value], [data-value]").forEach(el => {
+      container.querySelectorAll(
+        "label, option, .swatch-element, [class*='option__label'], [class*='variant-label']," +
+        "[class*='swatch-label'], [class*='option-value'], [data-option-value], [data-value]"
+      ).forEach(el => {
         if (el.style.display === "none") return;
         if (isBlockedEl(el)) {
           el.style.setProperty("display", "none", "important");
@@ -145,7 +152,6 @@
   async function init() {
     const el = document.getElementById("catalog-variant-hider-data") || document.querySelector("[data-location-id]");
     if (!el) return;
-
     if (!LOCATION_ID && !CUSTOMER_ID) return;
 
     const singleProductId = el.dataset.productId || null;
@@ -159,28 +165,71 @@
     }
 
     if (singleProductId) {
-      // ── PRODUCT PAGE ─────────────────────────────────────────────────────
-      // Fetch rules WITH productId so product-specific overrides are respected
+      // ── PRODUCT PAGE ────────────────────────────────────────────────────────
+      // Fetch rules WITH productId so product-specific overrides are respected.
       const rules = await fetchRules(resolvedLocationId, singleProductId);
-      const PRODUCT_SELECTORS = "#main-product, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container, article";
+
       const applyAll = () => {
-        document.querySelectorAll(PRODUCT_SELECTORS).forEach(c => applyRulesToContainer(c, rules));
+        const seen = new WeakSet();
+
+        // Try increasingly broad containers to handle any theme structure.
+        // Priority: specific product form elements → section wrapper → full main content.
+        const specificSelectors = [
+          "product-form",
+          "variant-selects",
+          ".product-form",
+          ".product__info-container",
+          ".product__info-wrapper",
+          "#product-info",
+          ".product-single__meta",
+          ".product-template",
+          "#main-product",
+          ".product-single",
+          ".product-section",
+          ".product",
+        ].join(", ");
+
+        document.querySelectorAll(specificSelectors).forEach(c => {
+          if (seen.has(c)) return;
+          seen.add(c);
+          applyRulesToContainer(c, rules);
+        });
+
+        // Always also apply to the main content area as a catch-all so that
+        // no matter what class/id the theme uses, we never miss the form.
+        const main = document.querySelector("#MainContent, main, [role='main']") || document.body;
+        if (!seen.has(main)) {
+          seen.add(main);
+          applyRulesToContainer(main, rules);
+        }
       };
+
       applyAll();
       new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
+
     } else {
-      // ── COLLECTION / LIST PAGE ────────────────────────────────────────────
-      // Fetch blanket catalog rules (no productId = catalog-level rules apply to all products)
+      // ── COLLECTION / LIST PAGE ───────────────────────────────────────────────
+      // Fetch PER-PRODUCT rules (with productId) so that catalog overrides
+      // (e.g. "show Shipper for Twix even though catalog hides Shipper") are
+      // respected on the collection grid, not just on the product page.
       const processBatch = async () => {
         const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
         if (pidElements.length === 0) return;
+        // Mark immediately to prevent duplicate processing on rapid mutations
         pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
-        const rules = await fetchRules(resolvedLocationId, "");
-        pidElements.forEach(el => {
+
+        // Fire all per-product fetches in parallel.
+        // Session storage caches results so subsequent pages are instant.
+        await Promise.all(pidElements.map(async (el) => {
+          const productId = el.dataset.productId;
           const card = el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || el;
-          applyRulesToContainer(card, rules);
-        });
+          try {
+            const rules = await fetchRules(resolvedLocationId, productId);
+            applyRulesToContainer(card, rules);
+          } catch (_) {}
+        }));
       };
+
       await processBatch();
       new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
     }
