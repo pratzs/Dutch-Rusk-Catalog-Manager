@@ -140,8 +140,8 @@ export async function loader({ request }) {
                   } else {
                       const cleanVal = String(val).trim();
                       hiddenTypes.add(cleanVal);
-                      if (cleanVal.toLowerCase().includes('shipper')) hiddenTypes.add('shipper');
-                      if (cleanVal.toLowerCase().includes('bag')) hiddenTypes.add('bag');
+                      if (cleanVal.toLowerCase().startsWith('shipper')) hiddenTypes.add('shipper');
+                      if (cleanVal.toLowerCase().startsWith('bag')) hiddenTypes.add('bag');
                   }
               }
           }
@@ -154,7 +154,7 @@ export async function loader({ request }) {
       hiddenVariantTypes: Array.from(hiddenTypes), 
       hiddenVariantIds: Array.from(hiddenIds), 
       hasOverride: overrideActive,
-      debug: { version: "241", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive, allLegacyIds: override ? (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim()).every(v => isLegacyId(v)) : null }
+      debug: { version: "244", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive, allLegacyIds: override ? (override.hiddenVariantIds ?? []).filter(v => v && String(v).trim()).every(v => isLegacyId(v)) : null }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );
