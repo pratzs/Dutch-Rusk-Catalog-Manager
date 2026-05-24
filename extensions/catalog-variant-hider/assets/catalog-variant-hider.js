@@ -141,6 +141,38 @@
     injectStrikethroughPricing(container);
   }
 
+  // ── GRID OBSERVER ENGINE ─────────────────────────────────────────
+  function watchCollectionGrid(resolvedLocationId) {
+    // Selects the main dynamic container housing the product loop
+    const gridContainer = document.querySelector('.product-grid, #product-grid, main, #MainContent');
+    if (!gridContainer) return;
+
+    const observer = new MutationObserver((mutations) => {
+      let shouldRun = false;
+      for (const mutation of mutations) {
+        if (mutation.addedNodes.length > 0) {
+          shouldRun = true;
+          break;
+        }
+      }
+      
+      // Re-run the hider rules safely across newly rendered grid items
+      if (shouldRun) {
+        document.querySelectorAll('.grid-product, .card-wrapper, .product-card, [data-cvh-processed]').forEach(container => {
+          if (typeof rulesCache !== 'undefined') {
+            const prodId = container.dataset.productId || container.querySelector('[data-product-id]')?.dataset.productId;
+            const cacheKey = `${resolvedLocationId || CUSTOMER_ID}::${prodId || ""}`;
+            if (rulesCache[cacheKey]) {
+              applyRulesToContainer(container, rulesCache[cacheKey]);
+            }
+          }
+        });
+      }
+    });
+
+    observer.observe(gridContainer, { childList: true, subtree: true });
+  }
+
   async function init() {
     const el = document.getElementById("catalog-variant-hider-data") || document.querySelector("[data-location-id]");
     if (!el) return;
@@ -184,34 +216,8 @@
       new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
     }
 
-    function watchCollectionGrid() {
-      const gridContainer = document.querySelector('.product-grid, #product-grid, main, #MainContent');
-      if (!gridContainer) return;
-
-      const observer = new MutationObserver((mutations) => {
-        let shouldRun = false;
-        for (const mutation of mutations) {
-          if (mutation.addedNodes.length > 0) {
-            shouldRun = true;
-            break;
-          }
-        }
-        if (shouldRun) {
-          document.querySelectorAll('.grid-product, .card-wrapper, .product-card, [data-cvh-processed]').forEach(container => {
-            if (typeof rulesCache !== 'undefined') {
-              const prodId = container.dataset.productId || container.querySelector('[data-product-id]')?.dataset.productId;
-              const cacheKey = `${resolvedLocationId || CUSTOMER_ID}::${prodId || ""}`;
-              if (rulesCache[cacheKey]) {
-                applyRulesToContainer(container, rulesCache[cacheKey]);
-              }
-            }
-          });
-        }
-      });
-
-      observer.observe(gridContainer, { childList: true, subtree: true });
-    }
-    watchCollectionGrid();
+    // FORCE WATCHER TO RUN FOR COLLECTIONS
+    watchCollectionGrid(resolvedLocationId);
   }
   init();
 })();
