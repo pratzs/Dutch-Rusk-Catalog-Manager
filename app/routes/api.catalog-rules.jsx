@@ -123,8 +123,17 @@ export async function loader({ request }) {
               if (isLegacyId(val)) {
                   hiddenIds.add(val);
               } else {
-                  // Ensure values like 'Shipper' are treated as hidden types
-                  hiddenTypes.add(val);
+                  // FIX: Extract core variant identifiers safely (e.g., "Shipper (12 Outer)" -> "Shipper")
+                  const cleanVal = String(val).trim();
+                  hiddenTypes.add(cleanVal);
+                  
+                  // Add a clean fallback token to catch loose matching constraints
+                  if (cleanVal.toLowerCase().includes('shipper')) {
+                      hiddenTypes.add('shipper');
+                  }
+                  if (cleanVal.toLowerCase().includes('bag')) {
+                      hiddenTypes.add('bag');
+                  }
               }
           }
       }
@@ -135,7 +144,7 @@ export async function loader({ request }) {
       hiddenVariantTypes: Array.from(hiddenTypes), 
       hiddenVariantIds: Array.from(hiddenIds), 
       hasOverride: overrideActive,
-      debug: { version: "226", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive }
+      debug: { version: "236", resolvedCatalogId: catalogId, ruleFound: !!rule, overrideFound: !!override, overrideActive }
     }), 
     { status: 200, headers: CORS_HEADERS }
   );
