@@ -53,7 +53,7 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // 1. Broad Structural DOM Reset
+    // 1. Full Layout Reset: Clear stale states safely
     container.querySelectorAll('[style*="display: none"]').forEach(el => {
       if (el.style.display === "none") el.style.removeProperty("display");
     });
@@ -62,57 +62,66 @@
       injectStrikethroughPricing(container);
       return;
     }
-    container.setAttribute("data-cvh-processed", "1");
+    container.setAttribute("data-cvh-processed-final", "1");
 
-    // 2. CATCH-ALL: Target EVERY label tag inside the product form container directly
-    const structuralLabels = container.querySelectorAll('label');
+    // 2. Target ALL structural and visual labels inside the card/form context
+    const genericLabels = container.querySelectorAll('label, .variant-pill, [for]');
 
-    structuralLabels.forEach(label => {
-      // Read plain label content, falling back to inner text spans (handles .swatch-input__label-inner)
-      const labelText = (label.textContent || "").trim().toLowerCase().replace(/\s+/g, ' ');
-      if (!labelText) return;
+    genericLabels.forEach(label => {
+      // Extract text safely, accounting for deep inner span text overrides
+      const innerTextSpan = label.querySelector('.swatch-input__label-inner, .variant-pill-label');
+      const rawText = (innerTextSpan ? innerTextSpan.textContent : label.textContent || "").trim().toLowerCase();
+      
+      if (!rawText) return;
 
-      // Absolute Core Safety Guard: Never hide your standalone primary units
-      if (labelText === "outer" || labelText === "each" || labelText === "packet") return;
+      // Absolute Safety Guard: Never hide baseline sales units
+      if (rawText === "outer" || rawText === "each" || rawText === "packet") return;
 
-      // Deep-string validation lookup arrays
+      // 3. ENHANCED NORMALIZATION: Normalize strings by dropping numbers and spaces (e.g., "shipper (12 outer)" -> "shipper")
+      const normalizedText = rawText.replace(/\s+/g, '').replace(/[^a-z]/g, '');
+
       const shouldHide = validTypes.some(t => {
-        const cleanType = t.trim().toLowerCase().replace(/\s+/g, ' ');
-        return labelText.includes(cleanType) || cleanType.includes(labelText);
-      }) || validIds.some(id => labelText.includes(id.trim().toLowerCase()));
+        const cleanRule = t.trim().toLowerCase().replace(/\s+/g, '').replace(/[^a-z]/g, '');
+        
+        // Check for direct matching or core unit keyword overlaps
+        if (normalizedText.includes(cleanRule) || cleanRule.includes(normalizedText)) return true;
+        if (cleanRule.includes('shipper') && normalizedText.includes('shipper')) return true;
+        if (cleanRule.includes('bag') && normalizedText.includes('bag')) return true;
+        return false;
+      }) || validIds.some(id => rawText.includes(id.trim().toLowerCase()));
 
       if (shouldHide) {
-        // Force hide the entire clickable text label element block from the layout view
+        // Forcibly hide the entire visual option box wrapper card
         label.style.setProperty("display", "none", "important");
         
-        // Locate and disable any companion hidden inputs or checked state dots instantly
+        // Find and hide companion radio input nodes or checking dots instantly
         const inputId = label.getAttribute('for');
-        const linkedInput = inputId ? container.querySelector(`#${inputId}`) : label.querySelector('input');
-        if (linkedInput) {
-          linkedInput.style.setProperty("display", "none", "important");
+        const companionInput = inputId ? container.querySelector(`#${inputId}`) : label.querySelector('input');
+        if (companionInput) {
+          companionInput.style.setProperty("display", "none", "important");
         }
       }
     });
 
-    // ── SELECTION STATE ENGINE CORRECTION ────────────────────────────────────
-    // Correct active radio indexes if the layout defaulted to a hidden pack size
-    const activeInput = container.querySelector('input[type="radio"]:checked');
-    if (activeInput) {
-      const companionLabel = container.querySelector(`label[for="${activeInput.id}"]`) || activeInput.closest('label');
-      if (companionLabel && companionLabel.style.display === 'none') {
+    // 4. SELECTION STATE MANAGEMENT ENGINE
+    // Auto-select the baseline "Outer" choice if the theme defaulted to a hidden layout option
+    const activeSelectedRadio = container.querySelector('input[type="radio"]:checked');
+    if (activeSelectedRadio) {
+      const parentLabelWrapper = container.querySelector(`label[for="${activeSelectedRadio.id}"]`) || activeSelectedRadio.closest('label');
+      if (parentLabelWrapper && parentLabelWrapper.style.display === 'none') {
         
-        const availableLabels = Array.from(structuralLabels).filter(lbl => {
-          const text = (lbl.textContent || "").toLowerCase();
-          return lbl.style.display !== 'none' && !text.includes('select') && !text.includes('choose');
+        const openAlternatives = Array.from(genericLabels).filter(lbl => {
+          const txt = lbl.textContent.toLowerCase();
+          return lbl.style.display !== 'none' && !txt.includes('select') && !txt.includes('choose');
         });
 
-        if (availableLabels.length > 0) {
-          const fallbackLabel = availableLabels[0];
-          const fallbackInput = container.querySelector(`#${fallbackLabel.getAttribute('for')}`) || fallbackLabel.querySelector('input');
-          if (fallbackInput) {
-            fallbackInput.checked = true;
-            fallbackInput.click();
-            fallbackInput.dispatchEvent(new Event('change', { bubbles: true }));
+        if (openAlternatives.length > 0) {
+          const targetLabel = openAlternatives[0];
+          const targetInput = container.querySelector(`#${targetLabel.getAttribute('for')}`) || targetLabel.querySelector('input');
+          if (targetInput) {
+            targetInput.checked = true;
+            targetInput.click();
+            targetInput.dispatchEvent(new Event('change', { bubbles: true }));
           }
         }
       }
@@ -133,12 +142,10 @@
 
       if (typeof rulesCache !== 'undefined' && rulesCache[cacheKey]) {
         applyRulesToContainer(container, rulesCache[cacheKey]);
-        container.setAttribute('data-cvh-processed-final', '1');
       } else {
         fetchRules(LOCATION_ID, prodId).then(rules => {
           if (rules) {
             applyRulesToContainer(container, rules);
-            container.setAttribute('data-cvh-processed-final', '1');
           }
         }).catch(() => {});
       }
