@@ -53,9 +53,9 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // 1. Full structural reset
+    // 1. Structural DOM Reset
     container.querySelectorAll('[style*="display: none"]').forEach(el => {
-        if (el.style.display === "none") el.style.removeProperty("display");
+      if (el.style.display === "none") el.style.removeProperty("display");
     });
 
     if (validTypes.length === 0 && validIds.length === 0) {
@@ -64,70 +64,60 @@
     }
     container.setAttribute("data-cvh-processed", "1");
 
-    // Determine if we are processing the Main Product Page or a Collection Grid Card
-    const isProductPage = !!document.querySelector('.product__info-container, .product-single');
+    // 2. Target ALL potential variant label wrappers globally across both layouts
+    const allLabels = container.querySelectorAll(
+      'label.variant-pill, ' +
+      '.product-form__input label, ' +
+      '.variant-pills-wrapper label, ' +
+      'fieldset[class*="product-form__input"] label'
+    );
 
-    if (isProductPage && container.matches('.product__info-container, .product-form')) {
-      // ── SURGICAL PRODUCT PAGE TARGETING ──────────────────────────────────
-      // Target the specific radio wrapper label pills on the main product view
-      const variantPills = container.querySelectorAll('label.variant-pill');
-      
-      variantPills.forEach(label => {
-        const labelText = (label.textContent || "").trim().toLowerCase();
+    allLabels.forEach(label => {
+      // Read plain label text or inner text span overrides (handles swatch-input__label-inner)
+      const innerTextSpan = label.querySelector('.swatch-input__label-inner, .variant-pill-label');
+      const labelText = (innerTextSpan ? innerTextSpan.textContent : label.textContent || "").trim().toLowerCase();
+
+      // Absolute Baseline Protection Guard: Never hide your primary Outer choices
+      if (labelText === "outer") return;
+
+      const shouldHide = validTypes.some(t => labelText.includes(t.toLowerCase())) ||
+                         validIds.some(id => labelText.includes(id.toLowerCase()));
+
+      if (shouldHide) {
+        // Hide the complete clickable visual label element wrapper card
+        label.style.setProperty("display", "none", "important");
         
-        const shouldHide = validTypes.some(t => labelText.includes(t.toLowerCase())) ||
-                           validIds.some(id => labelText.includes(id.toLowerCase()));
-                           
-        // Strict Protection Guard: Never hide the standalone "Outer" baseline unit
-        if (labelText === "outer") return;
-
-        if (shouldHide) {
-          label.style.setProperty("display", "none", "important");
-          // Also hide the hidden radio dot inside it
-          const innerInput = label.querySelector('input');
-          if (innerInput) innerInput.style.setProperty("display", "none", "important");
+        // Also hide its companion structural input dot immediately
+        const inputId = label.getAttribute('for');
+        const linkedInput = inputId ? container.querySelector(`#${inputId}`) : label.querySelector('input');
+        if (linkedInput) {
+          linkedInput.style.setProperty("display", "none", "important");
         }
-      });
+      }
+    });
 
-    } else {
-      // ── SURGICAL COLLECTION GRID TARGETING ───────────────────────────────
-      // On the collection page, target the grid's explicit pill list items
-      const gridPills = container.querySelectorAll('.variant-pills-wrapper label.variant-pill, input[type="radio"]');
-      
-      gridPills.forEach(el => {
-        const valText = (el.tagName === "LABEL" ? el.textContent : el.value || "").trim().toLowerCase();
+    // ── SELECTION STATE CORRECTION ──────────────────────────────────────────
+    // Forcibly clear active selections if the template defaulted to a hidden asset
+    const activeInput = container.querySelector('input[type="radio"]:checked');
+    if (activeInput) {
+      const associatedLabel = container.querySelector(`label[for="${activeInput.id}"]`) || activeInput.closest('label');
+      if (associatedLabel && associatedLabel.style.display === 'none') {
         
-        const shouldHide = validTypes.some(t => valText.includes(t.toLowerCase())) ||
-                           validIds.some(id => valText.includes(id.toLowerCase()));
+        // Collect visible alternatives safely
+        const visibleLabels = Array.from(allLabels).filter(lbl => {
+          const text = (lbl.querySelector('.swatch-input__label-inner') || lbl).textContent.toLowerCase();
+          return lbl.style.display !== 'none' && !text.includes('select') && !text.includes('choose');
+        });
 
-        if (valText === "outer") return;
-
-        if (shouldHide) {
-          if (el.tagName === "LABEL") {
-            el.style.setProperty("display", "none", "important");
-          } else {
-            el.style.setProperty("display", "none", "important");
-            const parentLabel = el.closest('label.variant-pill, .variant-pill');
-            if (parentLabel) parentLabel.style.setProperty("display", "none", "important");
+        if (visibleLabels.length > 0) {
+          const fallbackLabel = visibleLabels[0];
+          const fallbackInput = container.querySelector(`#${fallbackLabel.getAttribute('for')}`) || fallbackLabel.querySelector('input');
+          if (fallbackInput) {
+            fallbackInput.checked = true;
+            fallbackInput.click();
+            fallbackInput.dispatchEvent(new Event('change', { bubbles: true }));
           }
         }
-      });
-    }
-
-    // ── SELECTION CORRECTION ENGINE ────────────────────────────────────────
-    // Auto-select the first visible "Outer" variant if the theme defaulted to a hidden one
-    const allPills = Array.from(container.querySelectorAll('label.variant-pill'));
-    const visiblePills = allPills.filter(lbl => lbl.style.display !== 'none');
-
-    const currentlySelectedInput = container.querySelector('input[type="radio"]:checked');
-    if (currentlySelectedInput && currentlySelectedInput.closest('label')?.style.display === 'none' && visiblePills.length > 0) {
-      console.log("[CVH] Selection Correction Triggered.");
-      const targetLabel = visiblePills[0];
-      const targetInput = targetLabel.querySelector('input') || document.getElementById(targetLabel.getAttribute('for'));
-      if (targetInput) {
-        targetInput.checked = true;
-        targetInput.click();
-        targetInput.dispatchEvent(new Event('change', { bubbles: true }));
       }
     }
 
