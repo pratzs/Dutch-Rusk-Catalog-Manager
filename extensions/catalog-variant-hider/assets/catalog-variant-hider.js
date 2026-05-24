@@ -151,83 +151,69 @@
     injectStrikethroughPricing(container);
   }
 
-  // ── GRID OBSERVER ENGINE ─────────────────────────────────────────
-  function watchCollectionGrid(resolvedLocationId) {
-    // Selects the main dynamic container housing the product loop
-    const gridContainer = document.querySelector('.product-grid, #product-grid, main, #MainContent');
-    if (!gridContainer) return;
+  // ── HIGH-PERFORMANCE DYNAMIC PACK CONTEXT MUTATOR ───────────────────────
+  function processSingleCard(container) {
+    if (!container || container.hasAttribute('data-cvh-processed-final')) return;
 
-    const observer = new MutationObserver((mutations) => {
-      let shouldRun = false;
-      for (const mutation of mutations) {
-        if (mutation.addedNodes.length > 0) {
-          shouldRun = true;
-          break;
+    // Extract product ID from the container data properties safely
+    const prodId = container.dataset.productId || container.querySelector('[data-product-id]')?.dataset.productId;
+    if (!prodId) return;
+
+    const cacheKey = `${LOCATION_ID || CUSTOMER_ID}::${prodId}`;
+
+    // If rules are cached, execute the hiding configuration immediately
+    if (typeof rulesCache !== 'undefined' && rulesCache[cacheKey]) {
+      applyRulesToContainer(container, rulesCache[cacheKey]);
+      container.setAttribute('data-cvh-processed-final', '1');
+    } else {
+      // Fallback: Fetch real-time constraints if a custom grid intersection bypass occurred
+      fetchRules(LOCATION_ID, prodId).then(rules => {
+        if (rules) {
+          applyRulesToContainer(container, rules);
+          container.setAttribute('data-cvh-processed-final', '1');
         }
-      }
-      
-      // Re-run the hider rules safely across newly rendered grid items
-      if (shouldRun) {
-        document.querySelectorAll('.grid-product, .card-wrapper, .product-card, [data-cvh-processed]').forEach(container => {
-          if (typeof rulesCache !== 'undefined') {
-            const prodId = container.dataset.productId || container.querySelector('[data-product-id]')?.dataset.productId;
-            const cacheKey = `${resolvedLocationId || CUSTOMER_ID}::${prodId || ""}`;
-            if (rulesCache[cacheKey]) {
-              applyRulesToContainer(container, rulesCache[cacheKey]);
-            }
+      });
+    }
+  }
+
+  function monitorInfiniteScroll() {
+    const mainView = document.querySelector('.product-grid, #product-grid, main, #MainContent') || document.body;
+    
+    // Process any cards present on early structural initialization
+    document.querySelectorAll('.grid-product, .card-wrapper, .product-card').forEach(processSingleCard);
+
+    const continuousObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        // Line-by-line precise scanning of nested array elements
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType !== 1) continue; // Skip raw text segments
+
+          // Catch if the node itself is a product card block
+          if (node.matches('.grid-product, .card-wrapper, .product-card')) {
+            processSingleCard(node);
+          } else {
+            // Traverse up and find deep nested cards within an appended row fragment
+            node.querySelectorAll('.grid-product, .card-wrapper, .product-card').forEach(processSingleCard);
           }
-        });
+        }
       }
     });
 
-    observer.observe(gridContainer, { childList: true, subtree: true });
+    continuousObserver.observe(mainView, { childList: true, subtree: true });
   }
 
   async function init() {
     const el = document.getElementById("catalog-variant-hider-data") || document.querySelector("[data-location-id]");
     if (!el) return;
 
-    const singleProductId = el.dataset.productId || null;
-    let resolvedLocationId = LOCATION_ID;
-
-    if (!resolvedLocationId) {
-      try {
-        const cartData = await (await fetch("/cart.js")).json();
-        resolvedLocationId = cartData?.company_location?.id || cartData?.buyer_identity?.company_location?.id || null;
-      } catch (_) {}
-    }
-
-    if (singleProductId) {
-      const rules = await fetchRules(resolvedLocationId, singleProductId);
-      console.log("[CVH] Rules for Product:", rules);
-      const applyAll = () => {
-        const SELECTORS = "#main-product, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container, article";
-        document.querySelectorAll(SELECTORS).forEach(c => applyRulesToContainer(c, rules));
-      };
-      applyAll();
-      new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
-    } else {
-      const blanketRules = await fetchRules(resolvedLocationId, "");
-      const processBatch = async () => {
-        const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
-        if (pidElements.length === 0) return;
-        pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
-        
-        await Promise.all(pidElements.map(async (pidEl) => {
-            const pid = pidEl.dataset.productId;
-            const container = pidEl.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || pidEl;
-            let fullPid = pid;
-            if (fullPid && !fullPid.includes("/")) fullPid = `gid://shopify/Product/${fullPid}`;
-            const rules = await fetchRules(resolvedLocationId, fullPid);
-            applyRulesToContainer(container, rules);
-        }));
-      };
-      processBatch();
-      new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
-    }
-
-    // FORCE WATCHER TO RUN FOR COLLECTIONS
-    watchCollectionGrid(resolvedLocationId);
+    // Run the infinite scroll watcher loop across the document lifecycle
+    monitorInfiniteScroll();
   }
-  init();
+
+  // Trigger app framework execution
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 })();
