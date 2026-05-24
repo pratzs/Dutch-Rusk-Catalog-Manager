@@ -6,24 +6,36 @@
   const SHOP        = (_el && _el.dataset.shop) || window.Shopify?.shop || null;
 
   const rulesCache = {};
+  const SS_PRE = "cvh3:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
+
+  try {
+    const prev = sessionStorage.getItem("cvh3:who");
+    if (prev !== (CUSTOMER_ID || LOCATION_ID || "")) {
+      Object.keys(sessionStorage).filter(k => k.startsWith("cvh3:")).forEach(k => sessionStorage.removeItem(k));
+    }
+    sessionStorage.setItem("cvh3:who", CUSTOMER_ID || LOCATION_ID || "");
+  } catch (_) {}
 
   async function fetchRules(locationId, productId) {
     const cacheKey = `${locationId || CUSTOMER_ID}::${productId || ""}`;
     if (rulesCache[cacheKey]) return rulesCache[cacheKey];
-    
-    // Aggressive Cache Busting
-    const timestamp = Date.now();
-    
+    const ssKey = SS_PRE + (productId || "__blanket");
+    try {
+      const s = sessionStorage.getItem(ssKey);
+      if (s) { const d = JSON.parse(s); if (Array.isArray(d.hiddenVariantTypes)) { rulesCache[cacheKey] = d; return d; } }
+    } catch (_) {}
     try {
       const params = new URLSearchParams();
       if (locationId) { params.set("locationId", locationId); }
       if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
       if (productId) params.set("productId", productId);
-      params.set("_t", timestamp);
-      
+      params.set("_t", Date.now());
       const res  = await fetch(`${APP_URL}/api/catalog-rules?${params}`);
       const data = await res.json();
-      if (Array.isArray(data.hiddenVariantTypes)) rulesCache[cacheKey] = data;
+      if (Array.isArray(data.hiddenVariantTypes)) {
+        rulesCache[cacheKey] = data;
+        try { sessionStorage.setItem(ssKey, JSON.stringify(data)); } catch (_) {}
+      }
       return data;
     } catch (_) {
       return { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
@@ -34,11 +46,14 @@
     const globalRetailPrice = _el ? _el.dataset.standardRetailPrice : null;
     const retailEl = container.querySelector("[data-standard-retail-price], .cvh-retail-price");
     const retailPrice = parseFloat(container.dataset.standardRetailPrice || globalRetailPrice || retailEl?.dataset.standardRetailPrice || retailEl?.value || "0");
+
     if (!retailPrice) return;
     const priceEl = container.querySelector(".price-item--regular, .product__price, .grid-product__price, .price__container, [data-price], .current-price");
     if (!priceEl || priceEl.querySelector(".cvh-strikethrough")) return;
+
     const activePriceText = (priceEl.textContent || "").replace(/[^0-9.]/g, "");
     const activePrice = parseFloat(activePriceText);
+
     if (retailPrice > activePrice + 0.01) {
       const currencySymbol = (priceEl.textContent || "").trim().charAt(0) === "$" ? "$" : "";
       const strikethrough = document.createElement("span");
@@ -53,150 +68,126 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // 1. Full Layout Reset: Clear stale states safely
-    container.querySelectorAll('[style*="display: none"]').forEach(el => {
-      if (el.style.display === "none") el.style.removeProperty("display");
-    });
-
     if (validTypes.length === 0 && validIds.length === 0) {
       injectStrikethroughPricing(container);
       return;
     }
-    container.setAttribute("data-cvh-processed-final", "1");
 
-    // 2. Target ALL structural and visual labels inside the card/form context
-    const genericLabels = container.querySelectorAll('label, .variant-pill, [for]');
+    container.setAttribute("data-cvh-processed", "1");
 
-    genericLabels.forEach(label => {
-      // Extract text safely, accounting for deep inner span text overrides
-      const innerTextSpan = label.querySelector('.swatch-input__label-inner, .variant-pill-label');
-      const rawText = (innerTextSpan ? innerTextSpan.textContent : label.textContent || "").trim().toLowerCase();
-      
-      if (!rawText) return;
+    const allVariantEls = Array.from(
+      container.querySelectorAll('input[type="radio"], option, button[data-variant-id], .variant-input input, label[data-value]')
+    );
 
-      // Absolute Safety Guard: Never hide baseline sales units
-      if (rawText === "outer" || rawText === "each" || rawText === "packet") return;
-
-      // 3. ENHANCED NORMALIZATION: Normalize strings by dropping numbers and spaces (e.g., "shipper (12 outer)" -> "shipper")
-      const normalizedText = rawText.replace(/\s+/g, '').replace(/[^a-z]/g, '');
-
-      const shouldHide = validTypes.some(t => {
-        const cleanRule = t.trim().toLowerCase().replace(/\s+/g, '').replace(/[^a-z]/g, '');
-        
-        // Check for direct matching or core unit keyword overlaps
-        if (normalizedText.includes(cleanRule) || cleanRule.includes(normalizedText)) return true;
-        if (cleanRule.includes('shipper') && normalizedText.includes('shipper')) return true;
-        if (cleanRule.includes('bag') && normalizedText.includes('bag')) return true;
-        return false;
-      }) || validIds.some(id => rawText.includes(id.trim().toLowerCase()));
-
-      if (shouldHide) {
-        // Forcibly hide the entire visual option box wrapper card
-        label.style.setProperty("display", "none", "important");
-        
-        // Find and hide companion radio input nodes or checking dots instantly
-        const inputId = label.getAttribute('for');
-        const companionInput = inputId ? container.querySelector(`#${inputId}`) : label.querySelector('input');
-        if (companionInput) {
-          companionInput.style.setProperty("display", "none", "important");
-        }
+    const elText = (el) => {
+      if (el.tagName === "OPTION") return (el.textContent || el.value || "").trim();
+      if (el.tagName === "BUTTON") return (el.textContent || el.getAttribute("aria-label") || "").trim();
+      if (el.tagName === "LABEL" && el.dataset.value) return el.dataset.value.trim();
+      const val = (el.value || "").trim();
+      if ((el.type === "radio" || el.type === "checkbox") && /^\d{8,}$/.test(val)) {
+        const lbl = el.id ? container.querySelector(`label[for="${el.id}"]`) : el.closest("label");
+        const labelText = lbl ? lbl.textContent.trim() : "";
+        if (labelText) return labelText;
       }
-    });
+      return val || (el.textContent || "").trim();
+    };
 
-    // 4. SELECTION STATE MANAGEMENT ENGINE
-    // Auto-select the baseline "Outer" choice if the theme defaulted to a hidden layout option
-    const activeSelectedRadio = container.querySelector('input[type="radio"]:checked');
-    if (activeSelectedRadio) {
-      const parentLabelWrapper = container.querySelector(`label[for="${activeSelectedRadio.id}"]`) || activeSelectedRadio.closest('label');
-      if (parentLabelWrapper && parentLabelWrapper.style.display === 'none') {
-        
-        const openAlternatives = Array.from(genericLabels).filter(lbl => {
-          const txt = lbl.textContent.toLowerCase();
-          return lbl.style.display !== 'none' && !txt.includes('select') && !txt.includes('choose');
-        });
+    const isBlockedEl = (el) => {
+      const val = elText(el);
+      if (!val) return false;
+      const valLower = val.toLowerCase();
+      return validTypes.some(t => valLower.startsWith(t.toLowerCase())) ||
+             validIds.some(id => valLower === id.toLowerCase());
+    };
 
-        if (openAlternatives.length > 0) {
-          const targetLabel = openAlternatives[0];
-          const targetInput = container.querySelector(`#${targetLabel.getAttribute('for')}`) || targetLabel.querySelector('input');
-          if (targetInput) {
-            targetInput.checked = true;
-            targetInput.click();
-            targetInput.dispatchEvent(new Event('change', { bubbles: true }));
+    const hideVariantEl = (el) => {
+      el.style.setProperty("display", "none", "important");
+      if (el.id) {
+        const lbl = container.querySelector(`label[for="${el.id}"]`);
+        if (lbl) lbl.style.setProperty("display", "none", "important");
+      }
+      const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
+      if (wrap && !wrap.classList.contains("grid__item") && !wrap.classList.contains("product-form__input")) {
+        wrap.style.setProperty("display", "none", "important");
+      }
+    };
+
+    const sweepBlockedLabels = () => {
+      container.querySelectorAll("label, option, .swatch-element, [class*='option__label'], [class*='variant-label'], [class*='swatch-label'], [class*='option-value'], [data-option-value], [data-value]").forEach(el => {
+        if (el.style.display === "none") return;
+        if (isBlockedEl(el)) {
+          el.style.setProperty("display", "none", "important");
+          const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
+          if (wrap && !wrap.classList.contains("grid__item")) {
+            wrap.style.setProperty("display", "none", "important");
           }
         }
+      });
+    };
+
+    const blockedEls = allVariantEls.filter(isBlockedEl);
+    blockedEls.forEach(hideVariantEl);
+    sweepBlockedLabels();
+
+    // Auto-select a visible variant if the currently selected one is now hidden
+    const checkedRadio = container.querySelector('input[type="radio"]:checked');
+    if (checkedRadio && isBlockedEl(checkedRadio)) {
+      const firstVisible = allVariantEls.find(el => el.type === "radio" && !isBlockedEl(el));
+      if (firstVisible) {
+        firstVisible.checked = true;
+        firstVisible.dispatchEvent(new Event("change", { bubbles: true }));
       }
     }
 
     injectStrikethroughPricing(container);
   }
 
-  // ── FAULT-TOLERANT EXECUTION SANDBOX ENGINE ─────────────────────────────
-  function processSingleCard(container) {
-    try {
-      if (!container || container.hasAttribute('data-cvh-processed-final')) return;
-
-      const prodId = container.dataset.productId || container.querySelector('[data-product-id]')?.dataset.productId;
-      if (!prodId) return;
-
-      const cacheKey = `${LOCATION_ID || CUSTOMER_ID}::${prodId}`;
-
-      if (typeof rulesCache !== 'undefined' && rulesCache[cacheKey]) {
-        applyRulesToContainer(container, rulesCache[cacheKey]);
-      } else {
-        fetchRules(LOCATION_ID, prodId).then(rules => {
-          if (rules) {
-            applyRulesToContainer(container, rules);
-          }
-        }).catch(() => {});
-      }
-    } catch (err) {
-      console.warn("[CVH] Intercepted template rendering block bypass:", err);
-    }
-  }
-
-  function monitorInfiniteScroll() {
-    try {
-      // Catch product wrappers on the detail page as well as standard grid components
-      const mainView = document.querySelector('.product-grid, #product-grid, [data-section], main, #MainContent') || document.body;
-      
-      // Initial baseline sweep
-      document.querySelectorAll('.grid-product, .card-wrapper, .product-card, .product__info-container, .product-form').forEach(processSingleCard);
-
-      const continuousObserver = new MutationObserver((mutations) => {
-        try {
-          for (const mutation of mutations) {
-            for (const node of mutation.addedNodes) {
-              if (node.nodeType !== 1) continue;
-
-              if (node.matches('.grid-product, .card-wrapper, .product-card, .product__info-container, .product-form')) {
-                processSingleCard(node);
-              } else {
-                node.querySelectorAll('.grid-product, .card-wrapper, .product-card, .product__info-container, .product-form').forEach(processSingleCard);
-              }
-            }
-          }
-        } catch (observerErr) {
-          // Silent catch to prevent cascade thread halts
-        }
-      });
-
-      continuousObserver.observe(mainView, { childList: true, subtree: true });
-    } catch (err) {
-      console.error("[CVH Core] Observers faulted out:", err);
-    }
-  }
-
   async function init() {
     const el = document.getElementById("catalog-variant-hider-data") || document.querySelector("[data-location-id]");
     if (!el) return;
 
-    // Run the infinite scroll watcher loop across the document lifecycle
-    monitorInfiniteScroll();
+    if (!LOCATION_ID && !CUSTOMER_ID) return;
+
+    const singleProductId = el.dataset.productId || null;
+    let resolvedLocationId = LOCATION_ID;
+
+    if (!resolvedLocationId) {
+      try {
+        const cartData = await (await fetch("/cart.js")).json();
+        resolvedLocationId = cartData?.company_location?.id || cartData?.buyer_identity?.company_location?.id || null;
+      } catch (_) {}
+    }
+
+    if (singleProductId) {
+      // ── PRODUCT PAGE ─────────────────────────────────────────────────────
+      // Fetch rules WITH productId so product-specific overrides are respected
+      const rules = await fetchRules(resolvedLocationId, singleProductId);
+      const PRODUCT_SELECTORS = "#main-product, .product, .product-single, .card, .grid__item, .product-section, .product-item, .product__info-container, article";
+      const applyAll = () => {
+        document.querySelectorAll(PRODUCT_SELECTORS).forEach(c => applyRulesToContainer(c, rules));
+      };
+      applyAll();
+      new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
+    } else {
+      // ── COLLECTION / LIST PAGE ────────────────────────────────────────────
+      // Fetch blanket catalog rules (no productId = catalog-level rules apply to all products)
+      const processBatch = async () => {
+        const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
+        if (pidElements.length === 0) return;
+        pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
+        const rules = await fetchRules(resolvedLocationId, "");
+        pidElements.forEach(el => {
+          const card = el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || el;
+          applyRulesToContainer(card, rules);
+        });
+      };
+      await processBatch();
+      new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
+    }
   }
 
-  // Trigger app framework execution
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
   } else {
     init();
   }
