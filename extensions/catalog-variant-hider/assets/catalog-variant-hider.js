@@ -53,8 +53,7 @@
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
 
-    // ── Full Reset ──────────────────────────────────────────────────────────
-    // Un-hide everything before applying new rules to prevent stale state.
+    // 1. Full structural reset
     container.querySelectorAll('[style*="display: none"]').forEach(el => {
         if (el.style.display === "none") el.style.removeProperty("display");
     });
@@ -63,102 +62,75 @@
       injectStrikethroughPricing(container);
       return;
     }
-
     container.setAttribute("data-cvh-processed", "1");
 
-    const allVariantEls = Array.from(
-      container.querySelectorAll('input[type="radio"], option, button[data-variant-id], .variant-input input, label[data-value]')
-    );
+    // Determine if we are processing the Main Product Page or a Collection Grid Card
+    const isProductPage = !!document.querySelector('.product__info-container, .product-single');
 
-    const elText = (el) => {
-      if (el.tagName === "OPTION") return (el.textContent || el.value || "").trim();
-      if (el.tagName === "BUTTON") return (el.textContent || el.getAttribute("aria-label") || "").trim();
-      if (el.tagName === "LABEL" && el.dataset.value) return el.dataset.value.trim();
-      const val = (el.value || "").trim();
-      if ((el.type === "radio" || el.type === "checkbox") && /^\d{8,}$/.test(val)) {
-        const lbl = el.id ? container.querySelector(`label[for="${el.id}"]`) : el.closest("label");
-        const labelText = lbl ? lbl.textContent.trim() : "";
-        if (labelText) return labelText;
-      }
-      return val || (el.textContent || "").trim();
-    };
-
-    const isBlockedEl = (el) => {
-      const val = elText(el);
-      if (!val) return false;
+    if (isProductPage && container.matches('.product__info-container, .product-form')) {
+      // ── SURGICAL PRODUCT PAGE TARGETING ──────────────────────────────────
+      // Target the specific radio wrapper label pills on the main product view
+      const variantPills = container.querySelectorAll('label.variant-pill');
       
-      // Strip trailing whitespace and normalize lowercase structures completely
-      const valLower = val.trim().toLowerCase().replace(/\s+/g, ' ');
+      variantPills.forEach(label => {
+        const labelText = (label.textContent || "").trim().toLowerCase();
+        
+        const shouldHide = validTypes.some(t => labelText.includes(t.toLowerCase())) ||
+                           validIds.some(id => labelText.includes(id.toLowerCase()));
+                           
+        // Strict Protection Guard: Never hide the standalone "Outer" baseline unit
+        if (labelText === "outer") return;
 
-      // Guard: Absolutely protect your target baseline distribution units
-      if (valLower === "outer" || valLower === "each" || valLower === "packet") return false;
-
-      // 1. Direct validation check loop
-      const isDirectMatch = validTypes.some(t => {
-        const cleanType = t.trim().toLowerCase().replace(/\s+/g, ' ');
-        return valLower === cleanType || valLower.includes(cleanType) || cleanType.includes(valLower);
-      }) || validIds.some(id => valLower === id.trim().toLowerCase());
-
-      if (isDirectMatch) return true;
-
-      // 2. Keyword Split Verification (Fixes partial template renders like matching "Shipper" from "Shipper (12 Outer)")
-      return validTypes.some(t => {
-        const cleanType = t.trim().toLowerCase();
-        // Catch core identifiers safely (e.g., if rule contains 'shipper' and element string contains 'shipper')
-        if (cleanType.includes('shipper') && valLower.includes('shipper')) return true;
-        if (cleanType.includes('bag') && valLower.includes('bag')) return true;
-        return false;
-      });
-    };
-
-    const visibleVariantEls = allVariantEls.filter(el => {
-        const val = elText(el);
-        if (!val || /^[-–—]|select|choose/i.test(val)) return false;
-        return !isBlockedEl(el);
-    });
-
-    // ── Selection Correction ───────────────────────────────────────────────
-    const currentlySelected = allVariantEls.find(el => {
-        if (el.tagName === "OPTION") return el.selected;
-        if (el.type === "radio") return el.checked;
-        return false;
-    });
-
-    if (currentlySelected && isBlockedEl(currentlySelected) && visibleVariantEls.length > 0) {
-        console.log("[CVH] Selection Correction Triggered.");
-        const target = visibleVariantEls[0];
-        if (target.tagName === "OPTION") {
-            target.selected = true;
-            target.parentElement.dispatchEvent(new Event("change", { bubbles: true }));
-        } else if (target.type === "radio") {
-            target.click();
+        if (shouldHide) {
+          label.style.setProperty("display", "none", "important");
+          // Also hide the hidden radio dot inside it
+          const innerInput = label.querySelector('input');
+          if (innerInput) innerInput.style.setProperty("display", "none", "important");
         }
+      });
+
+    } else {
+      // ── SURGICAL COLLECTION GRID TARGETING ───────────────────────────────
+      // On the collection page, target the grid's explicit pill list items
+      const gridPills = container.querySelectorAll('.variant-pills-wrapper label.variant-pill, input[type="radio"]');
+      
+      gridPills.forEach(el => {
+        const valText = (el.tagName === "LABEL" ? el.textContent : el.value || "").trim().toLowerCase();
+        
+        const shouldHide = validTypes.some(t => valText.includes(t.toLowerCase())) ||
+                           validIds.some(id => valText.includes(id.toLowerCase()));
+
+        if (valText === "outer") return;
+
+        if (shouldHide) {
+          if (el.tagName === "LABEL") {
+            el.style.setProperty("display", "none", "important");
+          } else {
+            el.style.setProperty("display", "none", "important");
+            const parentLabel = el.closest('label.variant-pill, .variant-pill');
+            if (parentLabel) parentLabel.style.setProperty("display", "none", "important");
+          }
+        }
+      });
     }
 
-    const hideVariantEl = (el) => {
-      // Hide the element itself
-      el.style.setProperty("display", "none", "important");
-      
-      // FIX: If the element is an input inside a custom theme label block, hide the parent label pill
-      const parentLabel = el.closest('label.variant-pill, .variant-pill');
-      if (parentLabel) {
-        parentLabel.style.setProperty("display", "none", "important");
-      }
+    // ── SELECTION CORRECTION ENGINE ────────────────────────────────────────
+    // Auto-select the first visible "Outer" variant if the theme defaulted to a hidden one
+    const allPills = Array.from(container.querySelectorAll('label.variant-pill'));
+    const visiblePills = allPills.filter(lbl => lbl.style.display !== 'none');
 
-      // Fallback label checks via IDs
-      if (el.id) {
-        const lbl = container.querySelector(`label[for="${el.id}"]`);
-        if (lbl) lbl.style.setProperty("display", "none", "important");
+    const currentlySelectedInput = container.querySelector('input[type="radio"]:checked');
+    if (currentlySelectedInput && currentlySelectedInput.closest('label')?.style.display === 'none' && visiblePills.length > 0) {
+      console.log("[CVH] Selection Correction Triggered.");
+      const targetLabel = visiblePills[0];
+      const targetInput = targetLabel.querySelector('input') || document.getElementById(targetLabel.getAttribute('for'));
+      if (targetInput) {
+        targetInput.checked = true;
+        targetInput.click();
+        targetInput.dispatchEvent(new Event('change', { bubbles: true }));
       }
-      
-      const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
-      if (wrap && !wrap.classList.contains("grid__item")) {
-        wrap.style.setProperty("display", "none", "important");
-      }
-    };
+    }
 
-    allVariantEls.filter(isBlockedEl).forEach(hideVariantEl);
-    
     injectStrikethroughPricing(container);
   }
 
