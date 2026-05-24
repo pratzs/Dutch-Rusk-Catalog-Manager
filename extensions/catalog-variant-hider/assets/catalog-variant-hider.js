@@ -25,6 +25,49 @@
     sessionStorage.setItem("cvh4:who", CUSTOMER_ID || LOCATION_ID || "");
   } catch (_) {}
 
+  // ── Shopify Storefront variant-option lookup ──────────────────────────────
+  // Fetches /variants.json for a batch of variant IDs and returns a map of
+  // { variantId: "Outer / Regular" } so we can resolve type-name rules like
+  // "Shipper" to actual numeric variant IDs on collection-page cards where the
+  // radio input's associated <label> text isn't accessible.
+  const variantOptionCache = {}; // { "43639577215289": "Outer" }
+
+  async function fetchVariantOptions(variantIds) {
+    const toFetch = variantIds.filter(id => !(id in variantOptionCache));
+    const CHUNK = 250;
+    for (let i = 0; i < toFetch.length; i += CHUNK) {
+      const batch = toFetch.slice(i, i + CHUNK);
+      try {
+        const res  = await fetch(`/variants.json?ids=${batch.join(",")}`);
+        const data = await res.json();
+        for (const v of data.variants ?? []) {
+          const opts = [v.option1, v.option2, v.option3].filter(Boolean).join(" / ");
+          variantOptionCache[String(v.id)] = opts;
+        }
+      } catch (err) {
+        WARN("fetchVariantOptions: fetch failed →", err);
+      }
+    }
+    return variantOptionCache;
+  }
+
+  // Enrich a rules object by resolving hiddenVariantTypes → matched variant IDs.
+  // Adds IDs to hiddenVariantIds so collection-card radio inputs (whose values are
+  // numeric IDs, not text) are blocked by the existing isBlockedEl ID-match path.
+  function enrichRulesWithVariantIds(rules, cardVariantIds) {
+    if (!rules.hiddenVariantTypes?.length || !cardVariantIds?.length) return rules;
+    const resolvedIds = cardVariantIds.filter(id => {
+      const opts = (variantOptionCache[id] || "").toLowerCase();
+      return opts && rules.hiddenVariantTypes.some(t => opts.startsWith(t.toLowerCase()));
+    });
+    if (!resolvedIds.length) return rules;
+    LOG(`  enrichRules: resolved types`, rules.hiddenVariantTypes, `→ IDs`, resolvedIds);
+    return {
+      ...rules,
+      hiddenVariantIds: [...new Set([...(rules.hiddenVariantIds || []), ...resolvedIds])],
+    };
+  }
+
   async function fetchRules(locationId, productId) {
     const normPid = productId
       ? (String(productId).includes("/") ? String(productId).split("/").pop() : String(productId))
@@ -260,12 +303,32 @@
 
         pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
 
-        await Promise.all(pidElements.map(async (el) => {
+        // ── Step 1: collect all variant IDs visible across all new cards in one
+        //   pass so we can batch-resolve type names ("Shipper") → variant IDs.
+        //   Collection-page radio inputs have numeric variant IDs as values but
+        //   no accessible label text, so type-based text matching would miss them.
+        const allCardVariantIds = new Set();
+        const cardMeta = pidElements.map(el => {
           const productId = el.dataset.productId;
           const card = el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || el;
-          LOG(`  Collection card: productId="${productId}" container=<${card.tagName} class="${String(card.className).slice(0,50)}">`);
+          const variantEls = Array.from(card.querySelectorAll('input[type="radio"], option, button[data-variant-id]'));
+          const variantIds = variantEls
+            .map(i => (i.value || i.dataset?.variantId || "").trim())
+            .filter(v => /^\d{8,}$/.test(v));
+          variantIds.forEach(id => allCardVariantIds.add(id));
+          LOG(`  Collection card: productId="${productId}" container=<${card.tagName} class="${String(card.className).slice(0,50)}"> variantIds:`, variantIds);
+          return { productId, card, variantIds };
+        });
+
+        // ── Step 2: batch-fetch Shopify variant option values for ALL cards at once
+        await fetchVariantOptions([...allCardVariantIds]);
+        LOG(`fetchVariantOptions: option map has ${Object.keys(variantOptionCache).length} entries`);
+
+        // ── Step 3: fetch per-product rules, enrich with resolved IDs, apply
+        await Promise.all(cardMeta.map(async ({ productId, card, variantIds }) => {
           try {
-            const rules = await fetchRules(resolvedLocationId, productId);
+            let rules = await fetchRules(resolvedLocationId, productId);
+            rules = enrichRulesWithVariantIds(rules, variantIds);
             applyRulesToContainer(card, rules, `card:${productId}`);
           } catch (err) {
             WARN(`  processBatch error for productId=${productId}:`, err);
