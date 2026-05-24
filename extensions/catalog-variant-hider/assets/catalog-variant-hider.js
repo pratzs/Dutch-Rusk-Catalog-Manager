@@ -125,11 +125,21 @@
     }
 
     const hideVariantEl = (el) => {
+      // Hide the element itself
       el.style.setProperty("display", "none", "important");
+      
+      // FIX: If the element is an input inside a custom theme label block, hide the parent label pill
+      const parentLabel = el.closest('label.variant-pill, .variant-pill');
+      if (parentLabel) {
+        parentLabel.style.setProperty("display", "none", "important");
+      }
+
+      // Fallback label checks via IDs
       if (el.id) {
         const lbl = container.querySelector(`label[for="${el.id}"]`);
         if (lbl) lbl.style.setProperty("display", "none", "important");
       }
+      
       const wrap = el.closest(".swatch-element, .variant-input, li, .option__item");
       if (wrap && !wrap.classList.contains("grid__item")) {
         wrap.style.setProperty("display", "none", "important");
