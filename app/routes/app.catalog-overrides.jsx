@@ -449,7 +449,14 @@ export default function CatalogOverrides() {
     shopify.toast.show(`Saving ${dirtyCount} product${dirtyCount !== 1 ? "s" : ""}${migrateNote}…`);
   };
 
-  const hasUnsavedChanges = products.some((p) => {
+  // Products whose DB override row still uses all-legacy numeric/GID IDs — these need
+  // to be re-saved in the title-based format even if the user hasn't touched them.
+  const legacyOverrideCount = products.filter((p) => {
+    const raw = overridesMap[p.id];
+    return raw !== undefined && raw.length > 0 && raw[0] !== "__SHOW_ALL__" && raw.every(isLegacyId);
+  }).length;
+
+  const hasUnsavedChanges = legacyOverrideCount > 0 || products.some((p) => {
     const cur = pendingHidden[p.id] || [];
     const base = initialHidden.current[p.id] || [];
     return JSON.stringify([...cur].sort()) !== JSON.stringify([...base].sort());
@@ -458,7 +465,10 @@ export default function CatalogOverrides() {
   const dirtyCount = products.filter((p) => {
     const cur = pendingHidden[p.id] || [];
     const base = initialHidden.current[p.id] || [];
-    return JSON.stringify([...cur].sort()) !== JSON.stringify([...base].sort());
+    const isUserDirty = JSON.stringify([...cur].sort()) !== JSON.stringify([...base].sort());
+    const raw = overridesMap[p.id];
+    const isLegacy = raw !== undefined && raw.length > 0 && raw[0] !== "__SHOW_ALL__" && raw.every(isLegacyId);
+    return isUserDirty || isLegacy;
   }).length;
 
   return (
@@ -498,7 +508,13 @@ export default function CatalogOverrides() {
               boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
             }}>
               <span style={{ fontSize: "14px" }}>
-                ✏️ <b>{dirtyCount} product{dirtyCount !== 1 ? "s" : ""}</b> with unsaved changes
+                {legacyOverrideCount > 0 && dirtyCount === legacyOverrideCount
+                  ? `⚠️ `
+                  : `✏️ `}
+                <b>{dirtyCount} product{dirtyCount !== 1 ? "s" : ""}</b>
+                {legacyOverrideCount > 0
+                  ? ` need${dirtyCount === 1 ? "s" : ""} saving — ${legacyOverrideCount} legacy rule${legacyOverrideCount !== 1 ? "s" : ""} will be upgraded`
+                  : " with unsaved changes"}
               </span>
               <s-button variant="primary" tone="success" onClick={handleSaveAllDirty}
                 disabled={isBulkSaving || undefined}>
