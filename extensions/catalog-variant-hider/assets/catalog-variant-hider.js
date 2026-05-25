@@ -298,13 +298,15 @@
 
     LOG(`applyRules [${tag}] rules →`, { hiddenVariantTypes: validTypes, hiddenVariantIds: validIds });
 
+    // Always mark as processed — the server-side CSS mask uses this to restore
+    // opacity on the card, so it must be set even when there are no rules to hide.
+    container.setAttribute("data-cvh-processed", "1");
+
     if (validTypes.length === 0 && validIds.length === 0) {
       LOG(`applyRules [${tag}] → NO rules, skipping hide (injecting strikethrough only)`);
       injectStrikethroughPricing(container);
       return;
     }
-
-    container.setAttribute("data-cvh-processed", "1");
 
     const allVariantEls = Array.from(
       container.querySelectorAll('input[type="radio"], option, button[data-variant-id], .variant-input input, label[data-value]')
@@ -506,7 +508,12 @@
           } catch (err) {
             WARN(`  processBatch error for productId=${productId}:`, err);
           } finally {
-            // Always unmask — even on error it's better to show all than stay invisible
+            // Always unmask — even on error it's better to show all than stay invisible.
+            // data-cvh-processed lifts the server-side CSS mask; data-cvh-loading
+            // lifts the JS-applied mask for cards added after initial page load.
+            if (!card.hasAttribute("data-cvh-processed")) {
+              card.setAttribute("data-cvh-processed", "1");
+            }
             card.removeAttribute("data-cvh-loading");
           }
         });
