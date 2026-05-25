@@ -118,8 +118,16 @@ function computeProductRules(rule, override) {
 }
 
 export async function loader({ request }) {
+  const url = new URL(request.url);
+
+  // ── Fast pre-warm path — no DB, just keeps Render alive ──────────────────
+  // The liquid snippet fires this immediately on B2B page loads so the instance
+  // is already warm by the time the real catalog-rules call arrives.
+  if (url.searchParams.get("_ping")) {
+    return new Response(JSON.stringify({ ok: true, t: Date.now() }), { status: 200, headers: CORS_HEADERS });
+  }
+
   const { default: prisma } = await import("../db.server");
-  const url        = new URL(request.url);
   const shop       = url.searchParams.get("shop");
   const customerId = url.searchParams.get("customerId");
   const productIdsParam = url.searchParams.get("productIds"); // batch: comma-separated

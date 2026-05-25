@@ -26,26 +26,37 @@
     sessionStorage.setItem("cvh4:who", CUSTOMER_ID || LOCATION_ID || "");
   } catch (_) {}
 
-  // ── Loading-mask CSS ──────────────────────────────────────────────────────
-  // Injected once on init. Cards get [data-cvh-loading] the moment they are
-  // discovered so variant pickers are invisible+unclickable while the batch
-  // API call is in flight. The attribute is removed after rules are applied.
-  (function injectLoadingMask() {
-    if (document.getElementById("cvh-loading-mask")) return;
+  // ── Loading-mask CSS fallback ─────────────────────────────────────────────
+  // catalog-hider.liquid injects the primary CSS (using :not([data-cvh-processed])
+  // selectors) server-side for B2B collection pages. This fallback fires only
+  // when that liquid CSS is absent (e.g. dev preview, theme not yet re-saved).
+  (function injectLoadingMaskFallback() {
+    if (document.getElementById("cvh-b2b-mask") || document.getElementById("cvh-loading-mask")) return;
+    const CARDS = ":is(.product-card,.card-wrapper,.product-card-wrapper,li.grid__item,article)";
+    const INNER = [
+      'input[type="radio"]',
+      'input[type="radio"] + label',
+      "label[for]",
+      "label",
+      "variant-selects",
+      "fieldset",
+      ".swatch-element",
+      ".variant-input",
+      ".product-form__input",
+      "button[data-variant-id]",
+      'select[name="id"]',
+    ];
+    // Layer 1a: CSS :not([data-cvh-processed]) for initial load
+    const cssHide = INNER.map(sel => `${CARDS}:not([data-cvh-processed]) ${sel}`).join(",") +
+      `{opacity:0!important;pointer-events:none!important;user-select:none!important;transition:none!important;}`;
+    // Layer 1b: [data-cvh-loading] for infinite-scroll cards (JS-stamped)
+    const jsHide = INNER.map(sel => `[data-cvh-loading] ${sel}`).join(",") +
+      `{opacity:0!important;pointer-events:none!important;user-select:none!important;transition:none!important;}`;
+    const showRules = INNER.map(sel => `[data-cvh-processed] ${sel}`).join(",") +
+      `{opacity:1!important;pointer-events:auto!important;user-select:auto!important;}`;
     const s = document.createElement("style");
     s.id = "cvh-loading-mask";
-    s.textContent = `
-      [data-cvh-loading] input[type="radio"],
-      [data-cvh-loading] input[type="radio"] + label,
-      [data-cvh-loading] label[for],
-      [data-cvh-loading] .swatch-element,
-      [data-cvh-loading] .variant-input,
-      [data-cvh-loading] variant-selects {
-        opacity: 0 !important;
-        pointer-events: none !important;
-        transition: none !important;
-      }
-    `;
+    s.textContent = cssHide + jsHide + showRules;
     document.head.appendChild(s);
   })();
 
@@ -141,32 +152,91 @@
     }
   }
 
+  // ── Batch rule fetch helpers ──────────────────────────────────────────────
+
+  // doFetchBatchChunked: fires the actual API call(s) for a list of normPids.
+  // Results are written into rulesCache, sessionStorage, and optionally into
+  // the supplied resultMap (pass null for background-refresh calls).
+  async function doFetchBatchChunked(locationId, normPids, resultMap) {
+    const CHUNK_SIZE = 50;
+    for (let i = 0; i < normPids.length; i += CHUNK_SIZE) {
+      const chunk = normPids.slice(i, i + CHUNK_SIZE);
+      try {
+        const params = new URLSearchParams();
+        params.set("productIds", chunk.join(","));
+        if (locationId) params.set("locationId", locationId);
+        if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
+        params.set("_t", Date.now());
+
+        const url = `${APP_URL}/api/catalog-rules?${params}`;
+        LOG(`doFetchBatchChunked [API FETCH] ${chunk.length} products →`, url.slice(0, 120) + "...");
+
+        const res  = await fetch(url);
+        const data = await res.json();
+        LOG(`doFetchBatchChunked [API RESPONSE] returned ${Object.keys(data.batch ?? {}).length} rules`);
+
+        if (data.batch) {
+          for (const [pid, rules] of Object.entries(data.batch)) {
+            if (Array.isArray(rules.hiddenVariantTypes)) {
+              const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
+              rulesCache[cacheKey] = rules;
+              if (resultMap) resultMap[pid] = rules;
+              try {
+                sessionStorage.setItem(SS_PRE + pid, JSON.stringify({ ...rules, _cvh_exp: Date.now() + SS_TTL_MS }));
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (err) {
+        WARN(`doFetchBatchChunked: fetch failed for chunk [${i}..${i + chunk.length - 1}]:`, err);
+      }
+    }
+  }
+
   // ── Batch rule fetch (collection page — ONE API call for many products) ───
-  // Checks in-memory and sessionStorage caches first; only fetches what is
-  // missing. Returns a map of { normProductId → rules }.
+  //
+  // Uses a stale-while-revalidate strategy:
+  //   • Memory cache hit   → returned instantly (no network)
+  //   • sessionStorage hit (fresh, within TTL) → returned instantly
+  //   • sessionStorage hit (STALE, TTL expired) → returned IMMEDIATELY using
+  //     the old value, and a background refresh is fired so the next page load
+  //     gets fresh data. This eliminates the "cold Render" wait for repeat
+  //     visitors because stale rules are almost always still correct.
+  //   • Cache miss → blocking API call (only on truly first load)
+  //
+  // Returns a map of { normProductId → rules }.
   async function fetchRulesBatch(locationId, productIds) {
     if (!productIds?.length) return {};
 
-    const result  = {};
-    const toFetch = [];
+    const result    = {};
+    const toFetch   = [];   // Needs a blocking API call
+    const toRefresh = [];   // Has stale cache — serve immediately, refresh in bg
 
     for (const productId of productIds) {
       const normPid  = String(productId).includes("/") ? productId.split("/").pop() : String(productId);
       const cacheKey = `${locationId || CUSTOMER_ID}::${normPid}`;
 
+      // ① Memory cache (always fresh within this page load)
       if (rulesCache[cacheKey]) {
         result[normPid] = rulesCache[cacheKey];
         continue;
       }
 
+      // ② sessionStorage (may be fresh OR stale)
       const ssKey = SS_PRE + normPid;
       try {
         const s = sessionStorage.getItem(ssKey);
         if (s) {
           const d = JSON.parse(s);
-          if (Array.isArray(d.hiddenVariantTypes) && (!d._cvh_exp || Date.now() < d._cvh_exp)) {
+          if (Array.isArray(d.hiddenVariantTypes)) {
+            // Always serve what we have — instantly unblocks card processing
             rulesCache[cacheKey] = d;
             result[normPid] = d;
+            if (d._cvh_exp && Date.now() > d._cvh_exp) {
+              // Stale: schedule a background refresh for next visit
+              toRefresh.push(normPid);
+              LOG(`fetchRulesBatch [SS-STALE] pid="${normPid}" — serving stale, scheduling bg refresh`);
+            }
             continue;
           }
           sessionStorage.removeItem(ssKey);
@@ -176,45 +246,20 @@
       toFetch.push(normPid);
     }
 
+    // ③ Background refresh for stale entries (non-blocking — fire and forget)
+    if (toRefresh.length > 0) {
+      LOG(`fetchRulesBatch: refreshing ${toRefresh.length} stale products in background`);
+      doFetchBatchChunked(locationId, toRefresh, null).catch(() => {});
+    }
+
+    // ④ Blocking fetch for true cache misses
     if (toFetch.length === 0) {
-      LOG(`fetchRulesBatch: all ${productIds.length} products served from cache`);
+      LOG(`fetchRulesBatch: all ${productIds.length} products served from cache (${toRefresh.length} stale/refreshing)`);
       return result;
     }
 
-    // Fetch uncached products in chunks of 50 (URL-length safety)
-    const CHUNK_SIZE = 50;
-    for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
-      const chunk = toFetch.slice(i, i + CHUNK_SIZE);
-      try {
-        const params = new URLSearchParams();
-        params.set("productIds", chunk.join(","));
-        if (locationId) params.set("locationId", locationId);
-        if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
-        params.set("_t", Date.now());
-
-        const url = `${APP_URL}/api/catalog-rules?${params}`;
-        LOG(`fetchRulesBatch [API FETCH] ${chunk.length} products →`, url.slice(0, 120) + "...");
-
-        const res  = await fetch(url);
-        const data = await res.json();
-        LOG(`fetchRulesBatch [API RESPONSE] returned ${Object.keys(data.batch ?? {}).length} rules`);
-
-        if (data.batch) {
-          for (const [pid, rules] of Object.entries(data.batch)) {
-            if (Array.isArray(rules.hiddenVariantTypes)) {
-              const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
-              rulesCache[cacheKey] = rules;
-              result[pid] = rules;
-              try {
-                sessionStorage.setItem(SS_PRE + pid, JSON.stringify({ ...rules, _cvh_exp: Date.now() + SS_TTL_MS }));
-              } catch (_) {}
-            }
-          }
-        }
-      } catch (err) {
-        WARN(`fetchRulesBatch: fetch failed for chunk [${i}..${i + chunk.length - 1}]:`, err);
-      }
-    }
+    LOG(`fetchRulesBatch: ${toFetch.length} cache-miss products need blocking API fetch`);
+    await doFetchBatchChunked(locationId, toFetch, result);
 
     return result;
   }
@@ -467,13 +512,17 @@
         // double-process the same cards.
         pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
 
-        // ── Step 1: Mask variant pickers immediately + collect card metadata ─
+        // ── Step 1: Mask cards immediately + collect card metadata ───────────
+        // CSS :not([data-cvh-processed]) covers the initial page load.
+        // [data-cvh-loading] covers infinite-scroll cards: new nodes injected by
+        // JS can be painted by the browser before the CSS engine recalculates
+        // :not() — setting the attribute synchronously here (before any await)
+        // closes that gap via the [data-cvh-loading] CSS rule.
         const allCardVariantIds = new Set();
         const cardMeta = pidElements.map(el => {
           const productId = el.dataset.productId;
           const card = el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || el;
 
-          // Mask the card while rules are in flight — prevents wrong-variant selection
           card.setAttribute("data-cvh-loading", "1");
 
           const variantEls = Array.from(card.querySelectorAll('input[type="radio"], option, button[data-variant-id]'));
@@ -486,12 +535,13 @@
           return { productId, card, variantIds };
         });
 
-        // ── Step 2: Batch-fetch Shopify variant option values (all cards, one call)
-        await fetchVariantOptions([...allCardVariantIds]);
+        // ── Steps 2+3: Fetch variant options (Shopify) + catalog rules (app) in parallel ─
+        // These two are independent — no reason to wait for one before starting the other.
+        const [, batchRules] = await Promise.all([
+          fetchVariantOptions([...allCardVariantIds]),
+          fetchRulesBatch(resolvedLocationId, cardMeta.map(m => m.productId)),
+        ]);
         LOG(`fetchVariantOptions: option map has ${Object.keys(variantOptionCache).length} entries`);
-
-        // ── Step 3: Batch-fetch catalog rules (ONE API call for all products) ─
-        const batchRules = await fetchRulesBatch(resolvedLocationId, cardMeta.map(m => m.productId));
 
         // ── Step 4: Apply rules + unmask each card ───────────────────────────
         cardMeta.forEach(({ productId, card, variantIds }) => {
@@ -508,9 +558,8 @@
           } catch (err) {
             WARN(`  processBatch error for productId=${productId}:`, err);
           } finally {
-            // Always unmask — even on error it's better to show all than stay invisible.
-            // data-cvh-processed lifts the server-side CSS mask; data-cvh-loading
-            // lifts the JS-applied mask for cards added after initial page load.
+            // Always unmask — even on error it's better to show all variants
+            // than leave the card permanently hidden.
             if (!card.hasAttribute("data-cvh-processed")) {
               card.setAttribute("data-cvh-processed", "1");
             }
