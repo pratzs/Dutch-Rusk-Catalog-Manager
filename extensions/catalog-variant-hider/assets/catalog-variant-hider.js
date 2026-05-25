@@ -1,5 +1,5 @@
 (function () {
-  const LOG = (...a) => console.log("[CVH]", ...a);
+  const LOG  = (...a) => console.log("[CVH]", ...a);
   const WARN = (...a) => console.warn("[CVH]", ...a);
 
   const _el = document.getElementById("catalog-variant-hider-data");
@@ -26,12 +26,31 @@
     sessionStorage.setItem("cvh4:who", CUSTOMER_ID || LOCATION_ID || "");
   } catch (_) {}
 
+  // ── Loading-mask CSS ──────────────────────────────────────────────────────
+  // Injected once on init. Cards get [data-cvh-loading] the moment they are
+  // discovered so variant pickers are invisible+unclickable while the batch
+  // API call is in flight. The attribute is removed after rules are applied.
+  (function injectLoadingMask() {
+    if (document.getElementById("cvh-loading-mask")) return;
+    const s = document.createElement("style");
+    s.id = "cvh-loading-mask";
+    s.textContent = `
+      [data-cvh-loading] input[type="radio"],
+      [data-cvh-loading] input[type="radio"] + label,
+      [data-cvh-loading] label[for],
+      [data-cvh-loading] .swatch-element,
+      [data-cvh-loading] .variant-input,
+      [data-cvh-loading] variant-selects {
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transition: none !important;
+      }
+    `;
+    document.head.appendChild(s);
+  })();
+
   // ── Shopify Storefront variant-option lookup ──────────────────────────────
-  // Fetches /variants.json for a batch of variant IDs and returns a map of
-  // { variantId: "Outer / Regular" } so we can resolve type-name rules like
-  // "Shipper" to actual numeric variant IDs on collection-page cards where the
-  // radio input's associated <label> text isn't accessible.
-  const variantOptionCache = {}; // { "43639577215289": "Outer" }
+  const variantOptionCache = {};
 
   async function fetchVariantOptions(variantIds) {
     const toFetch = variantIds.filter(id => !(id in variantOptionCache));
@@ -52,9 +71,8 @@
     return variantOptionCache;
   }
 
-  // Enrich a rules object by resolving hiddenVariantTypes → matched variant IDs.
-  // Adds IDs to hiddenVariantIds so collection-card radio inputs (whose values are
-  // numeric IDs, not text) are blocked by the existing isBlockedEl ID-match path.
+  // Enrich rules by resolving hiddenVariantTypes → matched variant IDs so
+  // collection-card radio inputs (whose values are numeric IDs) are caught.
   function enrichRulesWithVariantIds(rules, cardVariantIds) {
     if (!rules.hiddenVariantTypes?.length || !cardVariantIds?.length) return rules;
     const resolvedIds = cardVariantIds.filter(id => {
@@ -69,6 +87,7 @@
     };
   }
 
+  // ── Single-product rule fetch (used on product pages) ────────────────────
   async function fetchRules(locationId, productId) {
     const normPid = productId
       ? (String(productId).includes("/") ? String(productId).split("/").pop() : String(productId))
@@ -90,7 +109,7 @@
           LOG(`fetchRules [SS-CACHE HIT] key="${ssKey}"`, d);
           return d;
         }
-        sessionStorage.removeItem(ssKey); // Expired or invalid — bust it
+        sessionStorage.removeItem(ssKey);
         LOG(`fetchRules [SS-CACHE EXPIRED] key="${ssKey}" — re-fetching`);
       }
     } catch (_) {}
@@ -107,7 +126,6 @@
 
       const res  = await fetch(url);
       const data = await res.json();
-
       LOG(`fetchRules [API RESPONSE] productId="${productId || "(blanket)"}"`, data);
 
       if (Array.isArray(data.hiddenVariantTypes)) {
@@ -121,6 +139,84 @@
       WARN("fetchRules: fetch failed →", err);
       return { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
     }
+  }
+
+  // ── Batch rule fetch (collection page — ONE API call for many products) ───
+  // Checks in-memory and sessionStorage caches first; only fetches what is
+  // missing. Returns a map of { normProductId → rules }.
+  async function fetchRulesBatch(locationId, productIds) {
+    if (!productIds?.length) return {};
+
+    const result  = {};
+    const toFetch = [];
+
+    for (const productId of productIds) {
+      const normPid  = String(productId).includes("/") ? productId.split("/").pop() : String(productId);
+      const cacheKey = `${locationId || CUSTOMER_ID}::${normPid}`;
+
+      if (rulesCache[cacheKey]) {
+        result[normPid] = rulesCache[cacheKey];
+        continue;
+      }
+
+      const ssKey = SS_PRE + normPid;
+      try {
+        const s = sessionStorage.getItem(ssKey);
+        if (s) {
+          const d = JSON.parse(s);
+          if (Array.isArray(d.hiddenVariantTypes) && (!d._cvh_exp || Date.now() < d._cvh_exp)) {
+            rulesCache[cacheKey] = d;
+            result[normPid] = d;
+            continue;
+          }
+          sessionStorage.removeItem(ssKey);
+        }
+      } catch (_) {}
+
+      toFetch.push(normPid);
+    }
+
+    if (toFetch.length === 0) {
+      LOG(`fetchRulesBatch: all ${productIds.length} products served from cache`);
+      return result;
+    }
+
+    // Fetch uncached products in chunks of 50 (URL-length safety)
+    const CHUNK_SIZE = 50;
+    for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
+      const chunk = toFetch.slice(i, i + CHUNK_SIZE);
+      try {
+        const params = new URLSearchParams();
+        params.set("productIds", chunk.join(","));
+        if (locationId) params.set("locationId", locationId);
+        if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
+        params.set("_t", Date.now());
+
+        const url = `${APP_URL}/api/catalog-rules?${params}`;
+        LOG(`fetchRulesBatch [API FETCH] ${chunk.length} products →`, url.slice(0, 120) + "...");
+
+        const res  = await fetch(url);
+        const data = await res.json();
+        LOG(`fetchRulesBatch [API RESPONSE] returned ${Object.keys(data.batch ?? {}).length} rules`);
+
+        if (data.batch) {
+          for (const [pid, rules] of Object.entries(data.batch)) {
+            if (Array.isArray(rules.hiddenVariantTypes)) {
+              const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
+              rulesCache[cacheKey] = rules;
+              result[pid] = rules;
+              try {
+                sessionStorage.setItem(SS_PRE + pid, JSON.stringify({ ...rules, _cvh_exp: Date.now() + SS_TTL_MS }));
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (err) {
+        WARN(`fetchRulesBatch: fetch failed for chunk [${i}..${i + chunk.length - 1}]:`, err);
+      }
+    }
+
+    return result;
   }
 
   function injectStrikethroughPricing(container) {
@@ -145,21 +241,16 @@
     }
   }
 
-  // ── "Back Soon" state — called when ALL variants for a product are hidden ─────
-  // Hides pack-size section, inventory badge, quantity stepper, and replaces
-  // "Add to Cart" with a disabled "Back Soon" button.
+  // ── "Back Soon" state ─────────────────────────────────────────────────────
   function applyBackSoonState(scope) {
-    if (scope.dataset?.cvhBackSoon) return; // already applied
+    if (scope.dataset?.cvhBackSoon) return;
     if (scope.dataset) scope.dataset.cvhBackSoon = "1";
     LOG(`  → applyBackSoonState on <${scope.tagName}>`);
 
-    // 1. Hide variant-selects web component (Shopify 2.0 themes)
     scope.querySelectorAll("variant-selects").forEach(el =>
       el.style.setProperty("display", "none", "important")
     );
 
-    // 2. Walk up from each radio input to find its section wrapper and hide it
-    //    (covers older themes or cards that don't use <variant-selects>)
     scope.querySelectorAll('input[type="radio"]').forEach(radio => {
       let el = radio.parentElement;
       let depth = 0;
@@ -179,17 +270,14 @@
       }
     });
 
-    // 3. Hide inventory / stock badges
     scope.querySelectorAll(
       '[class*="inventory"], [class*="stock"], .product-availability, [data-inventory]'
     ).forEach(el => el.style.setProperty("display", "none", "important"));
 
-    // 4. Hide quantity selector
     scope.querySelectorAll(
       'quantity-input, .quantity, [class*="quantity__"], .product-form__quantity'
     ).forEach(el => el.style.setProperty("display", "none", "important"));
 
-    // 5. Replace Add to Cart button with "Back Soon"
     const addBtn = scope.querySelector('button[name="add"], button[data-add-to-cart]');
     if (addBtn && !addBtn.dataset.cvhBackSoon) {
       addBtn.dataset.cvhBackSoon = "1";
@@ -351,7 +439,6 @@
 
         LOG(`applyAll: processed ${containerCount} container(s) on product page`);
 
-        // If ALL variant radio inputs on the page are now hidden → "Back Soon" state
         const pageRadios = Array.from(document.querySelectorAll('variant-selects input[type="radio"]'));
         if (pageRadios.length > 0 && pageRadios.every(r => r.style.display === "none")) {
           const mainEl = document.querySelector('#MainContent, main, [role="main"]') || document.body;
@@ -364,49 +451,65 @@
 
     } else {
       // ── COLLECTION PAGE ───────────────────────────────────────────────────
+      // Key design: cards are IMMEDIATELY masked (opacity:0, pointer-events:none)
+      // the moment they are discovered. One batch API call then fetches rules for
+      // ALL new cards at once (vs one call per product). Cards are unmasked only
+      // after rules have been applied, so customers never see or click a variant
+      // that should be hidden.
       const processBatch = async () => {
         const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
         LOG(`Collection processBatch: found ${pidElements.length} unseen [data-product-id] elements`);
         if (pidElements.length === 0) return;
 
+        // Mark seen immediately so concurrent MutationObserver firings don't
+        // double-process the same cards.
         pidElements.forEach(el => el.setAttribute("data-cvh-seen", "1"));
 
-        // ── Step 1: collect all variant IDs visible across all new cards in one
-        //   pass so we can batch-resolve type names ("Shipper") → variant IDs.
-        //   Collection-page radio inputs have numeric variant IDs as values but
-        //   no accessible label text, so type-based text matching would miss them.
+        // ── Step 1: Mask variant pickers immediately + collect card metadata ─
         const allCardVariantIds = new Set();
         const cardMeta = pidElements.map(el => {
           const productId = el.dataset.productId;
           const card = el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || el;
+
+          // Mask the card while rules are in flight — prevents wrong-variant selection
+          card.setAttribute("data-cvh-loading", "1");
+
           const variantEls = Array.from(card.querySelectorAll('input[type="radio"], option, button[data-variant-id]'));
           const variantIds = variantEls
             .map(i => (i.value || i.dataset?.variantId || "").trim())
             .filter(v => /^\d{8,}$/.test(v));
           variantIds.forEach(id => allCardVariantIds.add(id));
+
           LOG(`  Collection card: productId="${productId}" container=<${card.tagName} class="${String(card.className).slice(0,50)}"> variantIds:`, variantIds);
           return { productId, card, variantIds };
         });
 
-        // ── Step 2: batch-fetch Shopify variant option values for ALL cards at once
+        // ── Step 2: Batch-fetch Shopify variant option values (all cards, one call)
         await fetchVariantOptions([...allCardVariantIds]);
         LOG(`fetchVariantOptions: option map has ${Object.keys(variantOptionCache).length} entries`);
 
-        // ── Step 3: fetch per-product rules, enrich with resolved IDs, apply
-        await Promise.all(cardMeta.map(async ({ productId, card, variantIds }) => {
+        // ── Step 3: Batch-fetch catalog rules (ONE API call for all products) ─
+        const batchRules = await fetchRulesBatch(resolvedLocationId, cardMeta.map(m => m.productId));
+
+        // ── Step 4: Apply rules + unmask each card ───────────────────────────
+        cardMeta.forEach(({ productId, card, variantIds }) => {
           try {
-            let rules = await fetchRules(resolvedLocationId, productId);
+            const normPid = String(productId).includes("/") ? productId.split("/").pop() : productId;
+            let rules = batchRules[normPid] || { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
             rules = enrichRulesWithVariantIds(rules, variantIds);
             applyRulesToContainer(card, rules, `card:${productId}`);
-            // If ALL radio inputs on this card are now hidden → "Back Soon" state
+
             const cardRadios = Array.from(card.querySelectorAll('input[type="radio"]'));
             if (cardRadios.length > 0 && cardRadios.every(r => r.style.display === "none")) {
               applyBackSoonState(card);
             }
           } catch (err) {
             WARN(`  processBatch error for productId=${productId}:`, err);
+          } finally {
+            // Always unmask — even on error it's better to show all than stay invisible
+            card.removeAttribute("data-cvh-loading");
           }
-        }));
+        });
       };
 
       await processBatch();
