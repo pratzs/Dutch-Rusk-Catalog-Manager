@@ -54,7 +54,10 @@
       `{opacity:0!important;pointer-events:none!important;user-select:none!important;transition:none!important;}`;
     // Restore rule must use the same :is() selector to match specificity (0,2,2)
     // of the hiding rules — a bare [data-cvh-processed] is only (0,1,1) and loses.
-    const showRules = INNER.map(sel => `${CARDS}[data-cvh-processed] ${sel}`).join(",") +
+    // Exclude input[type="radio"] and its sibling label: the theme manages radio
+    // input visibility itself; restoring opacity:1 on it shows the native browser dot.
+    const INNER_RESTORE = INNER.filter(s => s !== 'input[type="radio"]' && s !== 'input[type="radio"] + label');
+    const showRules = INNER_RESTORE.map(sel => `${CARDS}[data-cvh-processed] ${sel}`).join(",") +
       `{opacity:1!important;pointer-events:auto!important;user-select:auto!important;}`;
     const s = document.createElement("style");
     s.id = "cvh-loading-mask";
