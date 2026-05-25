@@ -90,17 +90,26 @@
     }
 
     /* ── Layer 2: restore after processing ────────────────────────────────── */
-    [data-cvh-processed] input[type="radio"],
-    [data-cvh-processed] input[type="radio"] + label,
-    [data-cvh-processed] label[for],
-    [data-cvh-processed] label,
-    [data-cvh-processed] variant-selects,
-    [data-cvh-processed] fieldset,
-    [data-cvh-processed] .swatch-element,
-    [data-cvh-processed] .variant-input,
-    [data-cvh-processed] .product-form__input,
-    [data-cvh-processed] button[data-variant-id],
-    [data-cvh-processed] select[name="id"] {
+    /*
+     * IMPORTANT — specificity must match the hiding rules above.
+     * The :is() in layer 1a takes the specificity of its most specific
+     * argument (li.grid__item = 0,1,1), so the full hiding rule is (0,2,2).
+     * A bare [data-cvh-processed] selector is only (0,1,1) and loses the
+     * !important battle, leaving cards permanently hidden.
+     * Using the same :is() list here gives (0,2,2), and because this block
+     * comes AFTER the hiding rules, it wins the cascade when specificities tie.
+     */
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] input[type="radio"],
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] input[type="radio"] + label,
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] label[for],
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] label,
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] variant-selects,
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] fieldset,
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] .swatch-element,
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] .variant-input,
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] .product-form__input,
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] button[data-variant-id],
+    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] select[name="id"] {
       opacity: 1 !important;
       pointer-events: auto !important;
       user-select: auto !important;

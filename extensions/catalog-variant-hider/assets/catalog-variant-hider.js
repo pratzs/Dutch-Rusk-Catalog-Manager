@@ -52,7 +52,9 @@
     // Layer 1b: [data-cvh-loading] for infinite-scroll cards (JS-stamped)
     const jsHide = INNER.map(sel => `[data-cvh-loading] ${sel}`).join(",") +
       `{opacity:0!important;pointer-events:none!important;user-select:none!important;transition:none!important;}`;
-    const showRules = INNER.map(sel => `[data-cvh-processed] ${sel}`).join(",") +
+    // Restore rule must use the same :is() selector to match specificity (0,2,2)
+    // of the hiding rules — a bare [data-cvh-processed] is only (0,1,1) and loses.
+    const showRules = INNER.map(sel => `${CARDS}[data-cvh-processed] ${sel}`).join(",") +
       `{opacity:1!important;pointer-events:auto!important;user-select:auto!important;}`;
     const s = document.createElement("style");
     s.id = "cvh-loading-mask";
