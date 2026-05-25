@@ -14,7 +14,7 @@
 
   const rulesCache = {};
   const SS_PRE    = "cvh4:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
-  const SS_TTL_MS = 5 * 60 * 1000; // 5-minute TTL — admin changes propagate within 5 min
+  const SS_TTL_MS = 60 * 1000; // 60-second TTL — keeps storefront fresh after admin rule changes
 
   try {
     const prev = sessionStorage.getItem("cvh4:who");

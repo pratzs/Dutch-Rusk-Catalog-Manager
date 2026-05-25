@@ -398,6 +398,7 @@ export default function CatalogOverrides() {
     const uiPayload = {};
     const dbPayload = {};
     let dirtyCount = 0;
+    let migratedCount = 0;
 
     products.forEach((p) => {
       const currentHidden = pendingHidden[p.id] || [];
@@ -405,7 +406,18 @@ export default function CatalogOverrides() {
       const isDirty =
         JSON.stringify([...currentHidden].sort()) !== JSON.stringify([...baseHidden].sort());
 
-      if (isDirty) {
+      // Auto-migrate legacy overrides: if the DB row still holds all numeric/GID variant IDs
+      // (old ADD-mode format), force a re-save so they are converted to the stable title-based
+      // REPLACE-mode format. Without this, stale numeric IDs can cause incorrect hiding on the
+      // storefront and the row is never updated by the normal dirty-check path.
+      const rawOverride = overridesMap[p.id];
+      const hasLegacyOverride =
+        rawOverride !== undefined &&
+        rawOverride.length > 0 &&
+        rawOverride[0] !== "__SHOW_ALL__" &&
+        rawOverride.every(isLegacyId);
+
+      if (isDirty || hasLegacyOverride) {
         uiPayload[p.id] = currentHidden;
 
         if (currentHidden.length === 0) {
@@ -416,6 +428,7 @@ export default function CatalogOverrides() {
             .filter(Boolean);
         }
         dirtyCount++;
+        if (!isDirty && hasLegacyOverride) migratedCount++;
       }
     });
 
@@ -432,7 +445,8 @@ export default function CatalogOverrides() {
     formData.append("catalogId", catalogDbId);
     formData.append("bulkData", JSON.stringify(dbPayload));
     bulkFetcher.submit(formData, { method: "post" });
-    shopify.toast.show(`Saving ${dirtyCount} product${dirtyCount !== 1 ? "s" : ""}…`);
+    const migrateNote = migratedCount > 0 ? ` (incl. ${migratedCount} legacy migration${migratedCount !== 1 ? "s" : ""})` : "";
+    shopify.toast.show(`Saving ${dirtyCount} product${dirtyCount !== 1 ? "s" : ""}${migrateNote}…`);
   };
 
   const hasUnsavedChanges = products.some((p) => {
