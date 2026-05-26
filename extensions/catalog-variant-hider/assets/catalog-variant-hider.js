@@ -67,6 +67,7 @@
 
   // ── Shopify Storefront variant-option lookup ──────────────────────────────
   const variantOptionCache = {};
+  const variantAvailCache  = {}; // variantId (string) → boolean available
 
   async function fetchVariantOptions(variantIds) {
     const toFetch = variantIds.filter(id => !(id in variantOptionCache));
@@ -79,12 +80,40 @@
         for (const v of data.variants ?? []) {
           const opts = [v.option1, v.option2, v.option3].filter(Boolean).join(" / ");
           variantOptionCache[String(v.id)] = opts;
+          // Shopify's /variants.json includes an `available` boolean directly.
+          variantAvailCache[String(v.id)] = !!v.available;
         }
       } catch (err) {
         WARN("fetchVariantOptions: fetch failed →", err);
       }
     }
     return variantOptionCache;
+  }
+
+  // ── Collection-card: hide Add to Cart + qty stepper when selected variant is unavailable ──
+  // Called after rules are applied to a card (so hidden variants are already display:none)
+  // and also wired to change events so switching variants updates the state instantly.
+  function updateCardPurchaseState(card) {
+    // Find the currently checked radio. Prefer one that is still visible (not hidden by rules).
+    const checked = card.querySelector('input[type="radio"]:checked');
+    const variantId = checked ? checked.value : null;
+
+    // If we have no availability data for this variant yet, leave the card as-is.
+    if (!variantId || !(variantId in variantAvailCache)) return;
+
+    const available = variantAvailCache[variantId];
+    LOG(`updateCardPurchaseState: variant ${variantId} available=${available}`);
+
+    const addBtn = card.querySelector('button[name="add"], [data-add-to-cart], .product-card__add-to-cart, .card__add-to-cart');
+    const qtyEl  = card.querySelector('quantity-input, .quantity, .product-form__quantity, .quantity-selector, [class*="quantity"]');
+
+    if (!available) {
+      if (addBtn) addBtn.style.setProperty("display", "none", "important");
+      if (qtyEl)  qtyEl.style.setProperty("display", "none", "important");
+    } else {
+      if (addBtn) addBtn.style.removeProperty("display");
+      if (qtyEl)  qtyEl.style.removeProperty("display");
+    }
   }
 
   // Enrich rules by resolving hiddenVariantTypes → matched variant IDs so
@@ -632,6 +661,19 @@
             const cardRadios = Array.from(card.querySelectorAll('input[type="radio"]'));
             if (cardRadios.length > 0 && cardRadios.every(r => r.style.display === "none")) {
               applyBackSoonState(card);
+            }
+
+            // Hide Add to Cart + qty stepper if the currently selected variant is unavailable.
+            updateCardPurchaseState(card);
+
+            // Wire up once per card so switching variants on the card updates the state live.
+            if (!card.dataset.cvhAvailWired) {
+              card.dataset.cvhAvailWired = "1";
+              card.addEventListener("change", (e) => {
+                if (e.target.type === "radio" || e.target.tagName === "SELECT") {
+                  updateCardPurchaseState(card);
+                }
+              });
             }
           } catch (err) {
             WARN(`  processBatch error for productId=${productId}:`, err);
