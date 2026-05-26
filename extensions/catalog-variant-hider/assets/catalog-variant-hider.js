@@ -437,6 +437,76 @@
     injectStrikethroughPricing(container);
   }
 
+  // ── Product-page: hide Add to Cart + qty stepper when selected variant is unavailable ──
+  // The theme already shows a "Back Soon" badge for out-of-stock variants but leaves the
+  // Add to Cart button and quantity stepper active. This watcher hides them when the
+  // selected variant is unavailable and restores them when the customer picks one that is.
+  async function setupVariantAvailabilityWatcher() {
+    // Extract product handle from URL path: /products/<handle>
+    const pathParts = window.location.pathname.split("/products/");
+    if (pathParts.length < 2) return;
+    const handle = pathParts[1].split("/")[0].split("?")[0];
+    if (!handle) return;
+
+    // Build a variantId → available map from Shopify's product JSON endpoint.
+    // This is a lightweight CDN-cached response so it's always fast.
+    let availMap = {};
+    try {
+      const res     = await fetch(`/products/${handle}.js`);
+      const product = await res.json();
+      product.variants.forEach(v => { availMap[String(v.id)] = v.available; });
+      LOG("availabilityWatcher: loaded", Object.keys(availMap).length, "variants for", handle);
+    } catch (e) {
+      WARN("availabilityWatcher: fetch failed →", e);
+      return;
+    }
+
+    const getSelectedId = () => {
+      // URL param is the most reliable source — Shopify themes update it on every variant switch.
+      const urlId = new URLSearchParams(window.location.search).get("variant");
+      if (urlId) return urlId;
+      // Fallback: read whichever radio is currently checked.
+      const checked = document.querySelector(
+        'variant-selects input[type="radio"]:checked, product-form input[type="radio"]:checked, .product-form input[type="radio"]:checked'
+      );
+      return checked ? checked.value : null;
+    };
+
+    const update = () => {
+      const variantId = getSelectedId();
+      // Treat unknown variant IDs as available so we never accidentally block a valid purchase.
+      const available = !variantId || availMap[variantId] !== false;
+      LOG("availabilityWatcher:", variantId, "→ available:", available);
+
+      // Scope search to the product form first, fall back to document-wide.
+      const form   = document.querySelector('product-form, form[action="/cart/add"]') || document.body;
+      const addBtn = form.querySelector('button[name="add"], .product-form__submit') ||
+                     document.querySelector('button[name="add"], .product-form__submit');
+      const qtyEl  = form.querySelector('quantity-input, .product-form__quantity, .quantity-selector') ||
+                     document.querySelector('quantity-input, .product-form__quantity, .quantity-selector');
+
+      if (!available) {
+        if (addBtn) addBtn.style.setProperty("display", "none", "important");
+        if (qtyEl)  qtyEl.style.setProperty("display", "none", "important");
+        LOG("availabilityWatcher: Add to Cart + qty stepper hidden (Back Soon)");
+      } else {
+        if (addBtn) addBtn.style.removeProperty("display");
+        if (qtyEl)  qtyEl.style.removeProperty("display");
+        LOG("availabilityWatcher: Add to Cart + qty stepper restored");
+      }
+    };
+
+    // React to every variant switch (radio change, select change, custom events).
+    document.addEventListener("change", (e) => {
+      if (e.target.closest('variant-selects, product-form, form[action="/cart/add"]')) {
+        update();
+      }
+    });
+
+    // Run once immediately so the correct state is set on first paint.
+    update();
+  }
+
   async function init() {
     LOG("▶ init() called");
 
@@ -500,6 +570,9 @@
 
       applyAll();
       new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
+
+      // Hide Add to Cart + qty stepper whenever the selected variant is out of stock.
+      setupVariantAvailabilityWatcher();
 
     } else {
       // ── COLLECTION PAGE ───────────────────────────────────────────────────
