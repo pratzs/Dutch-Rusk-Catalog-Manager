@@ -60,39 +60,30 @@ export async function loader({ request }) {
   if (pubId) {
     try {
       if (search.trim()) {
-        // Search mode: paginate through ALL products so client-side filter works
-        // across the full catalog regardless of size.
-        let cursor = null;
-        let hasMore = true;
-        while (hasMore) {
-          const args = cursor ? `first: 250, after: "${cursor}"` : `first: 250`;
-          const prodResponse = await admin.graphql(
-            `query getPubProducts($pubId: ID!) {
-              publication(id: $pubId) {
-                products(${args}) {
-                  pageInfo { hasNextPage endCursor }
-                  nodes {
-                    id
-                    title
-                    variants(first: 250) { nodes { id title sku } }
-                  }
+        // Search mode: pass query directly to Shopify — single API call, no full-catalog scan.
+        // publication.products supports the same query: argument as the root products query.
+        const prodResponse = await admin.graphql(
+          `query getPubProductsSearch($pubId: ID!, $queryStr: String) {
+            publication(id: $pubId) {
+              products(${paginationArgs}, query: $queryStr) {
+                pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+                nodes {
+                  id
+                  title
+                  variants(first: 250) { nodes { id title sku } }
                 }
               }
-            }`,
-            { variables: { pubId } }
-          );
-          const prodJson = await prodResponse.json();
-          if (prodJson.errors) {
-            debugMessage = "Products API Error: " + JSON.stringify(prodJson.errors);
-            hasMore = false;
-          } else {
-            const page = prodJson.data?.publication?.products;
-            products = products.concat(page?.nodes || []);
-            hasMore = page?.pageInfo?.hasNextPage || false;
-            cursor = page?.pageInfo?.endCursor || null;
-          }
+            }
+          }`,
+          { variables: { pubId, queryStr: search.trim() } }
+        );
+        const prodJson = await prodResponse.json();
+        if (prodJson.errors) {
+          debugMessage = "Products API Error: " + JSON.stringify(prodJson.errors);
+        } else {
+          products = prodJson.data?.publication?.products?.nodes || [];
+          pageInfo = prodJson.data?.publication?.products?.pageInfo || pageInfo;
         }
-        // pageInfo stays empty — pagination UI is hidden during search.
       } else {
         const prodResponse = await admin.graphql(
           `query getPubProducts($pubId: ID!) {
