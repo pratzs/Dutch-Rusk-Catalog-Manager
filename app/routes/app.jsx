@@ -5,7 +5,13 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 export const loader = async ({ request }) => {
   const { authenticate } = await import("../shopify.server");
-  await authenticate.admin(request);
+  try {
+    await authenticate.admin(request);
+  } catch (err) {
+    if (err instanceof Response) throw err;
+    console.error("[app] authenticate.admin failed with non-Response error:", err.message || err);
+    throw err;
+  }
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
 

@@ -66,45 +66,43 @@ export async function loader({ request }) {
   const overrideCountMap = {};
   overrideCounts.forEach((o) => { overrideCountMap[o.catalogId] = o._count.catalogId; });
 
-  // Attempt to sync company location → catalog mappings for the storefront extension.
-  // This query uses an inline fragment that may not be supported by all API versions,
-  // so it runs in a fully isolated try/catch and never blocks the page load.
-  try {
-    const locResponse = await admin.graphql(`
-      query {
-        catalogs(first: 250) {
-          nodes {
-            id
-            ... on CompanyLocationCatalog {
-              companyLocations(first: 50) {
-                nodes { id }
+  // Location sync runs in the background — fire-and-forget so it doesn't block page load.
+  (async () => {
+    try {
+      const locResponse = await admin.graphql(`
+        query {
+          catalogs(first: 250) {
+            nodes {
+              id
+              ... on CompanyLocationCatalog {
+                companyLocations(first: 50) {
+                  nodes { id }
+                }
               }
             }
           }
         }
-      }
-    `);
-    const locData = await locResponse.json();
-    if (!locData.errors) {
-      const locationUpserts = [];
-      for (const cat of locData.data.catalogs.nodes) {
-        const catalogId = cat.id.split("/").pop();
-        const locations = cat.companyLocations?.nodes ?? [];
-        for (const loc of locations) {
-          locationUpserts.push(
-            prisma.locationCatalogMap.upsert({
-              where: { locationGid: loc.id },
-              update: { catalogId },
-              create: { locationGid: loc.id, catalogId },
-            })
-          );
+      `);
+      const locData = await locResponse.json();
+      if (!locData.errors) {
+        const locationUpserts = [];
+        for (const cat of locData.data.catalogs.nodes) {
+          const catalogId = cat.id.split("/").pop();
+          const locations = cat.companyLocations?.nodes ?? [];
+          for (const loc of locations) {
+            locationUpserts.push(
+              prisma.locationCatalogMap.upsert({
+                where: { locationGid: loc.id },
+                update: { catalogId },
+                create: { locationGid: loc.id, catalogId },
+              })
+            );
+          }
         }
+        if (locationUpserts.length > 0) await Promise.all(locationUpserts);
       }
-      if (locationUpserts.length > 0) await Promise.all(locationUpserts);
-    }
-  } catch (_) {
-    // Silently skip — location sync is best-effort only.
-  }
+    } catch (_) {}
+  })();
 
   return { catalogs, rulesMap, overrideCountMap, pageInfo };
 }

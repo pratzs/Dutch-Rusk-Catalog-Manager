@@ -31,7 +31,7 @@
   // selectors) server-side for B2B collection pages. This fallback fires only
   // when that liquid CSS is absent (e.g. dev preview, theme not yet re-saved).
   (function injectLoadingMaskFallback() {
-    if (document.getElementById("cvh-b2b-mask") || document.getElementById("cvh-loading-mask")) return;
+    if (document.getElementById("cvh-b2b-mask") || document.getElementById("cvh-b2b-mask-pdp") || document.getElementById("cvh-loading-mask")) return;
     const CARDS = ":is(.product-card,.card-wrapper,.product-card-wrapper,li.grid__item,article)";
     const INNER = [
       'input[type="radio"]',
@@ -169,7 +169,11 @@
       const url = `${APP_URL}/api/catalog-rules?${params}`;
       LOG(`fetchRules [API FETCH] → ${url}`);
 
-      const res  = await fetch(url);
+      const res = await fetch(url);
+      if (!res.ok) {
+        WARN(`fetchRules: API returned ${res.status} — failing closed (keeping mask)`);
+        return null;
+      }
       const data = await res.json();
       LOG(`fetchRules [API RESPONSE] productId="${productId || "(blanket)"}"`, data);
 
@@ -181,8 +185,8 @@
       }
       return data;
     } catch (err) {
-      WARN("fetchRules: fetch failed →", err);
-      return { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
+      WARN("fetchRules: fetch failed — failing closed (keeping mask):", err);
+      return null;
     }
   }
 
@@ -205,7 +209,16 @@
         const url = `${APP_URL}/api/catalog-rules?${params}`;
         LOG(`doFetchBatchChunked [API FETCH] ${chunk.length} products →`, url.slice(0, 120) + "...");
 
-        const res  = await fetch(url);
+        const res = await fetch(url);
+        if (!res.ok) {
+          WARN(`doFetchBatchChunked: API returned ${res.status} — failing closed for chunk [${i}..${i + chunk.length - 1}]`);
+          for (const pid of chunk) {
+            const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
+            rulesCache[cacheKey] = { _cvh_error: true };
+            if (resultMap) resultMap[pid] = { _cvh_error: true };
+          }
+          continue;
+        }
         const data = await res.json();
         LOG(`doFetchBatchChunked [API RESPONSE] returned ${Object.keys(data.batch ?? {}).length} rules`);
 
@@ -222,7 +235,12 @@
           }
         }
       } catch (err) {
-        WARN(`doFetchBatchChunked: fetch failed for chunk [${i}..${i + chunk.length - 1}]:`, err);
+        WARN(`doFetchBatchChunked: fetch failed for chunk [${i}..${i + chunk.length - 1}] — failing closed:`, err);
+        for (const pid of chunk) {
+          const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
+          rulesCache[cacheKey] = { _cvh_error: true };
+          if (resultMap) resultMap[pid] = { _cvh_error: true };
+        }
       }
     }
   }
@@ -356,6 +374,17 @@
     scope.querySelectorAll(
       'quantity-input, .quantity, [class*="quantity__"], .product-form__quantity'
     ).forEach(el => el.style.setProperty("display", "none", "important"));
+
+    scope.querySelectorAll('.cvh-strikethrough').forEach(el =>
+      el.style.setProperty("display", "none", "important")
+    );
+
+    scope.querySelectorAll(
+      '.price, .price-item, .price-item--regular, .product__price, .grid-product__price, .price__container, [data-price], .current-price'
+    ).forEach(el => {
+      el.style.setProperty("opacity", "0.45", "important");
+      el.style.setProperty("text-decoration", "line-through", "important");
+    });
 
     const addBtn = scope.querySelector('button[name="add"], button[data-add-to-cart]');
     if (addBtn && !addBtn.dataset.cvhBackSoon) {
@@ -563,6 +592,16 @@
       const rules = await fetchRules(resolvedLocationId, singleProductId);
       LOG("Product page rules fetched →", rules);
 
+      if (!rules) {
+        WARN("Product page: API error — applying Back Soon (fail-closed)");
+        const mainEl = document.querySelector('#MainContent, main, [role="main"]') || document.body;
+        applyBackSoonState(mainEl);
+        document.querySelectorAll("product-form, .product__info-container").forEach(c =>
+          c.setAttribute("data-cvh-processed", "1")
+        );
+        return;
+      }
+
       const applyAll = () => {
         const seen = new WeakSet();
         let containerCount = 0;
@@ -655,6 +694,15 @@
           try {
             const normPid = String(productId).includes("/") ? productId.split("/").pop() : productId;
             let rules = batchRules[normPid] || { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
+
+            if (rules._cvh_error) {
+              WARN(`  Card ${productId}: API error — applying Back Soon (fail-closed)`);
+              applyBackSoonState(card);
+              card.setAttribute("data-cvh-processed", "1");
+              card.removeAttribute("data-cvh-loading");
+              return;
+            }
+
             rules = enrichRulesWithVariantIds(rules, variantIds);
             applyRulesToContainer(card, rules, `card:${productId}`);
 
@@ -675,14 +723,13 @@
                 }
               });
             }
+
+            card.setAttribute("data-cvh-processed", "1");
+            card.removeAttribute("data-cvh-loading");
           } catch (err) {
-            WARN(`  processBatch error for productId=${productId}:`, err);
-          } finally {
-            // Always unmask — even on error it's better to show all variants
-            // than leave the card permanently hidden.
-            if (!card.hasAttribute("data-cvh-processed")) {
-              card.setAttribute("data-cvh-processed", "1");
-            }
+            WARN(`  processBatch error for productId=${productId} — applying Back Soon (fail-closed):`, err);
+            applyBackSoonState(card);
+            card.setAttribute("data-cvh-processed", "1");
             card.removeAttribute("data-cvh-loading");
           }
         });

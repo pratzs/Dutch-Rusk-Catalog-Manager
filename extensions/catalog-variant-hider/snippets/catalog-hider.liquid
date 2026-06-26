@@ -129,6 +129,43 @@
     })();
   </script>
   {% endunless %}
+  {% if product %}
+  <style id="cvh-b2b-mask-pdp">
+    product-form:not([data-cvh-processed]) variant-selects,
+    product-form:not([data-cvh-processed]) fieldset,
+    product-form:not([data-cvh-processed]) .product-form__input,
+    product-form:not([data-cvh-processed]) .swatch-element,
+    product-form:not([data-cvh-processed]) .variant-input,
+    product-form:not([data-cvh-processed]) select[name="id"],
+    .product__info-container:not([data-cvh-processed]) variant-selects,
+    .product__info-container:not([data-cvh-processed]) fieldset,
+    .product__info-container:not([data-cvh-processed]) .product-form__input,
+    .product__info-container:not([data-cvh-processed]) .swatch-element,
+    .product__info-container:not([data-cvh-processed]) .variant-input,
+    .product__info-container:not([data-cvh-processed]) select[name="id"] {
+      opacity: 0 !important;
+      pointer-events: none !important;
+      user-select: none !important;
+      transition: none !important;
+    }
+    product-form[data-cvh-processed] variant-selects,
+    product-form[data-cvh-processed] fieldset,
+    product-form[data-cvh-processed] .product-form__input,
+    product-form[data-cvh-processed] .swatch-element,
+    product-form[data-cvh-processed] .variant-input,
+    product-form[data-cvh-processed] select[name="id"],
+    .product__info-container[data-cvh-processed] variant-selects,
+    .product__info-container[data-cvh-processed] fieldset,
+    .product__info-container[data-cvh-processed] .product-form__input,
+    .product__info-container[data-cvh-processed] .swatch-element,
+    .product__info-container[data-cvh-processed] .variant-input,
+    .product__info-container[data-cvh-processed] select[name="id"] {
+      opacity: 1 !important;
+      pointer-events: auto !important;
+      user-select: auto !important;
+    }
+  </style>
+  {% endif %}
 
 <div
   id="catalog-variant-hider-data"

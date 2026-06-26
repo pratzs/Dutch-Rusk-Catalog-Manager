@@ -6,18 +6,50 @@ import prisma from "../db.server";
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
 
-  const [totalRules, totalOverrides, activeRules, recentRules] = await Promise.all([
-    prisma.catalogRule.count(),
+  const [allRules, totalOverrideRows, distinctOverrideProducts, recentRules, overrideCounts, catalogsWithOverrides] = await Promise.all([
+    prisma.catalogRule.findMany(),
     prisma.productOverride.count(),
-    prisma.catalogRule.count({ where: { hiddenVariantTypes: { isEmpty: false } } }),
+    prisma.productOverride.groupBy({ by: ["productId"] }).then(r => r.length),
     prisma.catalogRule.findMany({ orderBy: { updatedAt: "desc" }, take: 5 }),
+    prisma.productOverride.groupBy({ by: ["catalogId"], _count: { catalogId: true } }),
+    prisma.productOverride.groupBy({ by: ["catalogId"] }).then(r => new Set(r.map(x => x.catalogId))),
   ]);
 
-  return { totalRules, totalOverrides, activeRules, recentRules };
+  const overrideCountMap = {};
+  overrideCounts.forEach((o) => { overrideCountMap[o.catalogId] = o._count.catalogId; });
+
+  const totalGroups = allRules.length;
+  const groupsWithBlanket = allRules.filter(r => r.hiddenVariantTypes.length > 0).length;
+  const groupsWithOverrides = catalogsWithOverrides.size;
+  const configuredGroups = allRules.filter(r =>
+    r.hiddenVariantTypes.length > 0 || catalogsWithOverrides.has(r.catalogId)
+  ).length;
+  const unconfiguredGroups = totalGroups - configuredGroups;
+
+  const packTypeBreakdown = {};
+  allRules.forEach(r => {
+    r.hiddenVariantTypes.forEach(t => {
+      packTypeBreakdown[t] = (packTypeBreakdown[t] || 0) + 1;
+    });
+  });
+
+  return {
+    totalGroups, configuredGroups, unconfiguredGroups,
+    groupsWithBlanket, groupsWithOverrides,
+    totalOverrideRows, distinctOverrideProducts,
+    packTypeBreakdown,
+    recentRules, overrideCountMap,
+  };
 };
 
 export default function Index() {
-  const { totalRules, totalOverrides, activeRules, recentRules } = useLoaderData();
+  const {
+    totalGroups, configuredGroups, unconfiguredGroups,
+    groupsWithBlanket, groupsWithOverrides,
+    totalOverrideRows, distinctOverrideProducts,
+    packTypeBreakdown,
+    recentRules, overrideCountMap,
+  } = useLoaderData();
   const navigate = useNavigate();
   const [syncState, setSyncState] = React.useState({ running: false, total: 0, done: false, error: null });
   const [backfillState, setBackfillState] = React.useState({ running: false, updated: 0, skipped: 0, done: false, error: null });
@@ -131,35 +163,64 @@ export default function Index() {
           <div
             onClick={() => navigate("/app/catalog-manager")}
             style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', cursor: 'pointer', background: '#f6f6f7' }}>
-            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#008060', lineHeight: 1 }}>{totalRules}</div>
-            <div style={{ fontWeight: '600', marginTop: '8px' }}>Customer Accounts</div>
-            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>configured with rules</div>
+            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#008060', lineHeight: 1 }}>{configuredGroups}</div>
+            <div style={{ fontWeight: '600', marginTop: '8px' }}>Customer Groups</div>
+            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>with visibility rules active</div>
+            {unconfiguredGroups > 0 && (
+              <div style={{ color: '#b98900', fontSize: '12px', marginTop: '6px', fontWeight: '500' }}>
+                +{unconfiguredGroups} not configured
+              </div>
+            )}
           </div>
 
           <div
             onClick={() => navigate("/app/audit")}
             style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', cursor: 'pointer', background: '#f6f6f7' }}>
-            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#d72c0d', lineHeight: 1 }}>{totalOverrides}</div>
-            <div style={{ fontWeight: '600', marginTop: '8px' }}>Product Exceptions</div>
-            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>with custom per-product rules</div>
+            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#d72c0d', lineHeight: 1 }}>{distinctOverrideProducts}</div>
+            <div style={{ fontWeight: '600', marginTop: '8px' }}>Products with Exceptions</div>
+            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>{totalOverrideRows} rules across {groupsWithOverrides} group{groupsWithOverrides !== 1 ? 's' : ''}</div>
           </div>
 
           <div style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', background: '#f6f6f7' }}>
-            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#1a1a2e', lineHeight: 1 }}>{activeRules}</div>
-            <div style={{ fontWeight: '600', marginTop: '8px' }}>Pack Type Blocks</div>
-            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>accounts with blanket restrictions</div>
+            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#1a1a2e', lineHeight: 1 }}>{groupsWithBlanket}</div>
+            <div style={{ fontWeight: '600', marginTop: '8px' }}>Groups Hiding Sizes</div>
+            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>blocking pack types for all products</div>
           </div>
         </s-stack>
       </s-section>
 
+      {/* Pack Type Breakdown */}
+      {Object.keys(packTypeBreakdown).length > 0 && (
+        <s-section heading="Blocked Sizes Breakdown">
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            {Object.entries(packTypeBreakdown)
+              .sort((a, b) => b[1] - a[1])
+              .map(([type, count]) => (
+                <div key={type} style={{
+                  padding: '10px 16px',
+                  border: '1px solid #e1e3e5',
+                  borderRadius: '8px',
+                  background: '#ffeaeb',
+                  textAlign: 'center',
+                  minWidth: '100px',
+                }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: '700', color: '#d72c0d' }}>{count}</div>
+                  <div style={{ fontSize: '13px', fontWeight: '600', color: '#333', marginTop: '2px' }}>{type}</div>
+                  <div style={{ fontSize: '11px', color: '#6d7175', marginTop: '2px' }}>group{count !== 1 ? 's' : ''} blocking</div>
+                </div>
+              ))}
+          </div>
+        </s-section>
+      )}
+
       {/* Getting Started — shown only when nothing is configured */}
-      {totalRules === 0 && (
+      {configuredGroups === 0 && (
         <s-section>
           <div style={{ textAlign: 'center', padding: '40px 20px', border: '1px solid #e1e3e5', borderRadius: '8px', background: '#f6f6f7' }}>
             <div style={{ fontSize: '48px', marginBottom: '12px' }}>🚀</div>
             <div style={{ fontSize: '18px', fontWeight: '700', marginBottom: '8px' }}>Ready to get started?</div>
             <div style={{ color: '#6d7175', marginBottom: '20px' }}>
-              No rules are configured yet. Open the Catalog Manager to set up your first customer account.
+              No rules are configured yet. Open the Catalog Manager to set up your first customer group.
             </div>
             <s-button variant="primary" onClick={() => navigate("/app/catalog-manager")}>
               Open Catalog Manager
@@ -174,7 +235,7 @@ export default function Index() {
           <s-stack direction="block" gap="tight">
             {recentRules.map((rule) => {
               const hasTypes = rule.hiddenVariantTypes.length > 0;
-              const hasSkus = rule.hiddenVariantIds?.length > 0;
+              const overrideCount = overrideCountMap[rule.catalogId] || 0;
               return (
                 <s-box key={rule.id} padding="base" borderWidth="base" borderRadius="base" background="subdued">
                   <s-stack direction="inline" gap="base" align="center">
@@ -182,8 +243,8 @@ export default function Index() {
                       <s-text fontWeight="bold">{rule.catalogName}</s-text>
                       <s-text tone="subdued">
                         {hasTypes ? `Blocking: ${rule.hiddenVariantTypes.join(", ")}` : "No pack types blocked"}
-                        {hasSkus && ` · ${rule.hiddenVariantIds.length} SKU exception(s)`}
-                        {!hasTypes && !hasSkus && " — No restrictions set"}
+                        {overrideCount > 0 && ` · ${overrideCount} product exception${overrideCount !== 1 ? 's' : ''}`}
+                        {!hasTypes && overrideCount === 0 && " — No restrictions set"}
                       </s-text>
                     </s-stack>
                     <s-stack direction="inline" gap="tight">

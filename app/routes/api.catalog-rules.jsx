@@ -31,7 +31,10 @@ async function resolveB2BContext(prisma, customerId, shop) {
       }),
     });
     const gqlData = await res.json();
-    if (gqlData.errors) return null;
+    if (gqlData.errors) {
+      console.error("[catalog-rules] GraphQL error in resolveB2BContext:", JSON.stringify(gqlData.errors));
+      throw new Error("GraphQL error resolving B2B context");
+    }
     const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
     for (const profile of profiles) {
       for (const loc of profile.company?.locations?.nodes ?? []) {
@@ -39,7 +42,10 @@ async function resolveB2BContext(prisma, customerId, shop) {
         if (id) return id;
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error("[catalog-rules] resolveB2BContext failed:", e.message || e);
+    throw e;
+  }
   return null;
 }
 
@@ -138,8 +144,16 @@ export async function loader({ request }) {
   let catalogId  = locationId ? await catalogIdFromLocationGid(prisma, locationId) : null;
 
   if (customerId) {
-    const b2bContext = await resolveB2BContext(prisma, customerId, shop);
-    if (b2bContext) catalogId = b2bContext;
+    try {
+      const b2bContext = await resolveB2BContext(prisma, customerId, shop);
+      if (b2bContext) catalogId = b2bContext;
+    } catch (e) {
+      console.error("[catalog-rules] B2B context resolution failed, returning 503:", e.message || e);
+      return new Response(
+        JSON.stringify({ error: "upstream_error", message: "Unable to resolve catalog rules" }),
+        { status: 503, headers: CORS_HEADERS }
+      );
+    }
   }
   if (!catalogId) {
     const pId = url.searchParams.get("catalogId");
