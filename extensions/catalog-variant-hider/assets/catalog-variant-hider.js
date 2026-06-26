@@ -94,11 +94,9 @@
   // Called after rules are applied to a card (so hidden variants are already display:none)
   // and also wired to change events so switching variants updates the state instantly.
   function updateCardPurchaseState(card) {
-    // Find the currently checked radio. Prefer one that is still visible (not hidden by rules).
     const checked = card.querySelector('input[type="radio"]:checked');
     const variantId = checked ? checked.value : null;
 
-    // If we have no availability data for this variant yet, leave the card as-is.
     if (!variantId || !(variantId in variantAvailCache)) return;
 
     const available = variantAvailCache[variantId];
@@ -108,11 +106,22 @@
     const qtyEl  = card.querySelector('quantity-input, .quantity, .product-form__quantity, .quantity-selector, [class*="quantity"]');
 
     if (!available) {
-      if (addBtn) addBtn.style.setProperty("display", "none", "important");
-      if (qtyEl)  qtyEl.style.setProperty("display", "none", "important");
+      if (addBtn) {
+        if (!addBtn.dataset.cvhOrigText) addBtn.dataset.cvhOrigText = addBtn.textContent.trim();
+        addBtn.disabled = true;
+        addBtn.style.opacity = "0.7";
+        addBtn.style.cursor = "not-allowed";
+        addBtn.textContent = "Back Soon";
+      }
+      if (qtyEl) qtyEl.style.setProperty("display", "none", "important");
     } else {
-      if (addBtn) addBtn.style.removeProperty("display");
-      if (qtyEl)  qtyEl.style.removeProperty("display");
+      if (addBtn) {
+        addBtn.disabled = false;
+        addBtn.style.removeProperty("opacity");
+        addBtn.style.removeProperty("cursor");
+        if (addBtn.dataset.cvhOrigText) addBtn.textContent = addBtn.dataset.cvhOrigText;
+      }
+      if (qtyEl) qtyEl.style.removeProperty("display");
     }
   }
 
