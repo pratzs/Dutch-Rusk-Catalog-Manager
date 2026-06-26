@@ -67,7 +67,6 @@
 
   // ── Shopify Storefront variant-option lookup ──────────────────────────────
   const variantOptionCache = {};
-  const variantAvailCache  = {}; // variantId (string) → boolean available
 
   async function fetchVariantOptions(variantIds) {
     const toFetch = variantIds.filter(id => !(id in variantOptionCache));
@@ -81,48 +80,12 @@
           const opts = [v.option1, v.option2, v.option3].filter(Boolean).join(" / ");
           variantOptionCache[String(v.id)] = opts;
           // Shopify's /variants.json includes an `available` boolean directly.
-          variantAvailCache[String(v.id)] = !!v.available;
-        }
+}
       } catch (err) {
         WARN("fetchVariantOptions: fetch failed →", err);
       }
     }
     return variantOptionCache;
-  }
-
-  // ── Collection-card: hide Add to Cart + qty stepper when selected variant is unavailable ──
-  // Called after rules are applied to a card (so hidden variants are already display:none)
-  // and also wired to change events so switching variants updates the state instantly.
-  function updateCardPurchaseState(card) {
-    const checked = card.querySelector('input[type="radio"]:checked');
-    const variantId = checked ? checked.value : null;
-
-    if (!variantId || !(variantId in variantAvailCache)) return;
-
-    const available = variantAvailCache[variantId];
-    LOG(`updateCardPurchaseState: variant ${variantId} available=${available}`);
-
-    const addBtn = card.querySelector('button[name="add"], [data-add-to-cart], .product-card__add-to-cart, .card__add-to-cart');
-    const qtyEl  = card.querySelector('quantity-input, .quantity, .product-form__quantity, .quantity-selector, [class*="quantity"]');
-
-    if (!available) {
-      if (addBtn) {
-        if (!addBtn.dataset.cvhOrigText) addBtn.dataset.cvhOrigText = addBtn.textContent.trim();
-        addBtn.disabled = true;
-        addBtn.style.opacity = "0.7";
-        addBtn.style.cursor = "not-allowed";
-        addBtn.textContent = "Back Soon";
-      }
-      if (qtyEl) qtyEl.style.setProperty("display", "none", "important");
-    } else {
-      if (addBtn) {
-        addBtn.disabled = false;
-        addBtn.style.removeProperty("opacity");
-        addBtn.style.removeProperty("cursor");
-        if (addBtn.dataset.cvhOrigText) addBtn.textContent = addBtn.dataset.cvhOrigText;
-      }
-      if (qtyEl) qtyEl.style.removeProperty("display");
-    }
   }
 
   // Enrich rules by resolving hiddenVariantTypes → matched variant IDs so
@@ -500,76 +463,6 @@
     injectStrikethroughPricing(container);
   }
 
-  // ── Product-page: hide Add to Cart + qty stepper when selected variant is unavailable ──
-  // The theme already shows a "Back Soon" badge for out-of-stock variants but leaves the
-  // Add to Cart button and quantity stepper active. This watcher hides them when the
-  // selected variant is unavailable and restores them when the customer picks one that is.
-  async function setupVariantAvailabilityWatcher() {
-    // Extract product handle from URL path: /products/<handle>
-    const pathParts = window.location.pathname.split("/products/");
-    if (pathParts.length < 2) return;
-    const handle = pathParts[1].split("/")[0].split("?")[0];
-    if (!handle) return;
-
-    // Build a variantId → available map from Shopify's product JSON endpoint.
-    // This is a lightweight CDN-cached response so it's always fast.
-    let availMap = {};
-    try {
-      const res     = await fetch(`/products/${handle}.js`);
-      const product = await res.json();
-      product.variants.forEach(v => { availMap[String(v.id)] = v.available; });
-      LOG("availabilityWatcher: loaded", Object.keys(availMap).length, "variants for", handle);
-    } catch (e) {
-      WARN("availabilityWatcher: fetch failed →", e);
-      return;
-    }
-
-    const getSelectedId = () => {
-      // URL param is the most reliable source — Shopify themes update it on every variant switch.
-      const urlId = new URLSearchParams(window.location.search).get("variant");
-      if (urlId) return urlId;
-      // Fallback: read whichever radio is currently checked.
-      const checked = document.querySelector(
-        'variant-selects input[type="radio"]:checked, product-form input[type="radio"]:checked, .product-form input[type="radio"]:checked'
-      );
-      return checked ? checked.value : null;
-    };
-
-    const update = () => {
-      const variantId = getSelectedId();
-      // Treat unknown variant IDs as available so we never accidentally block a valid purchase.
-      const available = !variantId || availMap[variantId] !== false;
-      LOG("availabilityWatcher:", variantId, "→ available:", available);
-
-      // Scope search to the product form first, fall back to document-wide.
-      const form   = document.querySelector('product-form, form[action="/cart/add"]') || document.body;
-      const addBtn = form.querySelector('button[name="add"], .product-form__submit') ||
-                     document.querySelector('button[name="add"], .product-form__submit');
-      const qtyEl  = form.querySelector('quantity-input, .product-form__quantity, .quantity-selector') ||
-                     document.querySelector('quantity-input, .product-form__quantity, .quantity-selector');
-
-      if (!available) {
-        if (addBtn) addBtn.style.setProperty("display", "none", "important");
-        if (qtyEl)  qtyEl.style.setProperty("display", "none", "important");
-        LOG("availabilityWatcher: Add to Cart + qty stepper hidden (Back Soon)");
-      } else {
-        if (addBtn) addBtn.style.removeProperty("display");
-        if (qtyEl)  qtyEl.style.removeProperty("display");
-        LOG("availabilityWatcher: Add to Cart + qty stepper restored");
-      }
-    };
-
-    // React to every variant switch (radio change, select change, custom events).
-    document.addEventListener("change", (e) => {
-      if (e.target.closest('variant-selects, product-form, form[action="/cart/add"]')) {
-        update();
-      }
-    });
-
-    // Run once immediately so the correct state is set on first paint.
-    update();
-  }
-
   async function init() {
     LOG("▶ init() called");
 
@@ -644,9 +537,6 @@
       applyAll();
       new MutationObserver(applyAll).observe(document.body, { childList: true, subtree: true });
 
-      // Hide Add to Cart + qty stepper whenever the selected variant is out of stock.
-      setupVariantAvailabilityWatcher();
-
     } else {
       // ── COLLECTION PAGE ───────────────────────────────────────────────────
       // Key design: cards are IMMEDIATELY masked (opacity:0, pointer-events:none)
@@ -714,19 +604,6 @@
             const cardRadios = Array.from(card.querySelectorAll('input[type="radio"]'));
             if (cardRadios.length > 0 && cardRadios.every(r => r.style.display === "none")) {
               applyBackSoonState(card);
-            }
-
-            // Hide Add to Cart + qty stepper if the currently selected variant is unavailable.
-            updateCardPurchaseState(card);
-
-            // Wire up once per card so switching variants on the card updates the state live.
-            if (!card.dataset.cvhAvailWired) {
-              card.dataset.cvhAvailWired = "1";
-              card.addEventListener("change", (e) => {
-                if (e.target.type === "radio" || e.target.tagName === "SELECT") {
-                  updateCardPurchaseState(card);
-                }
-              });
             }
 
             card.setAttribute("data-cvh-processed", "1");
