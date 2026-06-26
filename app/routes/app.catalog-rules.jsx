@@ -72,96 +72,86 @@ export default function CatalogRules() {
 
   return (
     <s-page heading={`Pack Type Rules: ${catalogName}`} back-action-url="/app/catalog-manager">
-      <s-layout>
-        <s-layout-section>
 
-          {/* Instructions */}
-          <s-box padding="base" background="bg-surface-secondary" borderRadius="base"
-            style={{ marginBottom: '20px', border: '1px solid #e1e3e5' }}>
-            <s-block-stack gap="tight">
-              <s-text variant="headingMd" as="h2">🚫 Blanket Pack Type Rules</s-text>
-              <s-text>
-                Tick the box next to any pack type to <b>hide it entirely</b> for this customer account.
-                Every product of that type will be hidden — no exceptions.
-              </s-text>
-              <div style={{ marginTop: '6px', padding: '10px 12px', background: '#f1f8f5', border: '1px solid #95c9b4', borderRadius: '6px' }}>
-                <s-text color="success">
-                  💡 <b>Tip:</b> Use "Product Overrides" on the previous page if you need to make
-                  exceptions for specific products.
-                </s-text>
-              </div>
-            </s-block-stack>
-          </s-box>
+      <s-section heading="Blanket Pack Type Rules">
+        <s-text>
+          Tick the box next to any pack type to <b>hide it entirely</b> for this customer account.
+          Every product of that type will be hidden — no exceptions.
+        </s-text>
+        <div style={{ marginTop: '6px', padding: '10px 12px', background: '#f1f8f5', border: '1px solid #95c9b4', borderRadius: '6px' }}>
+          <s-text color="success">
+            Tip: Use "Product Overrides" on the previous page if you need to make
+            exceptions for specific products.
+          </s-text>
+        </div>
+      </s-section>
 
-          {/* Status summary */}
-          <div style={{ marginBottom: '16px', padding: '12px 16px', background: noneSelected ? '#f1f8f5' : '#fff4f4', border: `1px solid ${noneSelected ? '#95c9b4' : '#ffd2d2'}`, borderRadius: '8px' }}>
-            {noneSelected ? (
-              <s-text color="success">✅ <b>No pack types blocked</b> — this customer can see all pack sizes.</s-text>
-            ) : allSelected ? (
-              <s-text color="critical">🚫 <b>All pack types blocked</b> — this customer cannot see any products.</s-text>
-            ) : (
-              <s-text color="critical">
-                🚫 <b>Blocking {selected.length} pack type{selected.length !== 1 ? 's' : ''}:</b>{" "}
-                {selected.join(", ")}
-              </s-text>
-            )}
-          </div>
+      <s-section heading="Current Status">
+        <div style={{ padding: '12px 16px', background: noneSelected ? '#f1f8f5' : '#fff4f4', border: `1px solid ${noneSelected ? '#95c9b4' : '#ffd2d2'}`, borderRadius: '8px' }}>
+          {noneSelected ? (
+            <s-text color="success">No pack types blocked — this customer can see all pack sizes.</s-text>
+          ) : allSelected ? (
+            <s-text color="critical">All pack types blocked — this customer cannot see any products.</s-text>
+          ) : (
+            <s-text color="critical">
+              Blocking {selected.length} pack type{selected.length !== 1 ? 's' : ''}:{" "}
+              {selected.join(", ")}
+            </s-text>
+          )}
+        </div>
+      </s-section>
 
-          {/* Pack type checkboxes */}
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="surface">
-            <s-stack direction="block" gap="base">
-              {PACK_TYPES.map(({ value, label, description }) => {
-                const isBlocked = selected.includes(value);
-                return (
-                  <div
-                    key={value}
-                    onClick={() => toggleType(value)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '14px',
-                      padding: '14px 16px',
-                      border: `1px solid ${isBlocked ? '#d72c0d' : '#e1e3e5'}`,
-                      borderRadius: '8px',
-                      background: isBlocked ? '#fff4f4' : '#fafbfb',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <s-checkbox
-                      label=""
-                      checked={isBlocked}
-                      onClick={(e) => { e.stopPropagation(); toggleType(value); }}
-                    />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: '700', fontSize: '15px', color: isBlocked ? '#d72c0d' : '#1a1a2e' }}>
-                        {isBlocked ? '🚫 ' : ''}{label}
-                      </div>
-                      <div style={{ fontSize: '13px', color: '#6d7175', marginTop: '2px' }}>
-                        {description}
-                      </div>
-                    </div>
-                    {isBlocked && (
-                      <span style={{ fontSize: '12px', background: '#d72c0d', color: '#fff', padding: '3px 10px', borderRadius: '12px', fontWeight: '600', whiteSpace: 'nowrap' }}>
-                        Hidden
-                      </span>
-                    )}
+      <s-section heading="Select Pack Types to Hide">
+        <s-stack direction="block" gap="base">
+          {PACK_TYPES.map(({ value, label, description }) => {
+            const isBlocked = selected.includes(value);
+            return (
+              <div
+                key={value}
+                onClick={() => toggleType(value)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '14px',
+                  padding: '14px 16px',
+                  border: `1px solid ${isBlocked ? '#d72c0d' : '#e1e3e5'}`,
+                  borderRadius: '8px',
+                  background: isBlocked ? '#fff4f4' : '#fafbfb',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <s-checkbox
+                  label=""
+                  checked={isBlocked}
+                  onClick={(e) => { e.stopPropagation(); toggleType(value); }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: '700', fontSize: '15px', color: isBlocked ? '#d72c0d' : '#1a1a2e' }}>
+                    {isBlocked ? '🚫 ' : ''}{label}
                   </div>
-                );
-              })}
-            </s-stack>
-          </s-box>
+                  <div style={{ fontSize: '13px', color: '#6d7175', marginTop: '2px' }}>
+                    {description}
+                  </div>
+                </div>
+                {isBlocked && (
+                  <span style={{ fontSize: '12px', background: '#d72c0d', color: '#fff', padding: '3px 10px', borderRadius: '12px', fontWeight: '600', whiteSpace: 'nowrap' }}>
+                    Hidden
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </s-stack>
 
-          {/* Actions */}
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px' }}>
-            <s-button onClick={() => navigate("/app/catalog-manager")}>Cancel</s-button>
-            <s-button variant="primary" onClick={handleSave} disabled={isSaving || undefined}>
-              {isSaving ? "Saving..." : "Save Rules"}
-            </s-button>
-          </div>
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px' }}>
+          <s-button onClick={() => navigate("/app/catalog-manager")}>Cancel</s-button>
+          <s-button variant="primary" onClick={handleSave} disabled={isSaving || undefined}>
+            {isSaving ? "Saving..." : "Save Rules"}
+          </s-button>
+        </div>
+      </s-section>
 
-        </s-layout-section>
-      </s-layout>
     </s-page>
   );
 }

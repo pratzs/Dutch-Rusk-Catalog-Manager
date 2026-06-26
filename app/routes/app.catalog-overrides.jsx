@@ -464,30 +464,23 @@ export default function CatalogOverrides() {
 
   return (
     <s-page heading={`Product Visibility: ${catalogName}`} back-action-url="/app/catalog-manager">
-      <s-layout>
-        <s-layout-section>
 
-          {/* Instructions */}
-          <s-box padding="base" background="bg-surface-secondary" borderRadius="base"
-            style={{ marginBottom: "20px", border: "1px solid #e1e3e5" }}>
-            <s-block-stack gap="tight">
-              <s-text variant="headingMd" as="h2">🎯 How to use this page</s-text>
-              <s-text>
-                Each box below is a pack size this customer can order. <b>Tick = Visible. Untick = Hidden.</b>
-              </s-text>
-              <div style={{ display: "flex", gap: "10px", marginTop: "8px", flexWrap: "wrap" }}>
-                <div style={{ padding: "8px 14px", background: "#e3f1df", borderRadius: "6px", fontSize: "13px", fontWeight: "600", color: "#008060" }}>
-                  ✅ Ticked = Customer CAN order this size
-                </div>
-                <div style={{ padding: "8px 14px", background: "#ffeaeb", borderRadius: "6px", fontSize: "13px", fontWeight: "600", color: "#d72c0d" }}>
-                  ⬜ Unticked = Customer CANNOT order this size (shown in red)
-                </div>
-              </div>
-              <s-text tone="subdued" style={{ marginTop: "4px" }}>
-                Use <b>Hide All / Show All</b> to bulk change, then hit <b>Save All Changes</b> to apply.
-              </s-text>
-            </s-block-stack>
-          </s-box>
+      <s-section heading="How to use this page">
+        <s-text>
+          Each box below is a pack size this customer can order. <b>Tick = Visible. Untick = Hidden.</b>
+        </s-text>
+        <div style={{ display: "flex", gap: "10px", marginTop: "8px", flexWrap: "wrap" }}>
+          <div style={{ padding: "8px 14px", background: "#e3f1df", borderRadius: "6px", fontSize: "13px", fontWeight: "600", color: "#008060" }}>
+            Ticked = Customer CAN order this size
+          </div>
+          <div style={{ padding: "8px 14px", background: "#ffeaeb", borderRadius: "6px", fontSize: "13px", fontWeight: "600", color: "#d72c0d" }}>
+            Unticked = Customer CANNOT order this size (shown in red)
+          </div>
+        </div>
+        <s-text tone="subdued" style={{ marginTop: "4px" }}>
+          Use <b>Hide All / Show All</b> to bulk change, then hit <b>Save All Changes</b> to apply.
+        </s-text>
+      </s-section>
 
           {/* Sticky save bar */}
           {hasUnsavedChanges && (
@@ -714,8 +707,6 @@ export default function CatalogOverrides() {
               </div>
             )}
           </s-section>
-        </s-layout-section>
-      </s-layout>
     </s-page>
   );
 }

@@ -103,6 +103,23 @@ export default function Index() {
   const [syncState, setSyncState] = React.useState({ running: false, total: 0, done: false, error: null });
   const [backfillState, setBackfillState] = React.useState({ running: false, updated: 0, skipped: 0, done: false, error: null });
   const [catalogSyncState, setCatalogSyncState] = React.useState({ running: false, done: false, error: null, result: null });
+  const [cleanupState, setCleanupState] = React.useState({ running: false, done: false, error: null, result: null });
+
+  async function runCleanup(dryRun = true) {
+    setCleanupState({ running: true, done: false, error: null, result: null });
+    try {
+      const url = dryRun ? '/api/cleanup-orphans?dryRun=true' : '/api/cleanup-orphans';
+      const res = await fetch(url, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setCleanupState({ running: false, done: false, error: data.error || 'Request failed', result: null });
+        return;
+      }
+      setCleanupState({ running: false, done: true, error: null, result: data });
+    } catch (err) {
+      setCleanupState({ running: false, done: false, error: err.message, result: null });
+    }
+  }
 
   async function runSync() {
     setSyncState({ running: true, total: 0, done: false, error: null });
@@ -457,6 +474,69 @@ export default function Index() {
             changed since the last run. "Force Full Sync" re-processes everything
             and is useful after first setup or if metafields get out of sync.
           </s-text>
+        </div>
+      </s-section>
+
+      {/* Database Cleanup */}
+      <s-section heading="Database Cleanup">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <s-text>
+            Remove stale database rows from catalogs that no longer exist in Shopify.
+            These orphaned rows inflate your dashboard stats and waste storage.
+            Run a <b>dry run</b> first to preview what would be removed.
+          </s-text>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => runCleanup(true)}
+              disabled={cleanupState.running}
+              style={{
+                background: cleanupState.running ? '#aaa' : '#2156c3',
+                color: '#fff', border: 'none', borderRadius: '6px',
+                padding: '10px 20px', fontSize: '14px', fontWeight: '600',
+                cursor: cleanupState.running ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {cleanupState.running ? 'Scanning…' : 'Preview Orphaned Rows'}
+            </button>
+            {cleanupState.result?.dryRun === true && (cleanupState.result.orphanedRuleCount > 0 || cleanupState.result.totalOrphanedOverrides > 0) && (
+              <button
+                type="button"
+                onClick={() => runCleanup(false)}
+                disabled={cleanupState.running}
+                style={{
+                  background: '#d72c0d', color: '#fff', border: 'none', borderRadius: '6px',
+                  padding: '10px 20px', fontSize: '14px', fontWeight: '600',
+                  cursor: 'pointer',
+                }}
+              >
+                Delete Orphaned Rows
+              </button>
+            )}
+          </div>
+          {cleanupState.result?.dryRun === true && (
+            <div style={{ padding: '12px 16px', background: '#f0f7ff', border: '1px solid #b4d4ff', borderRadius: '8px', fontSize: '13px', lineHeight: '1.6' }}>
+              <b>Dry run result:</b> Found <b>{cleanupState.result.orphanedRuleCount}</b> orphaned catalog rule(s)
+              and <b>{cleanupState.result.totalOrphanedOverrides}</b> orphaned product override(s).
+              {cleanupState.result.orphanedRules.length > 0 && (
+                <div style={{ marginTop: '6px' }}>
+                  Stale catalogs: {cleanupState.result.orphanedRules.map(r => r.catalogName || r.catalogId).join(', ')}
+                </div>
+              )}
+              {cleanupState.result.orphanedRuleCount === 0 && cleanupState.result.totalOrphanedOverrides === 0 && (
+                <div style={{ marginTop: '4px', color: '#008060' }}>No orphaned rows found — database is clean.</div>
+              )}
+            </div>
+          )}
+          {cleanupState.result?.dryRun === false && (
+            <div style={{ padding: '12px 16px', background: '#f1f8f5', border: '1px solid #95c9b4', borderRadius: '8px', fontSize: '13px', color: '#008060' }}>
+              Deleted <b>{cleanupState.result.deletedRules}</b> catalog rule(s)
+              and <b>{cleanupState.result.deletedOverrides}</b> product override(s).
+            </div>
+          )}
+          {cleanupState.error && (
+            <span style={{ color: '#d72c0d', fontWeight: '600' }}>{cleanupState.error}</span>
+          )}
         </div>
       </s-section>
 

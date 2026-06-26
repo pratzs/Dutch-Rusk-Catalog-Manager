@@ -102,64 +102,50 @@ export default function Migrate() {
 
   return (
     <s-page heading="Migration Tool" back-action-url="/app/catalog-manager">
-      <s-layout>
-        <s-layout-section>
 
-          {/* Info banner */}
-          <s-box padding="base" background="bg-surface-secondary" borderRadius="base"
-            style={{ marginBottom: "20px", border: "1px solid #e1e3e5" }}>
-            <s-block-stack gap="tight">
-              <s-text variant="headingMd" as="h2">🔄 Tag-to-Override Sync</s-text>
-              <s-text>
-                Scans <b>all</b> Shopify products tagged with <code>hide-bag</code>,{" "}
-                <code>hide-block</code>, <code>hide-each</code>, <code>hide-packet</code>, or{" "}
-                <code>hide-shipper</code> and writes the corresponding visibility rules to the database.
-              </s-text>
-              <div style={{ marginTop: "6px", padding: "10px 12px", background: "#fff4f4", border: "1px solid #ffd2d2", borderRadius: "6px" }}>
-                <s-text color="critical">
-                  ⚠️ <b>This will overwrite existing product overrides</b> for any product that has a
-                  hide-* tag. Run this only when syncing from the legacy tagging system.
-                </s-text>
-              </div>
-            </s-block-stack>
-          </s-box>
+      <s-section heading="Tag-to-Override Sync">
+        <s-text>
+          Scans <b>all</b> Shopify products tagged with <code>hide-bag</code>,{" "}
+          <code>hide-block</code>, <code>hide-each</code>, <code>hide-packet</code>, or{" "}
+          <code>hide-shipper</code> and writes the corresponding visibility rules to the database.
+        </s-text>
+        <div style={{ marginTop: "6px", padding: "10px 12px", background: "#fff4f4", border: "1px solid #ffd2d2", borderRadius: "6px" }}>
+          <s-text color="critical">
+            This will overwrite existing product overrides for any product that has a
+            hide-* tag. Run this only when syncing from the legacy tagging system.
+          </s-text>
+        </div>
+      </s-section>
 
-          {/* Result: success */}
-          {result?.success && (
-            <div style={{ marginBottom: "16px", padding: "16px", background: "#f1f8f5", border: "1px solid #95c9b4", borderRadius: "8px" }}>
-              <s-text variant="headingMd" as="h3" style={{ color: "#008060" }}>✅ Sync complete</s-text>
-              <s-text>
-                Scanned <b>{result.total}</b> product{result.total !== 1 ? "s" : ""} — wrote{" "}
-                <b>{result.count}</b> visibility rule{result.count !== 1 ? "s" : ""} to the database.
-              </s-text>
-            </div>
-          )}
+      <s-section heading="Run Sync">
+        {result?.success && (
+          <div style={{ marginBottom: "16px", padding: "16px", background: "#f1f8f5", border: "1px solid #95c9b4", borderRadius: "8px" }}>
+            <s-text fontWeight="bold" style={{ color: "#008060" }}>Sync complete</s-text>
+            <s-text>
+              Scanned <b>{result.total}</b> product{result.total !== 1 ? "s" : ""} — wrote{" "}
+              <b>{result.count}</b> visibility rule{result.count !== 1 ? "s" : ""} to the database.
+            </s-text>
+          </div>
+        )}
 
-          {/* Result: error */}
-          {result?.success === false && (
-            <div style={{ marginBottom: "16px", padding: "16px", background: "#fff4f4", border: "1px solid #ffd2d2", borderRadius: "8px" }}>
-              <s-text variant="headingMd" as="h3" style={{ color: "#d72c0d" }}>❌ Sync failed</s-text>
-              <s-text color="critical">{result.error}</s-text>
-            </div>
-          )}
+        {result?.success === false && (
+          <div style={{ marginBottom: "16px", padding: "16px", background: "#fff4f4", border: "1px solid #ffd2d2", borderRadius: "8px" }}>
+            <s-text fontWeight="bold" style={{ color: "#d72c0d" }}>Sync failed</s-text>
+            <s-text color="critical">{result.error}</s-text>
+          </div>
+        )}
 
-          {/* Action */}
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="surface">
-            <s-block-stack gap="base">
-              <s-text>
-                Click the button below to start the sync. Large stores may take a minute or two while
-                all pages of products are fetched.
-              </s-text>
-              <fetcher.Form method="post">
-                <s-button variant="primary" type="submit" disabled={isLoading || undefined}>
-                  {isLoading ? "Running sync…" : "Start Live Sync"}
-                </s-button>
-              </fetcher.Form>
-            </s-block-stack>
-          </s-box>
+        <s-text>
+          Click the button below to start the sync. Large stores may take a minute or two while
+          all pages of products are fetched.
+        </s-text>
+        <fetcher.Form method="post">
+          <s-button variant="primary" type="submit" disabled={isLoading || undefined}>
+            {isLoading ? "Running sync…" : "Start Live Sync"}
+          </s-button>
+        </fetcher.Form>
+      </s-section>
 
-        </s-layout-section>
-      </s-layout>
     </s-page>
   );
 }
