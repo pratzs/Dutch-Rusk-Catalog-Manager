@@ -368,10 +368,6 @@
     });
 
     scope.querySelectorAll(
-      '[class*="inventory"], [class*="stock"], .product-availability, [data-inventory]'
-    ).forEach(el => el.style.setProperty("display", "none", "important"));
-
-    scope.querySelectorAll(
       'quantity-input, .quantity, [class*="quantity__"], .product-form__quantity'
     ).forEach(el => el.style.setProperty("display", "none", "important"));
 
