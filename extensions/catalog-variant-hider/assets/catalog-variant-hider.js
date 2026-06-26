@@ -67,6 +67,7 @@
 
   // ── Shopify Storefront variant-option lookup ──────────────────────────────
   const variantOptionCache = {};
+  const variantAvailCache  = {};
 
   async function fetchVariantOptions(variantIds) {
     const toFetch = variantIds.filter(id => !(id in variantOptionCache));
@@ -79,8 +80,8 @@
         for (const v of data.variants ?? []) {
           const opts = [v.option1, v.option2, v.option3].filter(Boolean).join(" / ");
           variantOptionCache[String(v.id)] = opts;
-          // Shopify's /variants.json includes an `available` boolean directly.
-}
+          variantAvailCache[String(v.id)] = v.available !== false;
+        }
       } catch (err) {
         WARN("fetchVariantOptions: fetch failed →", err);
       }
@@ -367,6 +368,52 @@
     }
   }
 
+  function setupCardAvailabilityWatcher(card) {
+    if (card.dataset.cvhAvailWatch) return;
+    card.dataset.cvhAvailWatch = "1";
+
+    const radios = card.querySelectorAll('input[type="radio"]');
+    if (!radios.length) return;
+
+    const updatePurchaseState = () => {
+      const selected = card.querySelector('input[type="radio"]:checked');
+      if (!selected) return;
+      const vid = (selected.value || "").trim();
+      if (!/^\d{8,}$/.test(vid)) return;
+
+      const available = variantAvailCache[vid];
+      if (available === undefined) return;
+
+      const addBtn = card.querySelector('button[name="add"], button[data-add-to-cart]');
+      const qtyEl = card.querySelector('quantity-input, .quantity, [class*="quantity__"], .product-form__quantity');
+
+      if (!available) {
+        if (addBtn && !addBtn.dataset.cvhUnavail) {
+          addBtn.dataset.cvhUnavail = "1";
+          addBtn._cvhOrigHTML = addBtn._cvhOrigHTML || addBtn.innerHTML;
+          addBtn._cvhOrigDisabled = addBtn._cvhOrigDisabled ?? addBtn.disabled;
+          addBtn.disabled = true;
+          addBtn.style.opacity = "0.7";
+          addBtn.style.cursor = "not-allowed";
+          addBtn.innerHTML = "Back Soon";
+        }
+        if (qtyEl) qtyEl.style.setProperty("display", "none", "important");
+      } else {
+        if (addBtn && addBtn.dataset.cvhUnavail) {
+          delete addBtn.dataset.cvhUnavail;
+          addBtn.innerHTML = addBtn._cvhOrigHTML || "Add to Cart";
+          addBtn.disabled = addBtn._cvhOrigDisabled || false;
+          addBtn.style.opacity = "";
+          addBtn.style.cursor = "";
+        }
+        if (qtyEl) qtyEl.style.removeProperty("display");
+      }
+    };
+
+    radios.forEach(r => r.addEventListener("change", updatePurchaseState));
+    updatePurchaseState();
+  }
+
   function applyRulesToContainer(container, rules, label) {
     const validTypes = rules.hiddenVariantTypes || [];
     const validIds   = rules.hiddenVariantIds   || [];
@@ -600,6 +647,7 @@
 
             rules = enrichRulesWithVariantIds(rules, variantIds);
             applyRulesToContainer(card, rules, `card:${productId}`);
+            setupCardAvailabilityWatcher(card);
 
             const cardRadios = Array.from(card.querySelectorAll('input[type="radio"]'));
             if (cardRadios.length > 0 && cardRadios.every(r => r.style.display === "none")) {
