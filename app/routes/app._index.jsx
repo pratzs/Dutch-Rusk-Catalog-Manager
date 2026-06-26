@@ -3,38 +3,87 @@ import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
-export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+const SYSTEM_CHANNEL_KEYWORDS = [
+  "channel catalog", "point of sale", "hydrogen", "graphiql",
+  "online store", "buy button", "facebook", "instagram", "google", "pinterest",
+];
 
-  const [allRules, totalOverrideRows, distinctOverrideProducts, recentRules, overrideCounts, catalogsWithOverrides] = await Promise.all([
+export const loader = async ({ request }) => {
+  const { admin } = await authenticate.admin(request);
+
+  // Fetch real catalogs from Shopify to filter out orphaned DB rows
+  let activeCatalogIds = new Set();
+  try {
+    let hasNext = true;
+    let cursor = null;
+    while (hasNext) {
+      const args = cursor ? `first: 250, after: "${cursor}"` : `first: 250`;
+      const res = await admin.graphql(`query { catalogs(${args}) { pageInfo { hasNextPage endCursor } nodes { id title } } }`);
+      const d = await res.json();
+      const nodes = d.data.catalogs.nodes || [];
+      nodes.forEach(c => {
+        const lower = c.title.toLowerCase();
+        if (!SYSTEM_CHANNEL_KEYWORDS.some(kw => lower.includes(kw))) {
+          activeCatalogIds.add(c.id.split("/").pop());
+        }
+      });
+      hasNext = d.data.catalogs.pageInfo.hasNextPage;
+      cursor = d.data.catalogs.pageInfo.endCursor;
+    }
+  } catch (_) {}
+
+  const [allRules, allOverrides, recentRulesRaw, overrideCounts, overrideProductGroups] = await Promise.all([
     prisma.catalogRule.findMany(),
     prisma.productOverride.count(),
-    prisma.productOverride.groupBy({ by: ["productId"] }).then(r => r.length),
-    prisma.catalogRule.findMany({ orderBy: { updatedAt: "desc" }, take: 5 }),
+    prisma.catalogRule.findMany({ orderBy: { updatedAt: "desc" }, take: 10 }),
     prisma.productOverride.groupBy({ by: ["catalogId"], _count: { catalogId: true } }),
     prisma.productOverride.groupBy({ by: ["catalogId"] }).then(r => new Set(r.map(x => x.catalogId))),
   ]);
 
+  // Filter to only active Shopify catalogs
+  const activeRules = allRules.filter(r => activeCatalogIds.has(r.catalogId));
+
   const overrideCountMap = {};
   overrideCounts.forEach((o) => { overrideCountMap[o.catalogId] = o._count.catalogId; });
 
-  const totalGroups = allRules.length;
-  const groupsWithBlanket = allRules.filter(r => r.hiddenVariantTypes.length > 0).length;
-  const groupsWithOverrides = catalogsWithOverrides.size;
-  const configuredGroups = allRules.filter(r =>
-    r.hiddenVariantTypes.length > 0 || catalogsWithOverrides.has(r.catalogId)
+  // Count overrides only for active catalogs
+  const activeOverrideCounts = overrideCounts.filter(o => activeCatalogIds.has(o.catalogId));
+  const totalOverrideRows = activeOverrideCounts.reduce((sum, o) => sum + o._count.catalogId, 0);
+  const groupsWithOverrides = activeOverrideCounts.length;
+
+  // Distinct products with overrides (across active catalogs only)
+  const activeOverrideProductIds = await prisma.productOverride.findMany({
+    where: { catalogId: { in: [...activeCatalogIds] } },
+    select: { productId: true },
+    distinct: ["productId"],
+  });
+  const distinctOverrideProducts = activeOverrideProductIds.length;
+
+  const totalGroups = activeCatalogIds.size;
+  const groupsWithBlanket = activeRules.filter(r => r.hiddenVariantTypes.length > 0).length;
+  const configuredGroups = activeRules.filter(r =>
+    r.hiddenVariantTypes.length > 0 || overrideProductGroups.has(r.catalogId)
   ).length;
-  const unconfiguredGroups = totalGroups - configuredGroups;
+  // Also count active catalogs that have overrides but no CatalogRule row
+  const catalogIdsWithRules = new Set(activeRules.map(r => r.catalogId));
+  const overrideOnlyCatalogs = [...activeCatalogIds].filter(id =>
+    !catalogIdsWithRules.has(id) && overrideProductGroups.has(id)
+  ).length;
+  const finalConfigured = configuredGroups + overrideOnlyCatalogs;
+  const unconfiguredGroups = totalGroups - finalConfigured;
 
   const packTypeBreakdown = {};
-  allRules.forEach(r => {
+  activeRules.forEach(r => {
     r.hiddenVariantTypes.forEach(t => {
       packTypeBreakdown[t] = (packTypeBreakdown[t] || 0) + 1;
     });
   });
 
+  // Recent rules — only show active catalogs
+  const recentRules = recentRulesRaw.filter(r => activeCatalogIds.has(r.catalogId)).slice(0, 5);
+
   return {
-    totalGroups, configuredGroups, unconfiguredGroups,
+    totalGroups, configuredGroups: finalConfigured, unconfiguredGroups,
     groupsWithBlanket, groupsWithOverrides,
     totalOverrideRows, distinctOverrideProducts,
     packTypeBreakdown,
