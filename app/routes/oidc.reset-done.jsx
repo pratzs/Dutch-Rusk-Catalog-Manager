@@ -4,7 +4,7 @@ export default function ResetDone() {
       <div style={styles.card}>
         <h1 style={styles.h1}>Password updated</h1>
         <p>Your password has been saved. You can now sign in on the Dutch Rusk storefront with your new password.</p>
-        <a href="https://dutchrusk.co.nz/account/login" style={styles.btn}>Go to Dutch Rusk</a>
+        <a href="https://b2b.dutchrusk.co.nz/account/login" style={styles.btn}>Go to Dutch Rusk</a>
       </div>
     </div>
   );

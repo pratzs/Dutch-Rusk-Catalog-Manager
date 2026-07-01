@@ -4,7 +4,7 @@ export default function SetupDone() {
       <div style={styles.card}>
         <h1 style={styles.h1}>Password saved</h1>
         <p>You can now sign in on the Dutch Rusk storefront using your username and the password you just set.</p>
-        <a href="https://dutchrusk.co.nz/account/login" style={styles.btn}>Go to Dutch Rusk</a>
+        <a href="https://b2b.dutchrusk.co.nz/account/login" style={styles.btn}>Go to Dutch Rusk</a>
       </div>
     </div>
   );
