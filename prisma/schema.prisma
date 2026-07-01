@@ -172,6 +172,23 @@ model OidcAuthCode {
   @@index([expiresAt])
 }
 
+// Opaque refresh tokens (sha256 hashed at rest). Issued alongside id_token
+// during authorization_code exchange; consumed and rotated on refresh_token
+// grant. 30-day sliding TTL.
+model OidcRefreshToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  b2bUserId String
+  clientId  String
+  scope     String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([b2bUserId])
+  @@index([expiresAt])
+}
+
 // One-time email login codes (Option B path). Hashed. 10-minute TTL.
 model B2BOtpCode {
   id        String    @id @default(cuid())

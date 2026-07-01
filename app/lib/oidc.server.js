@@ -140,7 +140,7 @@ export function buildDiscoveryDocument() {
       "urn:dutchrusk:location_gid",
       "urn:dutchrusk:username",
     ],
-    grant_types_supported: ["authorization_code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
   };
 }
