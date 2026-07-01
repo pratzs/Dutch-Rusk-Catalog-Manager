@@ -1,0 +1,63 @@
+{% comment %}
+  Pre-select the B2B CompanyLocation after OIDC login, so customers with
+  multiple stores under the same email don't have to pick their store on
+  every fresh session.
+
+  Runs on every page. On the first page after login, it calls the app-proxied
+  /apps/dr-account/pre-select endpoint; if a target location is set on the
+  customer's metafield, it POSTs to Shopify's B2B location-selection endpoint,
+  then clears the metafield (server-side, in the same call).
+{% endcomment %}
+
+{% if customer %}
+<script>
+  (function () {
+    // Only run once per session — sessionStorage flag.
+    var FLAG = 'dr_preselect_done';
+    try {
+      if (window.sessionStorage.getItem(FLAG)) return;
+    } catch (e) { /* private mode: keep running */ }
+
+    var proxyBase = '/apps/dr-account';
+
+    fetch(proxyBase + '/pre-select', {
+      credentials: 'include',
+      headers: { 'accept': 'application/json' }
+    })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (!data || !data.preselect) return;
+      var locGid = data.preselect;
+      // gid://shopify/CompanyLocation/12345 -> 12345
+      var locId = String(locGid).split('/').pop();
+      if (!locId) return;
+
+      try { window.sessionStorage.setItem(FLAG, '1'); } catch (e) {}
+
+      // Native B2B storefront endpoint that changes the active company location.
+      // Available on Plus stores with B2B enabled; falls through silently if
+      // the request path 404s.
+      fetch('/account/company_location_change', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'company_location_id=' + encodeURIComponent(locId)
+      }).then(function (r) {
+        // If Shopify accepted, reload once so B2B pricing/catalog kicks in.
+        if (r.ok || r.status === 302) {
+          window.location.reload();
+        }
+      }).catch(function () { /* fail silent */ });
+    })
+    .catch(function () { /* fail silent */ });
+  })();
+</script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "DR Pre-select B2B Location",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}
