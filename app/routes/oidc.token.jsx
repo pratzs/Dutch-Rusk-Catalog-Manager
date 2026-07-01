@@ -103,18 +103,17 @@ async function tokensForUser({ user, clientId, scope, nonce, includeRefresh, pre
     },
   });
 
-  // Best-effort refresh of the storefront pre-select metafield on every token
-  // exchange so re-logins after a session refresh also skip the picker.
-  try {
-    await writeTargetLocationMetafield({
-      shop: process.env.SHOP_DOMAIN || "dutchrusk.myshopify.com",
-      customerGid: user.customerGid,
-      companyLocationGid: user.companyLocationGid,
-      username: user.username,
-    });
-  } catch (err) {
-    console.error("[oidc.token] pre-select metafield write failed:", err.message);
-  }
+  // Fire-and-forget the storefront pre-select metafield write. Shopify's token
+  // exchange has a short timeout (~5-10s); a slow Admin GraphQL call here
+  // would break login. We don't await this — the metafield lands after the
+  // token response is already returned, which is fine because the theme block
+  // reads it on the storefront's NEXT page load.
+  writeTargetLocationMetafield({
+    shop: process.env.SHOP_DOMAIN || "dutchrusk.myshopify.com",
+    customerGid: user.customerGid,
+    companyLocationGid: user.companyLocationGid,
+    username: user.username,
+  }).catch((err) => console.error("[oidc.token] pre-select metafield write failed:", err.message));
 
   const accessToken = randomToken(32);
   const response = {
