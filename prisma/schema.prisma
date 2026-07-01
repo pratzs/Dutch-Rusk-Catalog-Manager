@@ -78,3 +78,110 @@ model CatalogSyncState {
 
   @@unique([shop, priceListId])
 }
+
+// One row per Django username. On Dutch Rusk a single email can own many
+// B2BUser rows (10 stores -> 10 usernames -> 10 CompanyContacts on the same
+// Shopify Customer). Password is bcrypt; null until the customer completes
+// the invite flow.
+model B2BUser {
+  id                 String    @id @default(cuid())
+  shop               String
+  username           String
+  passwordHash       String?
+  email              String
+  customerGid        String    // gid://shopify/Customer/...
+  companyContactGid  String
+  companyGid         String
+  companyLocationGid String
+  storeDisplayName   String
+  catalogGroup       String    // "General" | "Night n Day" | "TEEG" | ...
+  status             String    @default("invited") // invited | active | disabled
+  lastLoginAt        DateTime?
+  invitedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([shop, username])
+  @@index([shop, email])
+  @@index([shop, catalogGroup])
+  @@index([customerGid])
+}
+
+// Tokens for invite (initial password set) and password reset. We never store
+// the raw token — only sha256(token). Single use.
+model B2BPasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  purpose   String    @default("reset") // reset | invite
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// Every login attempt (password + OTP) writes a row. Kept for debugging bulk
+// migration issues and rate-limiting.
+model B2BLoginAudit {
+  id        String   @id @default(cuid())
+  shop      String
+  username  String?
+  email     String?
+  result    String   // ok | bad_password | unknown_user | disabled | oidc_error | otp_sent | otp_verified | otp_bad | rate_limited
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([shop, createdAt])
+  @@index([username])
+}
+
+// Rotating RSA keys for signing OIDC id_tokens. Multiple rows can exist
+// simultaneously — /oidc/jwks.json serves all non-expired public JWKs so
+// tokens signed by the previous key still verify during rotation.
+model OidcSigningKey {
+  id               String    @id @default(cuid())
+  kid              String    @unique
+  algorithm        String    @default("RS256")
+  publicJwk        Json
+  privateKeyEnc    String    // PEM, AES-256-GCM encrypted with APP_SECRET
+  activeForSigning Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  rotatedAt        DateTime?
+}
+
+// Short-lived authorization code held between /oidc/authorize and /oidc/token.
+// 5-minute TTL enforced by expiresAt; consumedAt prevents reuse.
+model OidcAuthCode {
+  id                  String    @id @default(cuid())
+  code                String    @unique // 32-byte urlsafe
+  b2bUserId           String
+  customerGid         String
+  companyLocationGid  String
+  clientId            String
+  redirectUri         String
+  nonce               String?
+  scope               String
+  codeChallenge       String?
+  codeChallengeMethod String?
+  createdAt           DateTime  @default(now())
+  expiresAt           DateTime
+  consumedAt          DateTime?
+
+  @@index([expiresAt])
+}
+
+// One-time email login codes (Option B path). Hashed. 10-minute TTL.
+model B2BOtpCode {
+  id        String    @id @default(cuid())
+  b2bUserId String
+  codeHash  String
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@index([b2bUserId])
+  @@index([expiresAt])
+}
