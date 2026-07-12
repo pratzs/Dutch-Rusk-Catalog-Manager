@@ -189,6 +189,23 @@ model OidcRefreshToken {
   @@index([expiresAt])
 }
 
+// Tracks native Shopify "Send B2B access email" sends so the go-live trigger
+// (api.send-b2b-access-emails.jsx, polled by a scheduled GitHub Action) is
+// idempotent — safe to call repeatedly without double-emailing a contact.
+model B2BAccessEmailLog {
+  id              String   @id @default(cuid())
+  shop            String
+  companyContactId String  @unique // gid://shopify/CompanyContact/...
+  customerId      String
+  email           String
+  companyName     String
+  status          String   // sent | failed
+  error           String?
+  sentAt          DateTime @default(now())
+
+  @@index([shop])
+}
+
 // One-time email login codes (Option B path). Hashed. 10-minute TTL.
 model B2BOtpCode {
   id        String    @id @default(cuid())
