@@ -10,26 +10,18 @@
 // Target: 2026-07-20 09:00 Pacific/Auckland (NZST, UTC+12, no DST in July)
 // = 2026-07-19T21:00:00Z.
 
+import { unauthenticated } from "../shopify.server";
+
 const TARGET_TIME_UTC = "2026-07-19T21:00:00.000Z";
 const GENERAL_CATALOG_ID = "gid://shopify/CompanyLocationCatalog/147676922169";
 const SEND_DELAY_MS = 300; // throttle between mutation calls
+const SHOP = "dutchrusk.myshopify.com";
 
-async function gql(shop, token, query, variables = {}) {
-  const res = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-    body: JSON.stringify({ query, variables }),
-  });
-  const json = await res.json();
-  if (json.errors) throw new Error(JSON.stringify(json.errors));
-  return json.data;
-}
-
-async function fetchGeneralCatalogContacts(shop, token) {
+async function fetchGeneralCatalogContacts(admin) {
   const contacts = [];
   let after = null;
   do {
-    const data = await gql(shop, token, `
+    const response = await admin.graphql(`
       query($after: String) {
         catalog(id: "${GENERAL_CATALOG_ID}") {
           ... on CompanyLocationCatalog {
@@ -55,8 +47,9 @@ async function fetchGeneralCatalogContacts(shop, token) {
             }
           }
         }
-      }`, { after });
-    const conn = data.catalog.companyLocations;
+      }`, { variables: { after } });
+    const data = await response.json();
+    const conn = data.data.catalog.companyLocations;
     for (const { node: loc } of conn.edges) {
       for (const { node: contact } of loc.company.contacts.edges) {
         contacts.push({
@@ -69,7 +62,6 @@ async function fetchGeneralCatalogContacts(shop, token) {
     }
     after = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
   } while (after);
-  // Dedupe by companyContactId (a company can have >1 location under General Catalog)
   const seen = new Map();
   for (const c of contacts) if (!seen.has(c.companyContactId)) seen.set(c.companyContactId, c);
   return [...seen.values()];
@@ -87,9 +79,6 @@ export async function action({ request }) {
   const testContactId = body.contactId ?? null;
 
   const { default: prisma } = await import("../db.server");
-  const session = await prisma.session.findFirst({ where: { isOnline: false, accessToken: { not: "" } }, orderBy: { id: "desc" } });
-  if (!session) return Response.json({ error: "No session" }, { status: 500 });
-  const { shop, accessToken } = session;
 
   const now = new Date();
   const target = new Date(TARGET_TIME_UTC);
@@ -98,9 +87,18 @@ export async function action({ request }) {
     return Response.json({ status: "too-early", now: now.toISOString(), target: target.toISOString() });
   }
 
+  let admin;
+  try {
+    const result = await unauthenticated.admin(SHOP);
+    admin = result.admin;
+  } catch (err) {
+    console.error("[send-b2b-access-emails] failed to get admin client:", err);
+    return Response.json({ error: "Failed to get admin client: " + err.message }, { status: 500 });
+  }
+
   let contacts;
   try {
-    contacts = await fetchGeneralCatalogContacts(shop, accessToken);
+    contacts = await fetchGeneralCatalogContacts(admin);
   } catch (err) {
     console.error("[send-b2b-access-emails] fetch failed:", err);
     return Response.json({ error: err.message }, { status: 500 });
@@ -114,7 +112,7 @@ export async function action({ request }) {
   }
 
   const alreadySent = await prisma.b2BAccessEmailLog.findMany({
-    where: { shop, companyContactId: { in: contacts.map(c => c.companyContactId) }, status: "sent" },
+    where: { shop: SHOP, companyContactId: { in: contacts.map(c => c.companyContactId) }, status: "sent" },
     select: { companyContactId: true },
   });
   const sentSet = new Set(alreadySent.map(r => r.companyContactId));
@@ -138,32 +136,33 @@ export async function action({ request }) {
       await prisma.b2BAccessEmailLog.upsert({
         where: logWhere,
         update: { status: "failed", error: "missing customer/email" },
-        create: { shop, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: "missing customer/email" },
+        create: { shop: SHOP, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: "missing customer/email" },
       });
       failed++;
       continue;
     }
     try {
-      const r = await gql(shop, accessToken, `
+      const response = await admin.graphql(`
         mutation($id: ID!) {
           companyContactSendWelcomeEmail(companyContactId: $id) {
             companyContact { id }
             userErrors { field message }
           }
-        }`, { id: c.companyContactId });
-      const errs = r.companyContactSendWelcomeEmail.userErrors;
+        }`, { variables: { id: c.companyContactId } });
+      const data = await response.json();
+      const errs = data.data.companyContactSendWelcomeEmail.userErrors;
       if (errs.length) throw new Error(JSON.stringify(errs));
       await prisma.b2BAccessEmailLog.upsert({
         where: logWhere,
         update: { status: "sent", error: null },
-        create: { shop, companyContactId: c.companyContactId, customerId: c.customerId, email: c.email, companyName: c.companyName, status: "sent" },
+        create: { shop: SHOP, companyContactId: c.companyContactId, customerId: c.customerId, email: c.email, companyName: c.companyName, status: "sent" },
       });
       sent++;
     } catch (err) {
       await prisma.b2BAccessEmailLog.upsert({
         where: logWhere,
         update: { status: "failed", error: String(err.message || err) },
-        create: { shop, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: String(err.message || err) },
+        create: { shop: SHOP, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: String(err.message || err) },
       });
       failed++;
       console.error(`[send-b2b-access-emails] failed for ${c.companyName} <${c.email}>:`, err);
