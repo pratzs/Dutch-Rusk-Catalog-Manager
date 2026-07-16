@@ -21,6 +21,10 @@ on:
         description: "Dry run (report counts only, do not send)"
         required: false
         default: "false"
+      contactId:
+        description: "Send to a single contact only (Shopify GID, e.g. gid://shopify/CompanyContact/123)"
+        required: false
+        default: ""
 
 jobs:
   trigger:
@@ -29,10 +33,16 @@ jobs:
       - name: Call send-b2b-access-emails endpoint
         run: |
           DRY_RUN="${{ github.event.inputs.dryRun || 'false' }}"
-          echo "Calling endpoint with dryRun=$DRY_RUN"
+          CONTACT_ID="${{ github.event.inputs.contactId || '' }}"
+          PAYLOAD="{\"dryRun\": $DRY_RUN"
+          if [ -n "$CONTACT_ID" ]; then
+            PAYLOAD="$PAYLOAD, \"contactId\": \"$CONTACT_ID\""
+          fi
+          PAYLOAD="$PAYLOAD}"
+          echo "Calling endpoint with payload: $PAYLOAD"
           curl -sf -X POST "${{ secrets.CATALOG_MANAGER_APP_URL }}/api/send-b2b-access-emails" \
             -H "Content-Type: application/json" \
             -H "x-cron-secret: ${{ secrets.B2B_EMAIL_CRON_SECRET }}" \
-            -d "{\"dryRun\": $DRY_RUN}" | tee response.json
+            -d "$PAYLOAD" | tee response.json
       - name: Show result
         run: cat response.json
