@@ -84,6 +84,7 @@ export async function action({ request }) {
 
   const body = await request.json().catch(() => ({}));
   const dryRun = body.dryRun === true;
+  const testContactId = body.contactId ?? null;
 
   const { default: prisma } = await import("../db.server");
   const session = await prisma.session.findFirst({ where: { isOnline: false, accessToken: { not: "" } }, orderBy: { id: "desc" } });
@@ -93,7 +94,7 @@ export async function action({ request }) {
   const now = new Date();
   const target = new Date(TARGET_TIME_UTC);
 
-  if (!dryRun && now < target) {
+  if (!dryRun && !testContactId && now < target) {
     return Response.json({ status: "too-early", now: now.toISOString(), target: target.toISOString() });
   }
 
@@ -103,6 +104,13 @@ export async function action({ request }) {
   } catch (err) {
     console.error("[send-b2b-access-emails] fetch failed:", err);
     return Response.json({ error: err.message }, { status: 500 });
+  }
+
+  if (testContactId) {
+    contacts = contacts.filter(c => c.companyContactId === testContactId);
+    if (!contacts.length) {
+      return Response.json({ error: "contactId not found in General Catalog" }, { status: 404 });
+    }
   }
 
   const alreadySent = await prisma.b2BAccessEmailLog.findMany({
