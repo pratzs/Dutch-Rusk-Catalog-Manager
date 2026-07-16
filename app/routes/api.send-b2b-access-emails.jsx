@@ -133,9 +133,12 @@ export async function action({ request }) {
 
   let sent = 0, failed = 0;
   for (const c of pending) {
+    const logWhere = { companyContactId: c.companyContactId };
     if (!c.customerId || !c.email) {
-      await prisma.b2BAccessEmailLog.create({
-        data: { shop, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: "missing customer/email" },
+      await prisma.b2BAccessEmailLog.upsert({
+        where: logWhere,
+        update: { status: "failed", error: "missing customer/email" },
+        create: { shop, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: "missing customer/email" },
       });
       failed++;
       continue;
@@ -150,13 +153,17 @@ export async function action({ request }) {
         }`, { id: c.companyContactId });
       const errs = r.companyContactSendWelcomeEmail.userErrors;
       if (errs.length) throw new Error(JSON.stringify(errs));
-      await prisma.b2BAccessEmailLog.create({
-        data: { shop, companyContactId: c.companyContactId, customerId: c.customerId, email: c.email, companyName: c.companyName, status: "sent" },
+      await prisma.b2BAccessEmailLog.upsert({
+        where: logWhere,
+        update: { status: "sent", error: null },
+        create: { shop, companyContactId: c.companyContactId, customerId: c.customerId, email: c.email, companyName: c.companyName, status: "sent" },
       });
       sent++;
     } catch (err) {
-      await prisma.b2BAccessEmailLog.create({
-        data: { shop, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: String(err.message || err) },
+      await prisma.b2BAccessEmailLog.upsert({
+        where: logWhere,
+        update: { status: "failed", error: String(err.message || err) },
+        create: { shop, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: String(err.message || err) },
       });
       failed++;
       console.error(`[send-b2b-access-emails] failed for ${c.companyName} <${c.email}>:`, err);
