@@ -1,3 +1,5 @@
+import { unauthenticated } from "../shopify.server";
+
 export async function loader({ request }) {
   const cronSecret = process.env.B2B_EMAIL_CRON_SECRET ?? "";
   const incomingSecret = request.headers.get("x-cron-secret") ?? "";
@@ -12,6 +14,25 @@ export async function loader({ request }) {
     orderBy: { id: "desc" },
   });
 
+  const url = new URL(request.url);
+  let writeTest = null;
+  if (url.searchParams.get("testWrite") === "1") {
+    try {
+      const { admin } = await unauthenticated.admin("dutchrusk.myshopify.com");
+      const response = await admin.graphql(`
+        mutation {
+          customerUpdate(input: { id: "gid://shopify/Customer/9340090286393", note: "b2b-email-test-probe" }) {
+            customer { id note }
+            userErrors { field message }
+          }
+        }`);
+      const data = await response.json();
+      writeTest = data;
+    } catch (err) {
+      writeTest = { error: String(err.message || err) };
+    }
+  }
+
   return Response.json({
     envScopes: process.env.SCOPES ?? "(not set)",
     sessions: sessions.map(s => ({
@@ -21,5 +42,6 @@ export async function loader({ request }) {
       scope: s.scope,
       expires: s.expires,
     })),
+    writeTest,
   });
 }
