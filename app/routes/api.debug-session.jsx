@@ -33,6 +33,24 @@ export async function loader({ request }) {
     }
   }
 
+  let companyWriteTest = null;
+  if (url.searchParams.get("testCompanyWrite") === "1") {
+    try {
+      const { admin } = await unauthenticated.admin("dutchrusk.myshopify.com");
+      const response = await admin.graphql(`
+        mutation {
+          companyUpdate(companyId: "gid://shopify/Company/7197983033", input: { note: "b2b-email-test-probe" }) {
+            company { id note }
+            userErrors { field message }
+          }
+        }`);
+      const data = await response.json();
+      companyWriteTest = data;
+    } catch (err) {
+      companyWriteTest = { error: String(err.message || err) };
+    }
+  }
+
   return Response.json({
     envScopes: process.env.SCOPES ?? "(not set)",
     sessions: sessions.map(s => ({
@@ -43,5 +61,6 @@ export async function loader({ request }) {
       expires: s.expires,
     })),
     writeTest,
+    companyWriteTest,
   });
 }
