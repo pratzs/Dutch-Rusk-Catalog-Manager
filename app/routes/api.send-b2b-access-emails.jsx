@@ -1,11 +1,25 @@
 // app/routes/api.send-b2b-access-emails.jsx
 //
-// One-time go-live trigger for Shopify's native "Send B2B access email"
-// (companyContactSendWelcomeEmail), sent to every CompanyContact on the
-// General Catalog. Designed to be polled repeatedly (e.g. every minute by a
-// scheduled GitHub Action) rather than fired once — it is a no-op before the
-// target time and idempotent afterward, so timing jitter in the caller can
-// never cause an early or duplicate send.
+// One-time go-live trigger for the 20 Jul 2026 09:00 Pacific/Auckland go-live.
+// Sends every CompanyContact on the General Catalog Shopify's native "Send B2B
+// access email" — but NOT via the companyContactSendWelcomeEmail mutation
+// directly. Shopify blocks that mutation for third-party/custom app API
+// clients even with correct write_customers/write_companies scopes (confirmed
+// via direct testing — the same mutation works fine from the Shopify Admin
+// UI, which uses a staff session rather than an app API token).
+//
+// Workaround: a Shopify Flow ("Send B2B Access Email Flows") triggers on the
+// native "Customer tags added" event, checks for the "invite-ready" tag, and
+// if present calls Flow's own built-in "Send B2B access email to company
+// contact" action (which runs under Shopify's internal permissions, not our
+// app's token) before removing the tag. This endpoint's job is just to add
+// the "invite-ready" tag via tagsAdd (a mutation our app CAN call) — Flow
+// handles the actual send.
+//
+// Designed to be polled repeatedly (e.g. every minute by a scheduled GitHub
+// Action) rather than fired once — it is a no-op before the target time and
+// idempotent afterward, so timing jitter in the caller can never cause an
+// early or duplicate tag application.
 //
 // Target: 2026-07-20 09:00 Pacific/Auckland (NZST, UTC+12, no DST in July)
 // = 2026-07-19T21:00:00Z.
@@ -14,7 +28,8 @@ import { unauthenticated } from "../shopify.server";
 
 const TARGET_TIME_UTC = "2026-07-19T21:00:00.000Z";
 const GENERAL_CATALOG_ID = "gid://shopify/CompanyLocationCatalog/147676922169";
-const SEND_DELAY_MS = 300; // throttle between mutation calls
+const INVITE_TAG = "invite-ready";
+const TAG_DELAY_MS = 300; // throttle between mutation calls
 const SHOP = "dutchrusk.myshopify.com";
 
 async function fetchGeneralCatalogContacts(admin) {
@@ -111,12 +126,12 @@ export async function action({ request }) {
     }
   }
 
-  const alreadySent = await prisma.b2BAccessEmailLog.findMany({
+  const alreadyTagged = await prisma.b2BAccessEmailLog.findMany({
     where: { shop: SHOP, companyContactId: { in: contacts.map(c => c.companyContactId) }, status: "sent" },
     select: { companyContactId: true },
   });
-  const sentSet = new Set(alreadySent.map(r => r.companyContactId));
-  const pending = contacts.filter(c => c.companyContactId && !sentSet.has(c.companyContactId));
+  const taggedSet = new Set(alreadyTagged.map(r => r.companyContactId));
+  const pending = contacts.filter(c => c.companyContactId && !taggedSet.has(c.companyContactId));
 
   if (dryRun) {
     return Response.json({
@@ -124,12 +139,12 @@ export async function action({ request }) {
       now: now.toISOString(),
       target: target.toISOString(),
       totalContacts: contacts.length,
-      alreadySent: sentSet.size,
+      alreadyTagged: taggedSet.size,
       pending: pending.length,
     });
   }
 
-  let sent = 0, failed = 0;
+  let tagged = 0, failed = 0;
   for (const c of pending) {
     const logWhere = { companyContactId: c.companyContactId };
     if (!c.customerId || !c.email) {
@@ -143,21 +158,21 @@ export async function action({ request }) {
     }
     try {
       const response = await admin.graphql(`
-        mutation($id: ID!) {
-          companyContactSendWelcomeEmail(companyContactId: $id) {
-            companyContact { id }
+        mutation($id: ID!, $tags: [String!]!) {
+          tagsAdd(id: $id, tags: $tags) {
+            node { id }
             userErrors { field message }
           }
-        }`, { variables: { id: c.companyContactId } });
+        }`, { variables: { id: c.customerId, tags: [INVITE_TAG] } });
       const data = await response.json();
-      const errs = data.data.companyContactSendWelcomeEmail.userErrors;
+      const errs = data.data.tagsAdd.userErrors;
       if (errs.length) throw new Error(JSON.stringify(errs));
       await prisma.b2BAccessEmailLog.upsert({
         where: logWhere,
         update: { status: "sent", error: null },
         create: { shop: SHOP, companyContactId: c.companyContactId, customerId: c.customerId, email: c.email, companyName: c.companyName, status: "sent" },
       });
-      sent++;
+      tagged++;
     } catch (err) {
       await prisma.b2BAccessEmailLog.upsert({
         where: logWhere,
@@ -165,18 +180,18 @@ export async function action({ request }) {
         create: { shop: SHOP, companyContactId: c.companyContactId, customerId: c.customerId ?? "", email: c.email ?? "", companyName: c.companyName, status: "failed", error: String(err.message || err) },
       });
       failed++;
-      console.error(`[send-b2b-access-emails] failed for ${c.companyName} <${c.email}>:`, err);
+      console.error(`[send-b2b-access-emails] tag failed for ${c.companyName} <${c.email}>:`, err);
     }
-    await new Promise(r => setTimeout(r, SEND_DELAY_MS));
+    await new Promise(r => setTimeout(r, TAG_DELAY_MS));
   }
 
   return Response.json({
-    status: "sent",
+    status: "tagged",
     now: now.toISOString(),
     target: target.toISOString(),
     totalContacts: contacts.length,
-    alreadySentBefore: sentSet.size,
-    sentThisRun: sent,
+    alreadyTaggedBefore: taggedSet.size,
+    taggedThisRun: tagged,
     failedThisRun: failed,
   });
 }
