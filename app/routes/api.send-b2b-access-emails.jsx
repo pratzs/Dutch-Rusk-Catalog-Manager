@@ -114,7 +114,7 @@ export async function action({ request }) {
   }
 
   const alreadySent = await prisma.b2BAccessEmailLog.findMany({
-    where: { shop, companyContactId: { in: contacts.map(c => c.companyContactId) } },
+    where: { shop, companyContactId: { in: contacts.map(c => c.companyContactId) }, status: "sent" },
     select: { companyContactId: true },
   });
   const sentSet = new Set(alreadySent.map(r => r.companyContactId));
