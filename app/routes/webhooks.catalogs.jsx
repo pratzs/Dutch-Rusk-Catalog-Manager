@@ -12,41 +12,45 @@ export const action = async ({ request }) => {
       return new Response("OK", { status: 200 });
   }
 
-  try {
-    const cronSecret = process.env.CRON_SECRET ?? "internal";
-    const syncUrl = `${process.env.SHOPIFY_APP_URL ?? "https://dutch-rusk-catalog-manager.onrender.com"}/api/catalog-price-sync`;
+  const cronSecret = process.env.CRON_SECRET ?? "internal";
+  const syncUrl = `${process.env.SHOPIFY_APP_URL ?? "https://dutch-rusk-catalog-manager.onrender.com"}/api/catalog-price-sync`;
 
-    // The catalog payload in 2026-04 includes the price_list_id if applicable
-    const priceListId = payload.price_list_id;
+  // The catalog payload in 2026-04 includes the price_list_id if applicable.
+  // Fire the sync without awaiting it — it can run past Shopify's webhook
+  // timeout, and we don't want that to register as a delivery failure.
+  const priceListId = payload.price_list_id;
 
-    if (priceListId) {
-        const fullPriceListId = `gid://shopify/PriceList/${priceListId}`;
-        console.log(`[webhooks/catalogs] Triggering targeted sync for PriceList: ${fullPriceListId}`);
+  if (priceListId) {
+      const fullPriceListId = `gid://shopify/PriceList/${priceListId}`;
+      console.log(`[webhooks/catalogs] Triggering targeted sync for PriceList: ${fullPriceListId}`);
 
-        const res = await fetch(syncUrl, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "x-cron-secret": cronSecret,
-            },
-            body: JSON.stringify({ priceListIds: [fullPriceListId] }),
+      fetch(syncUrl, {
+          method: "POST",
+          headers: {
+              "Content-Type": "application/json",
+              "x-cron-secret": cronSecret,
+          },
+          body: JSON.stringify({ priceListIds: [fullPriceListId] }),
+      })
+        .then(async (res) => {
+            const contentType = res.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+                const data = await res.json();
+                console.log(`[webhooks/catalogs] Sync result:`, JSON.stringify(data));
+            }
+        })
+        .catch((err) => {
+            console.error("[webhooks/catalogs] Error:", err);
         });
-
-        const contentType = res.headers.get("content-type") || "";
-        if (contentType.includes("application/json")) {
-            const data = await res.json();
-            console.log(`[webhooks/catalogs] Sync result:`, JSON.stringify(data));
-        }
-    } else {
-        console.log(`[webhooks/catalogs] No price_list_id in payload, triggering full sync fallback.`);
-        await fetch(syncUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
-            body: JSON.stringify({ forceAll: false }),
-        });
-    }
-  } catch (err) {
-    console.error("[webhooks/catalogs] Error:", err);
+  } else {
+      console.log(`[webhooks/catalogs] No price_list_id in payload, triggering full sync fallback.`);
+      fetch(syncUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
+          body: JSON.stringify({ forceAll: false }),
+      }).catch((err) => {
+          console.error("[webhooks/catalogs] Error:", err);
+      });
   }
 
   return new Response("OK", { status: 200 });
