@@ -1,0 +1,49 @@
+name: Send Phase 2 B2B access emails (go-live)
+
+# One-time trigger for the 10 Aug 2026 09:00 Pacific/Auckland Phase 2 go-live
+# (TEEG/Timezone umbrella, Archie Brothers, Hampshire Vending, Holey Moley).
+# = 2026-08-09T21:00Z. We poll every minute for a window before and after
+# that instant rather than firing once, because GitHub Actions' scheduler can
+# run a few minutes late under load. The endpoint itself is the source of
+# truth for "not before" (it no-ops until the target time) and is idempotent
+# (safe to call repeatedly), so this polling window can never cause an early
+# or duplicate send — it just makes sure we don't miss the moment.
+#
+# Safe to delete this file (and the matching route) after 10 Aug 2026.
+
+on:
+  schedule:
+    # Every minute from 20:55 to 21:10 UTC on 9 Aug 2026 (08:55-09:10 NZST on 10 Aug).
+    - cron: "55-59 20 9 8 *"
+    - cron: "0-10 21 9 8 *"
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: "Dry run (report counts only, do not send)"
+        required: false
+        default: "false"
+      contactId:
+        description: "Send to a single contact only (Shopify GID, e.g. gid://shopify/CompanyContact/123)"
+        required: false
+        default: ""
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call send-phase2-b2b-access-emails endpoint
+        run: |
+          DRY_RUN="${{ github.event.inputs.dryRun || 'false' }}"
+          CONTACT_ID="${{ github.event.inputs.contactId || '' }}"
+          PAYLOAD="{\"dryRun\": $DRY_RUN"
+          if [ -n "$CONTACT_ID" ]; then
+            PAYLOAD="$PAYLOAD, \"contactId\": \"$CONTACT_ID\""
+          fi
+          PAYLOAD="$PAYLOAD}"
+          echo "Calling endpoint with payload: $PAYLOAD"
+          curl -sf -X POST "${{ secrets.CATALOG_MANAGER_APP_URL }}/api/send-phase2-b2b-access-emails" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.B2B_EMAIL_CRON_SECRET }}" \
+            -d "$PAYLOAD" | tee response.json
+      - name: Show result
+        run: cat response.json
