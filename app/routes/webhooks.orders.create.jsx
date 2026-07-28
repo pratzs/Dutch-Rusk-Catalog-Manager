@@ -19,24 +19,15 @@ export const action = async ({ request }) => {
   const order = payload; // REST order object
   const lineItems = order.line_items ?? [];
 
-  // ── Mirror PO number / order note onto display metafields ────────────────
+  // ── Mirror order note onto a display metafield ───────────────────────────
   // Runs unconditionally (before the B2B-discount early-returns below) so it
   // fires on every order regardless of whether it has catalog discounts.
-  // Powers the "PO number" / "Order notes" Dynamic content blocks on the
-  // customer account Order status page.
+  // Powers the "Order notes" Dynamic content block on the customer account
+  // Order status page. (PO number needs no mirroring — Shopify's new
+  // Customer Accounts UI already surfaces order.poNumber natively.)
   try {
     const orderGid = `gid://shopify/Order/${order.id}`;
     const metafields = [];
-
-    if (order.po_number) {
-      metafields.push({
-        ownerId: orderGid,
-        namespace: "custom",
-        key: "po_number_display",
-        type: "single_line_text_field",
-        value: String(order.po_number),
-      });
-    }
 
     if (order.note) {
       metafields.push({
@@ -64,7 +55,7 @@ export const action = async ({ request }) => {
       }
     }
   } catch (metaErr) {
-    console.error(`[orders/create] #${order?.order_number}: failed to mirror PO/notes metafields:`, metaErr);
+    console.error(`[orders/create] #${order?.order_number}: failed to mirror notes metafield:`, metaErr);
   }
 
   // Only process line items that have a Shopify variant attached

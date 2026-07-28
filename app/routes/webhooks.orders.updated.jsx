@@ -1,8 +1,10 @@
 // app/routes/webhooks.orders.updated.jsx
 //
-// Fires whenever an existing order is edited. Keeps the PO number / order
-// note display metafields in sync if either is added or changed after the
-// order was first created (orders/create only captures it at creation time).
+// Fires whenever an existing order is edited. Keeps the order note display
+// metafield in sync if a note is added/changed after the order was first
+// created (orders/create only captures it at creation time). PO number
+// needs no mirroring — Shopify's new Customer Accounts UI already surfaces
+// order.poNumber natively.
 
 export const action = async ({ request }) => {
   const { authenticate } = await import("../shopify.server");
@@ -18,16 +20,6 @@ export const action = async ({ request }) => {
   try {
     const orderGid = `gid://shopify/Order/${order.id}`;
     const metafields = [];
-
-    if (order.po_number) {
-      metafields.push({
-        ownerId: orderGid,
-        namespace: "custom",
-        key: "po_number_display",
-        type: "single_line_text_field",
-        value: String(order.po_number),
-      });
-    }
 
     if (order.note) {
       metafields.push({
@@ -55,7 +47,7 @@ export const action = async ({ request }) => {
       }
     }
   } catch (metaErr) {
-    console.error(`[orders/updated] #${order?.order_number}: failed to mirror PO/notes metafields:`, metaErr);
+    console.error(`[orders/updated] #${order?.order_number}: failed to mirror notes metafield:`, metaErr);
   }
 
   return new Response("OK", { status: 200 });
