@@ -3,17 +3,32 @@
 // Fires on every new order. For B2B catalog orders where the customer pays a
 // discounted catalog price, Shopify records NO discount_allocations — the lower
 // price is simply baked in silently. This webhook enriches the order with
-// explicit discount note_attributes and forcing native admin strikethroughs.
+// explicit discount note_attributes and forces a native admin strikethrough by
+// applying a manual line-item discount directly to each discounted line, via
+// the Admin API's order-edit ("calculated order") flow.
 //
-// SAFETY: the strikethrough trick works by removing each discounted line item
-// and re-adding it via the Admin API's order-edit ("calculated order") flow.
-// Nothing is written to the real order until orderEditCommit is called, so as
-// long as we abort BEFORE committing on any error, the real order is never
-// touched. That guarantee is the whole point of the error-checking below —
-// do not remove it. (Incident: order #1397, 2 Aug 2026 — a 179-line order hit
-// Shopify's GraphQL rate limit partway through an unchecked swap loop, and an
-// unconditional commit baked in the half-finished state, permanently deleting
-// 175 line items and every B2B discount note.)
+// SAFETY: nothing is written to the real order until orderEditCommit is
+// called, so as long as we abort BEFORE committing on any error, the real
+// order is never touched. That guarantee is the whole point of the
+// error-checking below — do not remove it.
+//
+// Incident history (order #1397, 2 Aug 2026): the original implementation
+// removed each discounted line via orderEditSetQuantity(quantity: 0) and
+// tried to re-add the same variant via orderEditAddVariant to attach the
+// discount to a "fresh" line. That add call fails 100% of the time —
+// orderEditAddVariant defaults allowDuplicates to false, and the variant is
+// still "on" the calculated order (at qty 0) from the removal, so Shopify
+// rejects it as a duplicate. The old code never checked for that error, so it
+// silently zeroed line after line while every re-add failed, then committed
+// the half-destroyed result unconditionally — permanently deleting 175 line
+// items and every B2B discount note on that order. A second latent bug
+// compounded it: the property-setting step called `orderEditUpdateLineItem`,
+// a mutation that doesn't exist in the Admin API schema, so it always
+// errored too (harmlessly, since it's after the destructive part).
+//
+// Fix: orderEditAddLineItemDiscount can be applied directly to the ORIGINAL
+// calculated line item (no removal/re-add needed at all), which is both
+// simpler and eliminates the destructive step entirely.
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -155,6 +170,31 @@ export const action = async ({ request }) => {
 
     const orderId = `gid://shopify/Order/${order.id}`;
 
+    // ── Step 3: Idempotency guard ─────────────────────────────────────────
+    // Shopify redelivers ORDERS_CREATE if this handler doesn't respond fast
+    // enough (large orders can be slow). Without this check, a retry would
+    // recompute the same discounts and stack a second discount on top of
+    // lines already committed by the first delivery. note_attributes on the
+    // webhook payload is a creation-time snapshot (always empty), so we need
+    // a live read of the order's current state to detect a prior run.
+    const currentAttrsRes = await admin.graphql(
+      `query CurrentOrderAttrs($id: ID!) {
+        order(id: $id) {
+          customAttributes { key }
+        }
+      }`,
+      { variables: { id: orderId } }
+    );
+    const currentAttrsJson = await currentAttrsRes.json();
+    const alreadyProcessed = currentAttrsJson?.data?.order?.customAttributes?.some(
+      (a) => a.key === "B2B Total Savings"
+    );
+
+    if (alreadyProcessed) {
+      console.log(`[orders/create] ${orderName}: already has B2B discount notes, skipping (likely a webhook retry).`);
+      return new Response("OK", { status: 200 });
+    }
+
     // ── Step 4: Trigger explicit orderEdit mutation flow ────────────────────
     // Nothing below writes to the REAL order until orderEditCommit succeeds.
     // If anything goes wrong before that point, we bail out without
@@ -208,66 +248,28 @@ export const action = async ({ request }) => {
 
       const retailPrice = parseFloat(variant.standardRetail?.value ?? variant.compareAtPrice ?? variant.price ?? "0");
       const paidPrice = parseFloat(li.price ?? "0");
-      const qty = parseInt(li.quantity ?? 1, 10);
 
       if (retailPrice <= paidPrice) continue;
 
-      console.log(`[orders/create] ${orderName}: Swapping line ${li.id} to force native strikethrough...`);
+      console.log(`[orders/create] ${orderName}: Applying discount directly to line ${li.id} (no removal — line stays intact)...`);
 
-      // 1. Remove the old line item (set quantity to 0)
-      const removeJson = await graphqlWithRetry(
-        admin,
-        `mutation RemoveOldLine($id: ID!, $lineItemId: ID!) {
-          orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: 0) {
-            userErrors { field message }
-          }
-        }`,
-        { id: editId, lineItemId: calcLi.id },
-        { label: `orderEditSetQuantity ${orderName}/${li.id}` }
-      );
-
-      if (hasErrors(removeJson, "orderEditSetQuantity")) {
-        console.error(`[orders/create] ${orderName}: failed to remove line ${li.id}, aborting edit without committing.`, removeJson.errors ?? removeJson.data?.orderEditSetQuantity?.userErrors);
-        editFailed = true;
-        break;
-      }
-
-      // 2. Add the same variant back
-      const addJson = await graphqlWithRetry(
-        admin,
-        `mutation AddNewLine($id: ID!, $variantId: ID!, $quantity: Int!) {
-          orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity) {
-            calculatedLineItem { id }
-            userErrors { field message }
-          }
-        }`,
-        { id: editId, variantId: vGid, quantity: qty },
-        { label: `orderEditAddVariant ${orderName}/${li.id}` }
-      );
-
-      const newLineId = addJson?.data?.orderEditAddVariant?.calculatedLineItem?.id;
-
-      if (hasErrors(addJson, "orderEditAddVariant") || !newLineId) {
-        console.error(`[orders/create] ${orderName}: failed to re-add line ${li.id} after removal, aborting edit without committing.`, addJson.errors ?? addJson.data?.orderEditAddVariant?.userErrors);
-        editFailed = true;
-        break;
-      }
-
-      // 3. Apply the catalog discount markdown to the NEW line
+      // Apply the catalog discount markdown straight onto the EXISTING
+      // calculated line item. No removal, no re-add — the line item is never
+      // at risk of being lost, regardless of how this call resolves.
       const amount = (retailPrice - paidPrice).toFixed(2);
       const discountJson = await graphqlWithRetry(
         admin,
-        `mutation AddDiscountToNewLine($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
+        `mutation AddDiscountToLine($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
           orderEditAddLineItemDiscount(id: $id, lineItemId: $lineItemId, discount: $discount) {
             userErrors { field message }
           }
         }`,
         {
           id: editId,
-          lineItemId: newLineId,
+          lineItemId: calcLi.id,
           discount: {
             fixedValue: { amount: String(amount), currencyCode: "NZD" },
-            description: "Wholesale Catalog Discount",
+            description: `Wholesale Catalog Discount (retail ${fmt(retailPrice)}/ea)`,
           },
         },
         { label: `orderEditAddLineItemDiscount ${orderName}/${li.id}` }
@@ -278,49 +280,22 @@ export const action = async ({ request }) => {
         editFailed = true;
         break;
       }
-
-      // 4. Record retail baseline as a visual property on the NEW line
-      const existingProps = (li.properties ?? []).filter((p) => p.name !== "Retail Price");
-      const propsJson = await graphqlWithRetry(
-        admin,
-        `mutation SetNewLineProperties($id: ID!, $input: OrderEditUpdateLineItemInput!) {
-          orderEditUpdateLineItem(id: $id, input: $input) {
-            userErrors { field message }
-          }
-        }`,
-        {
-          id: newLineId,
-          input: {
-            customAttributes: [
-              ...existingProps.map((p) => ({ key: p.name, value: String(p.value) })),
-              { key: "Retail Price", value: fmt(retailPrice) },
-            ],
-          },
-        },
-        { label: `orderEditUpdateLineItem ${orderName}/${li.id}` }
-      );
-
-      if (hasErrors(propsJson, "orderEditUpdateLineItem")) {
-        console.error(`[orders/create] ${orderName}: failed to set properties on line ${li.id}, aborting edit without committing.`, propsJson.errors ?? propsJson.data?.orderEditUpdateLineItem?.userErrors);
-        editFailed = true;
-        break;
-      }
     }
 
     if (editFailed) {
       // Do NOT commit. The calculated order is a draft only — leaving it
       // uncommitted means the real order retains every original line item
       // and price exactly as placed. Discount notes below are skipped too,
-      // since they'd otherwise describe a swap that never actually happened.
-      console.error(`[orders/create] ${orderName}: discount swap aborted, real order left untouched. Needs manual reprocessing.`);
+      // since they'd otherwise describe discounts that never actually applied.
+      console.error(`[orders/create] ${orderName}: discount application aborted, real order left untouched. Needs manual reprocessing.`);
       return new Response("OK", { status: 200 });
     }
 
-    // Commit the edit — only reached if every swap above succeeded cleanly.
+    // Commit the edit — only reached if every discount above applied cleanly.
     const commitJson = await graphqlWithRetry(
       admin,
       `mutation CommitOrderEdit($id: ID!) {
-        orderEditCommit(id: $id, notifyCustomer: false, staffNote: "Wholesale Catalog Discount Swap") {
+        orderEditCommit(id: $id, notifyCustomer: false, staffNote: "Wholesale Catalog Discount") {
           userErrors { field message }
         }
       }`,
@@ -368,7 +343,7 @@ export const action = async ({ request }) => {
     if (hasErrors(notesJson, "orderUpdate")) {
       console.error(`[orders/create] ${orderName}: failed to write B2B discount notes.`, notesJson.errors ?? notesJson.data?.orderUpdate?.userErrors);
     } else {
-      console.log(`[orders/create] ${orderName}: swapped lines for native strikethrough and wrote ${discountNotes.length} note(s).`);
+      console.log(`[orders/create] ${orderName}: applied discounts for native strikethrough and wrote ${discountNotes.length} note(s).`);
     }
 
   } catch (err) {
