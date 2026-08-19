@@ -353,12 +353,6 @@
     if (!radios.length) return;
 
     const updatePurchaseState = () => {
-      const selected = card.querySelector('input[type="radio"]:checked');
-      if (!selected) return;
-
-      // Read synchronously — the theme's own variant-change handler updates
-      // the status pill's class/text in the same 'change' dispatch, before
-      // our listener (attached later) runs, so this is never stale.
       const available = readCardAvailability(card);
       if (available === undefined) return;
 
@@ -388,7 +382,23 @@
       }
     };
 
-    radios.forEach(r => r.addEventListener("change", updatePurchaseState));
+    // The theme updates the status pill's class/text asynchronously after the
+    // variant 'change' event (not synchronously within the same dispatch), so
+    // reading it directly inside a 'change' listener can catch a stale value.
+    // Watching the pill itself for its own mutation is race-free regardless
+    // of when or how the theme decides to update it.
+    const pill = card.querySelector(".product__inventory");
+    if (pill) {
+      new MutationObserver(updatePurchaseState).observe(pill, {
+        attributes: true,
+        attributeFilter: ["class"],
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    } else {
+      radios.forEach(r => r.addEventListener("change", updatePurchaseState));
+    }
     updatePurchaseState();
   }
 
