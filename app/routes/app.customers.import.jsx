@@ -89,7 +89,7 @@ export default function ImportCsv() {
   }
 
   if (actionData?.phase === "review") {
-    const { buckets, results, skippedBlankGroup, cappedTo1000, totalUsable } = actionData;
+    const { buckets, results, skippedBlankGroup, cappedTo1000 } = actionData;
     const failures = results.filter((r) => r && r.status !== "matched" && r.status !== "matched_partial");
     const shown = showAllFailures ? failures : failures.slice(0, 30);
     return (

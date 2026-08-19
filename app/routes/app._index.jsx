@@ -30,9 +30,11 @@ export const loader = async ({ request }) => {
       hasNext = d.data.catalogs.pageInfo.hasNextPage;
       cursor = d.data.catalogs.pageInfo.endCursor;
     }
-  } catch (_) {}
+  } catch (_) {
+    // best-effort catalog fetch, ignore failure and fall back to no active-catalog filtering
+  }
 
-  const [allRules, allOverrides, recentRulesRaw, overrideCounts, overrideProductGroups] = await Promise.all([
+  const [allRules, , recentRulesRaw, overrideCounts, overrideProductGroups] = await Promise.all([
     prisma.catalogRule.findMany(),
     prisma.productOverride.count(),
     prisma.catalogRule.findMany({ orderBy: { updatedAt: "desc" }, take: 10 }),
@@ -93,7 +95,7 @@ export const loader = async ({ request }) => {
 
 export default function Index() {
   const {
-    totalGroups, configuredGroups, unconfiguredGroups,
+    configuredGroups, unconfiguredGroups,
     groupsWithBlanket, groupsWithOverrides,
     totalOverrideRows, distinctOverrideProducts,
     packTypeBreakdown,
@@ -126,7 +128,7 @@ export default function Index() {
     let cursor = null;
     let total = 0;
     try {
-      while (true) {
+      for (;;) {
         const res = await fetch('/api/sync-compare-prices', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -172,7 +174,7 @@ export default function Index() {
     let updated = 0;
     let skipped = 0;
     try {
-      while (true) {
+      for (;;) {
         const res = await fetch('/api/backfill-order-discounts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -226,9 +228,10 @@ export default function Index() {
       {/* Stats Row */}
       <s-section heading="At a Glance">
         <s-stack direction="inline" gap="base">
-          <div
+          <button
+            type="button"
             onClick={() => navigate("/app/catalog-manager")}
-            style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', cursor: 'pointer', background: '#f6f6f7' }}>
+            style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', cursor: 'pointer', background: '#f6f6f7', font: 'inherit', color: 'inherit' }}>
             <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#008060', lineHeight: 1 }}>{configuredGroups}</div>
             <div style={{ fontWeight: '600', marginTop: '8px' }}>Customer Groups</div>
             <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>with visibility rules active</div>
@@ -237,15 +240,16 @@ export default function Index() {
                 +{unconfiguredGroups} not configured
               </div>
             )}
-          </div>
+          </button>
 
-          <div
+          <button
+            type="button"
             onClick={() => navigate("/app/audit")}
-            style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', cursor: 'pointer', background: '#f6f6f7' }}>
+            style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', cursor: 'pointer', background: '#f6f6f7', font: 'inherit', color: 'inherit' }}>
             <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#d72c0d', lineHeight: 1 }}>{distinctOverrideProducts}</div>
             <div style={{ fontWeight: '600', marginTop: '8px' }}>Products with Exceptions</div>
             <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>{totalOverrideRows} rules across {groupsWithOverrides} group{groupsWithOverrides !== 1 ? 's' : ''}</div>
-          </div>
+          </button>
 
           <div style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', background: '#f6f6f7' }}>
             <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#1a1a2e', lineHeight: 1 }}>{groupsWithBlanket}</div>
@@ -340,11 +344,11 @@ export default function Index() {
           </s-box>
           <s-box padding="base" borderRadius="base" background="subdued">
             <div style={{ fontWeight: '700', marginBottom: '4px' }}>2️⃣ Block Entire Pack Types</div>
-            <s-text tone="subdued">Use "Manage Rules" to hide all Shippers, Bags, etc. for that customer in one click.</s-text>
+            <s-text tone="subdued">Use &ldquo;Manage Rules&rdquo; to hide all Shippers, Bags, etc. for that customer in one click.</s-text>
           </s-box>
           <s-box padding="base" borderRadius="base" background="subdued">
             <div style={{ fontWeight: '700', marginBottom: '4px' }}>3️⃣ Fine-Tune Per Product</div>
-            <s-text tone="subdued">Use "Product Overrides" to adjust individual products that differ from the blanket rule.</s-text>
+            <s-text tone="subdued">Use &ldquo;Product Overrides&rdquo; to adjust individual products that differ from the blanket rule.</s-text>
           </s-box>
           <s-box padding="base" borderRadius="base" background="subdued">
             <div style={{ fontWeight: '700', marginBottom: '4px' }}>4️⃣ Changes Go Live Instantly</div>
@@ -361,9 +365,9 @@ export default function Index() {
       <s-section heading="Checkout Strikethrough Prices">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <s-text>
-            B2B catalog customers see discounted prices at checkout, but Shopify doesn't
+            B2B catalog customers see discounted prices at checkout, but Shopify doesn&apos;t
             automatically show the original retail price as a strikethrough. Click the button
-            below to sync the retail price onto every variant's compare-at price — this is a
+            below to sync the retail price onto every variant&apos;s compare-at price — this is a
             one-time setup (or run it again after bulk price updates).
           </s-text>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
@@ -397,7 +401,7 @@ export default function Index() {
           </div>
           <s-text tone="subdued">
             This sets compare_at_price = price for any variant missing a compare-at value.
-            Regular customers won't see a strikethrough (price = compare-at, so Shopify hides it),
+            Regular customers won&apos;t see a strikethrough (price = compare-at, so Shopify hides it),
             but B2B catalog customers will see ~~retail price~~ their discounted price at checkout.
           </s-text>
         </div>
@@ -408,7 +412,7 @@ export default function Index() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <s-text>
             Syncs your B2B catalog price lists into Shopify metafields so the
-            "B2B Catalog Discount" Shopify Function can apply real per-line
+            &ldquo;B2B Catalog Discount&rdquo; Shopify Function can apply real per-line
             discounts at checkout — giving every order proper discount records
             visible in Shopify Admin and readable by Ostendo/Odoo.
             The sync runs automatically every 10 minutes and also triggers
@@ -425,9 +429,9 @@ export default function Index() {
             <strong>⚠️ Before running:</strong> In Shopify Admin → Markets → Catalogs,
             set the blanket % to <strong>0%</strong> on each B2B catalog
             (and remove fixed price overrides). The Function handles all discounting.
-            Run "Force Full Sync" first to populate all metafields, then
+            Run &ldquo;Force Full Sync&rdquo; first to populate all metafields, then
             create an <strong>Automatic Discount</strong> in Shopify Admin using
-            the "B2B Catalog Discount" function.
+            the &ldquo;B2B Catalog Discount&rdquo; function.
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             <button
@@ -470,8 +474,8 @@ export default function Index() {
             )}
           </div>
           <s-text tone="subdued">
-            "Sync Changed Catalogs" is fast — it skips price lists that haven't
-            changed since the last run. "Force Full Sync" re-processes everything
+            &ldquo;Sync Changed Catalogs&rdquo; is fast — it skips price lists that haven&apos;t
+            changed since the last run. &ldquo;Force Full Sync&rdquo; re-processes everything
             and is useful after first setup or if metafields get out of sync.
           </s-text>
         </div>
@@ -544,10 +548,10 @@ export default function Index() {
       <s-section heading="B2B Discount Records on Orders">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <s-text>
-            Shopify's B2B catalog pricing silently lowers prices — no discount records appear on
-            orders, so ERPs (Ostendo, Odoo, etc.) can't see what discount was applied.
+            Shopify&apos;s B2B catalog pricing silently lowers prices — no discount records appear on
+            orders, so ERPs (Ostendo, Odoo, etc.) can&apos;t see what discount was applied.
             From now on, every new B2B order is automatically enriched with discount details
-            under "Additional Details" on the order page. Use the button below to backfill
+            under &ldquo;Additional Details&rdquo; on the order page. Use the button below to backfill
             the last 365 days of existing orders.
           </s-text>
           <div style={{
@@ -561,7 +565,7 @@ export default function Index() {
           }}>
             <strong>How it works:</strong> For each order line, the app compares the
             B2B price paid against the retail compare-at price to calculate the exact
-            saving per item. This is written to the order as "Additional Details" —
+            saving per item. This is written to the order as &ldquo;Additional Details&rdquo; —
             visible on the Shopify Admin order page and readable by any ERP via the
             Shopify Orders API (<code>note_attributes</code> field).
           </div>
@@ -599,7 +603,7 @@ export default function Index() {
           <s-text tone="subdued">
             New orders are handled automatically — this button is only needed once
             for historical orders, or after re-running the compare-at sync.
-            Run "Sync Compare-At Prices" first if you haven't already.
+            Run &ldquo;Sync Compare-At Prices&rdquo; first if you haven&apos;t already.
           </s-text>
         </div>
       </s-section>

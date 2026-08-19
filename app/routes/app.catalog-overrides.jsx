@@ -309,18 +309,6 @@ export default function CatalogOverrides() {
     return filtered;
   }, [products, search, variantFilter]);
 
-  // Variant IDs already covered by blanket rules — excluded from manual overrides.
-  const getBulkHiddenIds = (product) =>
-    product.variants.nodes
-      .filter((v) => {
-        const sku = (v.sku || "").trim().toUpperCase();
-        return (
-          hiddenVariantTypes.some((t) => v.title.toLowerCase().includes(t.toLowerCase())) ||
-          globalHiddenSkus.some((gs) => gs.trim().toUpperCase() === sku)
-        );
-      })
-      .map((v) => v.id);
-
   const handleVariantToggle = (productId, variantId) => {
     setPendingHidden((prev) => {
       const current = prev[productId] || [];
@@ -511,11 +499,12 @@ export default function CatalogOverrides() {
 
             {/* Search — server-side via ?search= param, debounced 400ms */}
             <div style={{ marginBottom: "16px" }}>
-              <label style={{ display: "block", marginBottom: "6px", fontSize: "14px", fontWeight: "500", color: "#202223" }}>
+              <label htmlFor="catalog-overrides-search" style={{ display: "block", marginBottom: "6px", fontSize: "14px", fontWeight: "500", color: "#202223" }}>
                 Search products
               </label>
               <div style={{ position: "relative" }}>
                 <input
+                  id="catalog-overrides-search"
                   type="text"
                   value={searchInput}
                   onChange={(e) => {
@@ -562,7 +551,7 @@ export default function CatalogOverrides() {
               </div>
               {search && (
                 <div style={{ fontSize: "12px", color: "#6d7175", marginTop: "4px" }}>
-                  Showing {filteredProducts.length} result{filteredProducts.length !== 1 ? "s" : ""} for "{search}"
+                  Showing {filteredProducts.length} result{filteredProducts.length !== 1 ? "s" : ""} for &ldquo;{search}&rdquo;
                 </div>
               )}
             </div>
@@ -593,7 +582,7 @@ export default function CatalogOverrides() {
                   {search ? (
                     <>
                       <div style={{ fontSize: "32px", marginBottom: "8px" }}>🔍</div>
-                      <div style={{ fontWeight: "600" }}>No products match "{search}"</div>
+                      <div style={{ fontWeight: "600" }}>No products match &ldquo;{search}&rdquo;</div>
                       <div style={{ fontSize: "13px", marginTop: "4px" }}>Try a different search term or clear the filter.</div>
                     </>
                   ) : (
@@ -660,7 +649,16 @@ export default function CatalogOverrides() {
                           return (
                             <div
                               key={variant.id}
+                              role="button"
+                              tabIndex={0}
+                              aria-pressed={!isHidden}
                               onClick={() => handleVariantToggle(product.id, variant.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  handleVariantToggle(product.id, variant.id);
+                                }
+                              }}
                               style={{
                                 padding: "8px 12px",
                                 border: `1px solid ${isHidden ? "#d72c0d" : "#c9cccf"}`,

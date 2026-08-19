@@ -52,13 +52,14 @@ export default function ForgotPage() {
         {actionData?.sent ? (
           <div style={styles.info}>
             If an account matches, a reset link has been sent. It expires in 24 hours.<br /><br />
-            If you have multiple Dutch Rusk stores under the same email address, you'll receive a separate reset link for each — each email clearly names which store's password it resets.
+            If you have multiple Dutch Rusk stores under the same email address, you&apos;ll receive a separate reset link for each — each email clearly names which store&apos;s password it resets.
           </div>
         ) : (
           <Form method="post" style={styles.form}>
             {actionData?.error ? <div style={styles.error}>{actionData.error}</div> : null}
-            <label style={styles.label}>Username or email</label>
-            <input name="identifier" required autoFocus style={styles.input} />
+            <label style={styles.label} htmlFor="identifier">Username or email</label>
+            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- intentional UX, see oidc.setup.$token.jsx */}
+            <input id="identifier" name="identifier" required autoFocus style={styles.input} />
             <button type="submit" style={styles.btn}>Send reset link</button>
             <a href="/oidc/login" style={styles.linkSmall}>Back to sign in</a>
           </Form>

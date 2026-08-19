@@ -48,7 +48,9 @@ export function run(input) {
         if (fixedPrice !== undefined && fixedPrice !== null) {
           targetWholesalePrice = parseFloat(fixedPrice);
         }
-      } catch (e) {}
+      } catch (e) {
+        // malformed fixedPrices JSON — fall through to secondary calculation
+      }
     }
 
     // ── 2. SECONDARY: Independent Calculation (Flicker Protection) ────────
@@ -86,4 +88,4 @@ export function run(input) {
     discountApplicationStrategy: DiscountApplicationStrategy.All,
     discounts,
   };
-};
+}

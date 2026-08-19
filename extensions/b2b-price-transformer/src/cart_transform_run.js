@@ -16,6 +16,6 @@ const NO_CHANGES = {
  * @param {CartTransformRunInput} input
  * @returns {CartTransformRunResult}
  */
-export function cartTransformRun(input) {
+export function cartTransformRun(_input) {
   return NO_CHANGES;
-};
+}

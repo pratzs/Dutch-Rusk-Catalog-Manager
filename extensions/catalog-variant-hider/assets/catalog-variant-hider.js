@@ -24,7 +24,7 @@
       LOG("Session storage cleared (identity changed). Removed keys:", cleared);
     }
     sessionStorage.setItem("cvh4:who", CUSTOMER_ID || LOCATION_ID || "");
-  } catch (_) {}
+  } catch (_) { /* sessionStorage unavailable (private mode/quota) */ }
 
   // ── Loading-mask CSS fallback ─────────────────────────────────────────────
   // catalog-hider.liquid injects the primary CSS (using :not([data-cvh-processed])
@@ -65,45 +65,13 @@
     document.head.appendChild(s);
   })();
 
-  // ── Shopify Storefront variant-option lookup ──────────────────────────────
-  const variantOptionCache = {};
-  const variantAvailCache  = {};
-
-  async function fetchVariantOptions(variantIds) {
-    const toFetch = variantIds.filter(id => !(id in variantOptionCache));
-    const CHUNK = 250;
-    for (let i = 0; i < toFetch.length; i += CHUNK) {
-      const batch = toFetch.slice(i, i + CHUNK);
-      try {
-        const res  = await fetch(`/variants.json?ids=${batch.join(",")}`);
-        const data = await res.json();
-        for (const v of data.variants ?? []) {
-          const opts = [v.option1, v.option2, v.option3].filter(Boolean).join(" / ");
-          variantOptionCache[String(v.id)] = opts;
-          variantAvailCache[String(v.id)] = v.available !== false;
-        }
-      } catch (err) {
-        WARN("fetchVariantOptions: fetch failed →", err);
-      }
-    }
-    return variantOptionCache;
-  }
-
-  // Enrich rules by resolving hiddenVariantTypes → matched variant IDs so
-  // collection-card radio inputs (whose values are numeric IDs) are caught.
-  function enrichRulesWithVariantIds(rules, cardVariantIds) {
-    if (!rules.hiddenVariantTypes?.length || !cardVariantIds?.length) return rules;
-    const resolvedIds = cardVariantIds.filter(id => {
-      const opts = (variantOptionCache[id] || "").toLowerCase();
-      return opts && rules.hiddenVariantTypes.some(t => opts.startsWith(t.toLowerCase()));
-    });
-    if (!resolvedIds.length) return rules;
-    LOG(`  enrichRules: resolved types`, rules.hiddenVariantTypes, `→ IDs`, resolvedIds);
-    return {
-      ...rules,
-      hiddenVariantIds: [...new Set([...(rules.hiddenVariantIds || []), ...resolvedIds])],
-    };
-  }
+  // ── Card variant availability ──────────────────────────────────────────────
+  // There is no bulk cross-product "/variants.json?ids=" Storefront AJAX
+  // endpoint — that route always 404s, so a variant-ID → availability cache
+  // fetched that way is permanently empty and silently no-ops. Availability
+  // is instead read straight from the theme's own live-updating
+  // `.product__inventory` status pill (see readCardAvailability below), which
+  // reflects this customer's real per-location stock and needs no network call.
 
   // ── Single-product rule fetch (used on product pages) ────────────────────
   async function fetchRules(locationId, productId) {
@@ -130,7 +98,7 @@
         sessionStorage.removeItem(ssKey);
         LOG(`fetchRules [SS-CACHE EXPIRED] key="${ssKey}" — re-fetching`);
       }
-    } catch (_) {}
+    } catch (_) { /* sessionStorage unavailable (private mode/quota) */ }
 
     try {
       const params = new URLSearchParams();
@@ -152,7 +120,7 @@
 
       if (Array.isArray(data.hiddenVariantTypes)) {
         rulesCache[cacheKey] = data;
-        try { sessionStorage.setItem(ssKey, JSON.stringify({ ...data, _cvh_exp: Date.now() + SS_TTL_MS })); } catch (_) {}
+        try { sessionStorage.setItem(ssKey, JSON.stringify({ ...data, _cvh_exp: Date.now() + SS_TTL_MS })); } catch (_) { /* sessionStorage unavailable (private mode/quota) */ }
       } else {
         WARN("fetchRules: API response missing hiddenVariantTypes array", data);
       }
@@ -203,7 +171,7 @@
               if (resultMap) resultMap[pid] = rules;
               try {
                 sessionStorage.setItem(SS_PRE + pid, JSON.stringify({ ...rules, _cvh_exp: Date.now() + SS_TTL_MS }));
-              } catch (_) {}
+              } catch (_) { /* sessionStorage unavailable (private mode/quota) */ }
             }
           }
         }
@@ -266,7 +234,7 @@
           }
           sessionStorage.removeItem(ssKey);
         }
-      } catch (_) {}
+      } catch (_) { /* sessionStorage unavailable (private mode/quota) */ }
 
       toFetch.push(normPid);
     }
@@ -368,6 +336,15 @@
     }
   }
 
+  // Reads the theme's own live-updating inventory-status pill for a card.
+  // Returns true/false, or undefined if the card has no such pill (theme
+  // doesn't render one — caller should leave the add-to-cart button alone).
+  function readCardAvailability(card) {
+    const pill = card.querySelector(".product__inventory");
+    if (!pill) return undefined;
+    return !pill.className.split(/\s+/).includes("product-inventory--out");
+  }
+
   function setupCardAvailabilityWatcher(card) {
     if (card.dataset.cvhAvailWatch) return;
     card.dataset.cvhAvailWatch = "1";
@@ -378,10 +355,11 @@
     const updatePurchaseState = () => {
       const selected = card.querySelector('input[type="radio"]:checked');
       if (!selected) return;
-      const vid = (selected.value || "").trim();
-      if (!/^\d{8,}$/.test(vid)) return;
 
-      const available = variantAvailCache[vid];
+      // Read synchronously — the theme's own variant-change handler updates
+      // the status pill's class/text in the same 'change' dispatch, before
+      // our listener (attached later) runs, so this is never stale.
+      const available = readCardAvailability(card);
       if (available === undefined) return;
 
       const addBtn = card.querySelector('button[name="add"], button[data-add-to-cart]');
@@ -606,36 +584,24 @@
         // JS can be painted by the browser before the CSS engine recalculates
         // :not() — setting the attribute synchronously here (before any await)
         // closes that gap via the [data-cvh-loading] CSS rule.
-        const allCardVariantIds = new Set();
         const cardMeta = pidElements.map(el => {
           const productId = el.dataset.productId;
           const card = el.closest(".product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article") || el;
 
           card.setAttribute("data-cvh-loading", "1");
 
-          const variantEls = Array.from(card.querySelectorAll('input[type="radio"], option, button[data-variant-id]'));
-          const variantIds = variantEls
-            .map(i => (i.value || i.dataset?.variantId || "").trim())
-            .filter(v => /^\d{8,}$/.test(v));
-          variantIds.forEach(id => allCardVariantIds.add(id));
-
-          LOG(`  Collection card: productId="${productId}" container=<${card.tagName} class="${String(card.className).slice(0,50)}"> variantIds:`, variantIds);
-          return { productId, card, variantIds };
+          LOG(`  Collection card: productId="${productId}" container=<${card.tagName} class="${String(card.className).slice(0,50)}">`);
+          return { productId, card };
         });
 
-        // ── Steps 2+3: Fetch variant options (Shopify) + catalog rules (app) in parallel ─
-        // These two are independent — no reason to wait for one before starting the other.
-        const [, batchRules] = await Promise.all([
-          fetchVariantOptions([...allCardVariantIds]),
-          fetchRulesBatch(resolvedLocationId, cardMeta.map(m => m.productId)),
-        ]);
-        LOG(`fetchVariantOptions: option map has ${Object.keys(variantOptionCache).length} entries`);
+        // ── Step 2: Fetch catalog rules (app) ─────────────────────────────────
+        const batchRules = await fetchRulesBatch(resolvedLocationId, cardMeta.map(m => m.productId));
 
-        // ── Step 4: Apply rules + unmask each card ───────────────────────────
-        cardMeta.forEach(({ productId, card, variantIds }) => {
+        // ── Step 3: Apply rules + unmask each card ───────────────────────────
+        cardMeta.forEach(({ productId, card }) => {
           try {
             const normPid = String(productId).includes("/") ? productId.split("/").pop() : productId;
-            let rules = batchRules[normPid] || { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
+            const rules = batchRules[normPid] || { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
 
             if (rules._cvh_error) {
               WARN(`  Card ${productId}: API error — applying Back Soon (fail-closed)`);
@@ -645,7 +611,6 @@
               return;
             }
 
-            rules = enrichRulesWithVariantIds(rules, variantIds);
             applyRulesToContainer(card, rules, `card:${productId}`);
             setupCardAvailabilityWatcher(card);
 

@@ -30,7 +30,6 @@ export function run(input) {
     const variant = line.merchandise;
     if (variant.__typename !== "ProductVariant") continue;
 
-    const currentPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
     const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
 
     let targetWholesalePrice = null;
@@ -45,7 +44,9 @@ export function run(input) {
         if (fixedPrice !== undefined && fixedPrice !== null) {
           targetWholesalePrice = parseFloat(fixedPrice);
         }
-      } catch (e) {}
+      } catch (e) {
+        // malformed fixedPrices JSON — no wholesale target this run
+      }
     }
 
     const finalWholesale = targetWholesalePrice;
@@ -71,4 +72,4 @@ export function run(input) {
   }
 
   return { operations };
-};
+}

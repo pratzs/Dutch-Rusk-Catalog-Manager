@@ -5,7 +5,7 @@ const DEDUP_TTL = 3 * 60 * 1000; // 3 minutes
 
 export const action = async ({ request }) => {
   const { authenticate } = await import("../shopify.server");
-  const { topic, admin, session, payload } = await authenticate.webhook(request);
+  const { topic, payload } = await authenticate.webhook(request);
 
   if (topic !== "PRODUCTS_UPDATE") {
     return new Response("OK", { status: 200 });

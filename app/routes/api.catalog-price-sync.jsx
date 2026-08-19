@@ -95,7 +95,7 @@ async function fetchVariantFixedPriceMetaBatch(admin, variantIds) {
 }
 
 async function runSync(admin, shop, options = {}) {
-  const { forceAll = false, variantIds: specificVariantIds = null, companyOnly = false } = options;
+  const { variantIds: specificVariantIds = null, companyOnly = false } = options;
   const log = (...args) => console.log("[catalog-sync]", ...args);
   const { default: prisma } = await import("../db.server");
 
@@ -109,9 +109,6 @@ async function runSync(admin, shop, options = {}) {
     log(`Starting Pure Catalog Truth Sync | CompanyOnly: ${companyOnly}`);
 
     const priceLists = await fetchAllPriceLists(admin);
-    const dbStates = await prisma.catalogSyncState.findMany({ where: { shop } });
-    const dbMap = Object.fromEntries(dbStates.map((s) => [s.priceListId, s]));
-
     const allOverridesByList = {}; 
     const allAdjustments = {}; 
 

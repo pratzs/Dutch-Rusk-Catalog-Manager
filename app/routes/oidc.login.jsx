@@ -1,6 +1,6 @@
 import { Form, useActionData, useLoaderData, redirect } from "react-router";
 
-function shopFromOidcRequest(reqPayload) {
+function shopFromOidcRequest(_reqPayload) {
   // clientId in Shopify's OIDC flow is store-specific (registered per shop).
   // For phase 1 we run against one shop; SHOP_DOMAIN env pin the *.myshopify.com host.
   return process.env.SHOP_DOMAIN || "dutchrusk.myshopify.com";
@@ -237,8 +237,9 @@ export default function OidcLoginPage() {
             <input type="hidden" name="mode" value="otp_verify" />
             <input type="hidden" name="uid" value={otpUidForVerify} />
             <p style={styles.help}>We sent a 6-digit code to <strong>{otpEmailForVerify}</strong>.</p>
-            <label style={styles.label}>Enter code</label>
-            <input name="code" required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} style={styles.input} autoFocus />
+            <label style={styles.label} htmlFor="otp-code">Enter code</label>
+            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- intentional UX, see oidc.setup.$token.jsx */}
+            <input id="otp-code" name="code" required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} style={styles.input} autoFocus />
             <button type="submit" style={styles.btn}>Verify code</button>
             <a href="/oidc/login" style={styles.linkSmall}>Back</a>
           </Form>
@@ -248,10 +249,11 @@ export default function OidcLoginPage() {
               <summary style={styles.summary}>Username + Password</summary>
               <Form method="post" style={styles.form}>
                 <input type="hidden" name="mode" value="password" />
-                <label style={styles.label}>Username</label>
-                <input name="username" required autoComplete="username" style={styles.input} autoFocus />
-                <label style={styles.label}>Password</label>
-                <input name="password" type="password" required autoComplete="current-password" style={styles.input} />
+                <label style={styles.label} htmlFor="password-username">Username</label>
+                {/* eslint-disable-next-line jsx-a11y/no-autofocus -- intentional UX, see oidc.setup.$token.jsx */}
+                <input id="password-username" name="username" required autoComplete="username" style={styles.input} autoFocus />
+                <label style={styles.label} htmlFor="password-password">Password</label>
+                <input id="password-password" name="password" type="password" required autoComplete="current-password" style={styles.input} />
                 <button type="submit" style={styles.btn}>Sign in</button>
                 <a href="/oidc/forgot" style={styles.linkSmall}>Forgot password?</a>
               </Form>
@@ -261,8 +263,8 @@ export default function OidcLoginPage() {
               <summary style={styles.summary}>Sign in with email code instead</summary>
               <Form method="post" style={styles.form}>
                 <input type="hidden" name="mode" value="otp_request" />
-                <label style={styles.label}>Email address</label>
-                <input name="email" type="email" required defaultValue={prefillEmail} autoComplete="email" style={styles.input} />
+                <label style={styles.label} htmlFor="otp-email">Email address</label>
+                <input id="otp-email" name="email" type="email" required defaultValue={prefillEmail} autoComplete="email" style={styles.input} />
                 <button type="submit" style={styles.btn}>Send login code</button>
               </Form>
             </details>

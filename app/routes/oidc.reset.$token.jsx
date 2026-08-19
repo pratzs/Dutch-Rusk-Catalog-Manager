@@ -66,10 +66,11 @@ export default function ResetPage() {
         </p>
         {actionData?.error ? <div style={styles.error}>{actionData.error}</div> : null}
         <Form method="post" style={styles.form}>
-          <label style={styles.label}>New password (min 8 characters)</label>
-          <input name="password" type="password" required minLength={8} style={styles.input} autoFocus />
-          <label style={styles.label}>Confirm password</label>
-          <input name="password2" type="password" required minLength={8} style={styles.input} />
+          <label style={styles.label} htmlFor="reset-password">New password (min 8 characters)</label>
+          {/* eslint-disable-next-line jsx-a11y/no-autofocus -- intentional UX, see oidc.setup.$token.jsx */}
+          <input id="reset-password" name="password" type="password" required minLength={8} style={styles.input} autoFocus />
+          <label style={styles.label} htmlFor="reset-password2">Confirm password</label>
+          <input id="reset-password2" name="password2" type="password" required minLength={8} style={styles.input} />
           <button type="submit" style={styles.btn}>Save new password</button>
         </Form>
       </div>

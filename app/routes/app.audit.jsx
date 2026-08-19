@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate } from "react-router";
+import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -94,7 +94,6 @@ export async function loader({ request }) {
 
 export default function AuditReport() {
   const { report, error } = useLoaderData();
-  const navigate = useNavigate();
 
   const downloadCSV = () => {
     const headers = ["Product Title", "Product ID", "Hidden Variants", "Restricted Customer Accounts"];
@@ -128,7 +127,7 @@ export default function AuditReport() {
           including which pack sizes are hidden and which customer accounts are affected.
         </s-text>
         <s-text tone="subdued">
-          Note: Products hidden by blanket pack-type rules (e.g. "hide all Shippers") are not
+          Note: Products hidden by blanket pack-type rules (e.g. &ldquo;hide all Shippers&rdquo;) are not
           listed here unless they also have a product-level override.
         </s-text>
       </s-section>

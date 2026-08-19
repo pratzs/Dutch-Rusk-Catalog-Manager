@@ -14,7 +14,7 @@ const PACK_TYPES = [
 ];
 
 export async function loader({ request }) {
-  const { admin } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const url = new URL(request.url);
   const catalogId = url.searchParams.get("catalogId");
   const catalogName = url.searchParams.get("catalogName");
@@ -80,7 +80,7 @@ export default function CatalogRules() {
         </s-text>
         <div style={{ marginTop: '6px', padding: '10px 12px', background: '#f1f8f5', border: '1px solid #95c9b4', borderRadius: '6px' }}>
           <s-text color="success">
-            Tip: Use "Product Overrides" on the previous page if you need to make
+            Tip: Use &ldquo;Product Overrides&rdquo; on the previous page if you need to make
             exceptions for specific products.
           </s-text>
         </div>
@@ -108,7 +108,17 @@ export default function CatalogRules() {
             return (
               <div
                 key={value}
+                role="button"
+                tabIndex={0}
+                aria-pressed={isBlocked}
+                aria-label={`Toggle hiding pack type ${label}`}
                 onClick={() => toggleType(value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleType(value);
+                  }
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',

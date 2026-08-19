@@ -102,7 +102,7 @@ export default function HelpPage() {
           </div>
           <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', lineHeight: '1.7' }}>
             Everything you need to know to manage the Dutch Rusk B2B catalog — in one place.
-            This guide covers the three most common tasks you'll perform.
+            This guide covers the three most common tasks you&apos;ll perform.
           </div>
         </div>
       </s-section>
@@ -123,7 +123,7 @@ export default function HelpPage() {
               <div style={{ fontWeight: '700', marginBottom: '6px', fontSize: '14px' }}>🚫 Pack Type Rules</div>
               <div style={{ fontSize: '13px', color: '#444', lineHeight: '1.6' }}>
                 Hide an <em>entire category</em> of pack sizes for a customer.
-                Example: block all "Shipper" sizes so they never see bulk cases.
+                Example: block all &ldquo;Shipper&rdquo; sizes so they never see bulk cases.
               </div>
             </div>
             <div style={{ flex: '1', minWidth: '200px', background: '#f6f6f7', borderRadius: '8px', padding: '16px' }}>
@@ -136,7 +136,7 @@ export default function HelpPage() {
             <div style={{ flex: '1', minWidth: '200px', background: '#f6f6f7', borderRadius: '8px', padding: '16px' }}>
               <div style={{ fontWeight: '700', marginBottom: '6px', fontSize: '14px' }}>📋 Copy Rules</div>
               <div style={{ fontSize: '13px', color: '#444', lineHeight: '1.6' }}>
-                Copy a fully configured customer's rules to another customer.
+                Copy a fully configured customer&apos;s rules to another customer.
                 Great for setting up new accounts quickly.
               </div>
             </div>
@@ -169,7 +169,7 @@ export default function HelpPage() {
           <div style={stepStyle}>
             <div style={stepNumStyle}>3</div>
             <div style={{ fontSize: '14px', lineHeight: '1.7' }}>
-              You'll see a list of pack types: Shipper, Bag, Block, Packet, Each, Outer.
+              You&apos;ll see a list of pack types: Shipper, Bag, Block, Packet, Each, Outer.
               <strong> Tick the checkbox</strong> next to any type you want to <strong>hide</strong> for this customer.
             </div>
           </div>
@@ -183,7 +183,7 @@ export default function HelpPage() {
           <hr style={divider} />
 
           <div style={{ fontSize: '13px', color: '#444' }}>
-            <strong>What you'll see on the Catalog Manager list after saving:</strong><br />
+            <strong>What you&apos;ll see on the Catalog Manager list after saving:</strong><br />
             <span style={badgeStyle('red')}>🚫 Shipper</span>
             <span style={badgeStyle('red')}>🚫 Bag</span>
             <span style={{ fontSize: '13px', color: '#6d7175' }}>— red badges for each blocked type.</span>
@@ -210,7 +210,7 @@ export default function HelpPage() {
           <div style={stepStyle}>
             <div style={stepNumStyle}>2</div>
             <div style={{ fontSize: '14px', lineHeight: '1.7' }}>
-              Click <strong>Product Overrides</strong> next to their name (not "Manage Rules").
+              Click <strong>Product Overrides</strong> next to their name (not &ldquo;Manage Rules&rdquo;).
             </div>
           </div>
           <div style={stepStyle}>
@@ -232,7 +232,7 @@ export default function HelpPage() {
             <div style={stepNumStyle}>5</div>
             <div style={{ fontSize: '14px', lineHeight: '1.7' }}>
               Click <strong>Save All Changes</strong> in the sticky bar at the top of the page.
-              You'll see <span style={badgeStyle('yellow')}>Custom rule saved</span> appear on the product.
+              You&apos;ll see <span style={badgeStyle('yellow')}>Custom rule saved</span> appear on the product.
             </div>
           </div>
 
@@ -244,7 +244,7 @@ export default function HelpPage() {
           </div>
 
           <div style={warningBoxStyle}>
-            ⚠️ <strong>Don't forget to save!</strong> If you navigate away without clicking Save, your changes will be lost.
+            ⚠️ <strong>Don&apos;t forget to save!</strong> If you navigate away without clicking Save, your changes will be lost.
             The page will warn you if you try to leave with unsaved changes.
           </div>
         </div>
@@ -265,13 +265,13 @@ export default function HelpPage() {
           <div style={stepStyle}>
             <div style={stepNumStyle}>2</div>
             <div style={{ fontSize: '14px', lineHeight: '1.7' }}>
-              Under <em>"Copy rules FROM this account"</em>, select the customer whose rules are already set up correctly.
+              Under <em>&ldquo;Copy rules FROM this account&rdquo;</em>, select the customer whose rules are already set up correctly.
             </div>
           </div>
           <div style={stepStyle}>
             <div style={stepNumStyle}>3</div>
             <div style={{ fontSize: '14px', lineHeight: '1.7' }}>
-              Under <em>"Apply rules TO this account"</em>, select the new customer you want to configure.
+              Under <em>&ldquo;Apply rules TO this account&rdquo;</em>, select the new customer you want to configure.
             </div>
           </div>
           <div style={stepStyle}>
@@ -295,7 +295,7 @@ export default function HelpPage() {
       <s-section>
         <div style={cardStyle}>
           <div style={sectionHeading}>🏷️ Badge Reference — What Do the Colours Mean?</div>
-          <div style={sectionSubheading}>A quick legend for the coloured labels you'll see throughout the app.</div>
+          <div style={sectionSubheading}>A quick legend for the coloured labels you&apos;ll see throughout the app.</div>
 
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <thead>
@@ -335,23 +335,23 @@ export default function HelpPage() {
           <div style={{ fontSize: '14px', lineHeight: '1.8', color: '#3a3a3a' }}>
 
             <div style={{ marginBottom: '20px' }}>
-              <strong>Q: I hid a product using a Pack Type Rule, but it still shows in the Audit Report as "no custom rules". Is that a bug?</strong><br />
-              <span style={{ color: '#444' }}>No — the Audit Report only shows <em>Product Override</em> exceptions, not blanket pack type blocks. If a product is hidden by a pack type rule, it won't appear in the report. That's expected behaviour.</span>
+              <strong>Q: I hid a product using a Pack Type Rule, but it still shows in the Audit Report as &ldquo;no custom rules&rdquo;. Is that a bug?</strong><br />
+              <span style={{ color: '#444' }}>No — the Audit Report only shows <em>Product Override</em> exceptions, not blanket pack type blocks. If a product is hidden by a pack type rule, it won&apos;t appear in the report. That&apos;s expected behaviour.</span>
             </div>
 
             <div style={{ marginBottom: '20px' }}>
-              <strong>Q: I saved changes but the customer says they can still see the product. What's wrong?</strong><br />
-              <span style={{ color: '#444' }}>Check the Catalog Manager — make sure you saved against the <em>correct</em> customer account. Also check that the product is actually in that customer's Shopify catalog (assigned in Shopify B2B settings), not just visible in this app.</span>
+              <strong>Q: I saved changes but the customer says they can still see the product. What&apos;s wrong?</strong><br />
+              <span style={{ color: '#444' }}>Check the Catalog Manager — make sure you saved against the <em>correct</em> customer account. Also check that the product is actually in that customer&apos;s Shopify catalog (assigned in Shopify B2B settings), not just visible in this app.</span>
             </div>
 
             <div style={{ marginBottom: '20px' }}>
               <strong>Q: Can I undo a save?</strong><br />
-              <span style={{ color: '#444' }}>Not automatically. You'll need to manually revert the changes. If you're unsure, use the Audit Report first to check what's currently configured before making changes.</span>
+              <span style={{ color: '#444' }}>Not automatically. You&apos;ll need to manually revert the changes. If you&apos;re unsure, use the Audit Report first to check what&apos;s currently configured before making changes.</span>
             </div>
 
             <div style={{ marginBottom: '20px' }}>
-              <strong>Q: A new customer account isn't appearing in the list. What do I do?</strong><br />
-              <span style={{ color: '#444' }}>New B2B catalogs created in Shopify Admin will appear automatically. If it's not showing, check that it was created as a B2B catalog in Shopify — not just a regular price list.</span>
+              <strong>Q: A new customer account isn&apos;t appearing in the list. What do I do?</strong><br />
+              <span style={{ color: '#444' }}>New B2B catalogs created in Shopify Admin will appear automatically. If it&apos;s not showing, check that it was created as a B2B catalog in Shopify — not just a regular price list.</span>
             </div>
 
             <div style={{ marginBottom: '0' }}>

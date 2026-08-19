@@ -16,13 +16,21 @@ module.exports = {
   },
   env: {
     browser: true,
+    node: true,
     commonjs: true,
     es6: true,
   },
-  ignorePatterns: ["!**/.server", "!**/.client"],
+  ignorePatterns: [
+    "!**/.server",
+    "!**/.client",
+    "extensions/*/generated/**",
+  ],
 
   // Base config
   extends: ["eslint:recommended"],
+  rules: {
+    "no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+  },
 
   overrides: [
     // React
@@ -76,19 +84,6 @@ module.exports = {
       ],
     },
 
-    // Node
-    {
-      files: [
-        ".eslintrc.cjs",
-        "vite.config.{js,ts}",
-        ".graphqlrc.{js,ts}",
-        "shopify.server.{js,ts}",
-        "**/*.server.{js,ts}",
-      ],
-      env: {
-        node: true,
-      },
-    },
   ],
   globals: {
     shopify: "readonly"

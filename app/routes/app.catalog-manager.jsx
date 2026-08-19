@@ -101,7 +101,9 @@ export async function loader({ request }) {
         }
         if (locationUpserts.length > 0) await Promise.all(locationUpserts);
       }
-    } catch (_) {}
+    } catch (_) {
+      // best-effort location metadata backfill, ignore failure
+    }
   })();
 
   return { catalogs, rulesMap, overrideCountMap, pageInfo };
@@ -119,7 +121,7 @@ export default function CatalogManager() {
           This app controls which products and sizes are <b>visible</b> to specific B2B customers.
         </s-text>
         <ul style={{ paddingLeft: '20px', margin: '10px 0 0' }}>
-          <li><b>Manage Rules:</b> Block entire sizes (e.g., block all "Shipper" sizes) for a customer group.</li>
+          <li><b>Manage Rules:</b> Block entire sizes (e.g., block all &ldquo;Shipper&rdquo; sizes) for a customer group.</li>
           <li><b>Product Overrides:</b> Select specific products to manually Show/Hide them for a customer.</li>
         </ul>
         <s-text tone="subdued">Any new B2B catalogs created in Shopify will automatically appear in this list.</s-text>
