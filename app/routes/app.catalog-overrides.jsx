@@ -1,5 +1,5 @@
 import { redirect } from "react-router";
-import { useLoaderData, useNavigate, useFetcher } from "react-router";
+import { useLoaderData, useNavigate, useFetcher, useRevalidator } from "react-router";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -21,6 +21,31 @@ export async function loader({ request }) {
   if (!originalCatalogId) return redirect("/app/catalog-manager");
 
   const cleanId = originalCatalogId.includes("/") ? originalCatalogId.split("/").pop() : originalCatalogId;
+
+  // Backup export — DB-only, skips the Shopify product fetch below entirely.
+  // Same route/auth path as the normal page load, just returns a file instead of HTML.
+  if (url.searchParams.get("transfer") === "export") {
+    const overrides = await prisma.productOverride.findMany({
+      where: { catalogId: cleanId },
+      select: { productId: true, hiddenVariantIds: true },
+      orderBy: { productId: "asc" },
+    });
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      catalogId: cleanId,
+      catalogName: catalogName || "catalog",
+      count: overrides.length,
+      overrides,
+    };
+    const safeName = (catalogName || "catalog").replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "");
+    return new Response(JSON.stringify(payload, null, 2), {
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Disposition": `attachment; filename="catalog-overrides-${safeName}-${cleanId}.json"`,
+      },
+    });
+  }
+
   const paginationArgs = before ? `last: 50, before: "${before}"`
     : after  ? `first: 50, after: "${after}"`
     : `first: 50`;
@@ -184,6 +209,47 @@ export async function action({ request }) {
     return { ok: true, intent: "delete", productId };
   }
 
+  if (intent === "remove_all") {
+    const result = await prisma.productOverride.deleteMany({ where: { catalogId } });
+    return { ok: true, intent: "remove_all", deletedCount: result.count };
+  }
+
+  if (intent === "import") {
+    const file = formData.get("file");
+    if (!file || typeof file === "string") return { ok: false, error: "No file provided." };
+
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      return { ok: false, error: "That file isn't valid JSON." };
+    }
+
+    const rows = Array.isArray(parsed) ? parsed : parsed.overrides;
+    if (!Array.isArray(rows)) return { ok: false, error: "File has no overrides array." };
+
+    const valid = rows.filter((r) => r && typeof r.productId === "string");
+    if (valid.length === 0) return { ok: false, error: "No valid override rows found in file." };
+
+    const BATCH = 50;
+    let imported = 0;
+    for (let i = 0; i < valid.length; i += BATCH) {
+      const chunk = valid.slice(i, i + BATCH);
+      await prisma.$transaction(
+        chunk.map((r) =>
+          prisma.productOverride.upsert({
+            where: { catalogId_productId: { catalogId, productId: r.productId } },
+            update: { hiddenVariantIds: r.hiddenVariantIds || [] },
+            create: { catalogId, productId: r.productId, hiddenVariantIds: r.hiddenVariantIds || [] },
+          })
+        )
+      );
+      imported += chunk.length;
+    }
+
+    return { ok: true, intent: "import", importedCount: imported, skippedCount: rows.length - valid.length };
+  }
+
   return { ok: false };
 }
 
@@ -194,13 +260,17 @@ export default function CatalogOverrides() {
   } = useLoaderData();
 
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
 
   // Two separate fetchers so single-save and bulk-save loading states are independent.
   const saveFetcher = useFetcher();
   const bulkFetcher = useFetcher();
+  const transferFetcher = useFetcher();
+  const importFileRef = useRef(null);
 
   const isSingleSaving = saveFetcher.state !== "idle";
   const isBulkSaving = bulkFetcher.state !== "idle";
+  const isTransferring = transferFetcher.state !== "idle";
 
   const [pendingHidden, setPendingHidden] = useState({});
   const initialHidden = useRef({});
@@ -295,6 +365,49 @@ export default function CatalogOverrides() {
       setPendingHidden((prev) => ({ ...prev }));
     }
   }, [bulkFetcher.state, bulkFetcher.data]);
+
+  // When an import or remove-all completes, toast the result and reload loader
+  // data (overridesMap) so the page reflects the new DB state immediately.
+  useEffect(() => {
+    if (transferFetcher.state === "idle" && transferFetcher.data) {
+      const d = transferFetcher.data;
+      if (d.ok && d.intent === "remove_all") {
+        shopify.toast.show(`Removed all ${d.deletedCount} override${d.deletedCount !== 1 ? "s" : ""} for this catalog.`);
+        revalidator.revalidate();
+      } else if (d.ok && d.intent === "import") {
+        const skipped = d.skippedCount ? ` (${d.skippedCount} row${d.skippedCount !== 1 ? "s" : ""} skipped)` : "";
+        shopify.toast.show(`Imported ${d.importedCount} override${d.importedCount !== 1 ? "s" : ""}${skipped}.`);
+        revalidator.revalidate();
+      } else if (!d.ok) {
+        shopify.toast.show(d.error || "Something went wrong.", { isError: true });
+      }
+    }
+  }, [transferFetcher.state, transferFetcher.data, revalidator]);
+
+  const handleImportFileChosen = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file next time
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("intent", "import");
+    formData.append("catalogId", catalogDbId);
+    formData.append("file", file);
+    transferFetcher.submit(formData, { method: "post" });
+    shopify.toast.show("Importing overrides…");
+  };
+
+  const handleRemoveAllOverrides = () => {
+    if (!window.confirm(
+      `This will DELETE all product-level overrides for "${catalogName}" (currently affecting products with a saved override). ` +
+      `Products revert to whatever the blanket pack-type rule for this catalog says (or fully visible, if there is none). ` +
+      `Export a backup first if you haven't already. Continue?`
+    )) return;
+    const formData = new FormData();
+    formData.append("intent", "remove_all");
+    formData.append("catalogId", catalogDbId);
+    transferFetcher.submit(formData, { method: "post" });
+    shopify.toast.show("Removing all overrides…");
+  };
 
   const filteredProducts = useMemo(() => {
     if (!products) return [];
@@ -468,6 +581,48 @@ export default function CatalogOverrides() {
         <s-text tone="subdued" style={{ marginTop: "4px" }}>
           Use <b>Hide All / Show All</b> to bulk change, then hit <b>Save All Changes</b> to apply.
         </s-text>
+      </s-section>
+
+      <s-section heading="Backup &amp; bulk tools (whole catalog)">
+        <s-text tone="subdued">
+          These act on every saved override for <b>{catalogName}</b> — not just the products currently loaded on this page.
+        </s-text>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
+          <s-button
+            variant="secondary"
+            size="slim"
+            href={`/app/catalog-overrides?catalogId=${encodeURIComponent(catalogDbId)}&catalogName=${encodeURIComponent(catalogName)}&transfer=export`}
+            download
+          >
+            ⬇ Export overrides (backup)
+          </s-button>
+
+          <s-button
+            variant="secondary"
+            size="slim"
+            disabled={isTransferring || undefined}
+            onClick={() => importFileRef.current?.click()}
+          >
+            {isTransferring ? "Working…" : "⬆ Import overrides"}
+          </s-button>
+          <input
+            ref={importFileRef}
+            type="file"
+            accept="application/json"
+            onChange={handleImportFileChosen}
+            style={{ display: "none" }}
+          />
+
+          <s-button
+            variant="secondary"
+            tone="critical"
+            size="slim"
+            disabled={isTransferring || undefined}
+            onClick={handleRemoveAllOverrides}
+          >
+            🗑 Remove all overrides
+          </s-button>
+        </div>
       </s-section>
 
           {/* Sticky save bar */}
