@@ -143,7 +143,13 @@ export async function loader({ request }) {
   let locationId = url.searchParams.get("locationId");
   let catalogId  = locationId ? await catalogIdFromLocationGid(prisma, locationId) : null;
 
-  if (customerId) {
+  // resolveB2BContext makes a live Shopify Admin GraphQL call — only fall back
+  // to it when locationId didn't already resolve the catalog. Previously this
+  // ran unconditionally on every request (locationId is normally always sent
+  // too), so any transient slowness/rate-limiting on that one extra API call
+  // 503'd the whole batch and sent every product on the page to "Back Soon",
+  // even though the locationId path had already succeeded.
+  if (customerId && !catalogId) {
     try {
       const b2bContext = await resolveB2BContext(prisma, customerId, shop);
       if (b2bContext) catalogId = b2bContext;
