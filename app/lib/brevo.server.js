@@ -135,17 +135,16 @@ Dutch Rusk Team`;
 // the full onboarding template (no hero banner or feature grid) since this
 // is a transactional order alert, not a campaign.
 export async function sendSalesRepOrderNotification({
-  repEmail, repName, orderName, orderUrl, customerName, companyName, lineItems, subtotal, currency,
+  repEmail, repName, orderName, customerName, companyName, lineItems, subtotal, currency,
 }) {
   const templateId = process.env.BREVO_TEMPLATE_SALES_REP_ORDER;
   const to = { email: repEmail, name: repName || repEmail };
   const params = {
     rep_name: repName || "there",
     order_name: orderName,
-    order_url: orderUrl,
     customer_name: customerName,
     company_name: companyName,
-    line_items: lineItems, // [{ title, sku, quantity, price, imageUrl }]
+    line_items: lineItems, // [{ title, sku, quantity, price, originalPrice, imageUrl }]
     subtotal,
     currency,
   };
@@ -155,6 +154,11 @@ export async function sendSalesRepOrderNotification({
   const greetName = repName || "there";
   const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0668/0861/1129/files/Dutch_Rusk.jpg?v=1785119365";
 
+  const priceLine = (li) => {
+    const hasSaving = li.originalPrice && Number(li.originalPrice) > Number(li.price ?? 0);
+    return hasSaving ? `${fmt(li.originalPrice)} -> ${fmt(li.price)} each` : `${fmt(li.price)} each`;
+  };
+
   const text = `Hi ${greetName},
 
 Good news, ${companyName} just placed an order.
@@ -162,18 +166,20 @@ Good news, ${companyName} just placed an order.
 Order: ${orderName}
 Placed by: ${customerName}
 
-${lineItems.map((li) => `  ${li.quantity} x ${li.title}${li.sku ? ` (${li.sku})` : ""}, ${fmt(li.price)} each`).join("\n")}
+${lineItems.map((li) => `  ${li.quantity} x ${li.title}${li.sku ? ` (${li.sku})` : ""}, ${priceLine(li)}`).join("\n")}
 
 Subtotal: ${fmt(subtotal)}
-
-View the full order here: ${orderUrl}
 
 Cheers,
 Dutch Rusk`;
 
   const rowsHtml = lineItems
-    .map(
-      (li) => `
+    .map((li) => {
+      const hasSaving = li.originalPrice && Number(li.originalPrice) > Number(li.price ?? 0);
+      const priceHtml = hasSaving
+        ? `<span style="color:#8c8c8c; text-decoration:line-through; font-weight:normal; font-size:12px; display:block;">${fmt(li.originalPrice)}</span>${fmt(li.price)}`
+        : fmt(li.price);
+      return `
                 <tr>
                   <td style="padding:12px 0; border-bottom:1px solid #E8E8EC;" width="56">
                     <img src="${li.imageUrl || PLACEHOLDER_IMG}" alt="" width="48" height="48" style="width:48px; height:48px; border-radius:8px; object-fit:cover; display:block; border:1px solid #E8E8EC;" />
@@ -185,10 +191,10 @@ Dutch Rusk`;
                     x${li.quantity}
                   </td>
                   <td style="padding:12px 0; border-bottom:1px solid #E8E8EC; font-size:14px; color:#181344; font-weight:bold; text-align:right; white-space:nowrap;">
-                    ${fmt(li.price)}
+                    ${priceHtml}
                   </td>
-                </tr>`
-    )
+                </tr>`;
+    })
     .join("");
 
   const html = `<!DOCTYPE html>
@@ -259,21 +265,7 @@ Dutch Rusk`;
                 </tr>
 
                 <tr>
-                  <td class="mobile-pad" align="center" style="padding:16px 40px 40px 40px;">
-                    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                      <tr>
-                        <td align="center" style="background-color:#181344; border-radius:6px;">
-                          <a href="${orderUrl}" target="_blank" style="display:inline-block; padding:14px 32px; color:#FEFEFE; text-decoration:none; font-weight:bold; font-size:15px;">
-                            View the order in Shopify &rarr;
-                          </a>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-
-                <tr>
-                  <td class="mobile-pad" style="padding:0 40px 36px 40px; border-top:1px solid #E8E8EC; padding-top:24px;">
+                  <td class="mobile-pad" style="padding:24px 40px 36px 40px; border-top:1px solid #E8E8EC;">
                     <p style="margin:0; font-size:14px; color:#333333; line-height:1.6;">
                       Cheers,<br>
                       <strong style="color:#181344;">Dutch Rusk</strong>

@@ -273,26 +273,35 @@ export const action = async ({ request }) => {
         const customer = repInfo.customer;
         const customerName = [customer?.firstName, customer?.lastName].filter(Boolean).join(" ") || customer?.email || "Customer";
         const companyName = repInfo?.purchasingEntity?.company?.name || customerName;
-        const numericOrderId = String(order.id);
-        const shopHandle = shop.replace(".myshopify.com", "");
-        const orderUrl = `https://admin.shopify.com/store/${shopHandle}/orders/${numericOrderId}`;
 
-        // Fetch a product image per variant for the email's line-item table.
+        // Fetch each variant's image and retail price (for the strikethrough
+        // savings display, same idea as the B2B discount-notes block above
+        // but fetched independently here to keep this block self-contained).
         // Only done once we know a rep will actually be emailed, so a normal
         // order (no rep set up yet) never pays for this extra API call.
-        let imageByVariantId = {};
+        let detailsByVariantId = {};
         if (variantGids.length > 0) {
-          const imgJson = await graphqlJson(
+          const detailsJson = await graphqlJson(
             admin,
-            `query LineItemImages($ids: [ID!]!) {
+            `query LineItemDetails($ids: [ID!]!) {
               nodes(ids: $ids) {
-                ... on ProductVariant { id image { url } }
+                ... on ProductVariant {
+                  id
+                  image { url }
+                  compareAtPrice
+                  standardRetail: metafield(namespace: "custom", key: "standard_retail_price") { value }
+                }
               }
             }`,
             { ids: variantGids }
           );
-          for (const node of imgJson?.data?.nodes ?? []) {
-            if (node?.id) imageByVariantId[node.id.split("/").pop()] = node.image?.url ?? null;
+          for (const node of detailsJson?.data?.nodes ?? []) {
+            if (node?.id) {
+              detailsByVariantId[node.id.split("/").pop()] = {
+                imageUrl: node.image?.url ?? null,
+                originalPrice: node.standardRetail?.value ?? node.compareAtPrice ?? null,
+              };
+            }
           }
         }
 
@@ -300,16 +309,20 @@ export const action = async ({ request }) => {
           repEmail: rep.email,
           repName: rep.name,
           orderName,
-          orderUrl,
           customerName,
           companyName,
-          lineItems: lineItems.map((li) => ({
-            title: li.title,
-            sku: li.sku,
-            quantity: li.quantity,
-            price: li.price,
-            imageUrl: imageByVariantId[String(li.variant_id)] || null,
-          })),
+          lineItems: lineItems.map((li) => {
+            const details = detailsByVariantId[String(li.variant_id)] || {};
+            const originalPrice = parseFloat(details.originalPrice ?? "0");
+            return {
+              title: li.title,
+              sku: li.sku,
+              quantity: li.quantity,
+              price: li.price,
+              originalPrice: originalPrice > parseFloat(li.price ?? "0") ? originalPrice : null,
+              imageUrl: details.imageUrl || null,
+            };
+          }),
           subtotal: order.subtotal_price ?? order.total_price,
           currency: order.currency,
         });

@@ -75,6 +75,7 @@ export async function action({ request }) {
                   sku
                   quantity
                   originalUnitPriceSet { shopMoney { amount currencyCode } }
+                  discountedUnitPriceSet { shopMoney { amount currencyCode } }
                   image { url }
                 }
               }
@@ -92,8 +93,6 @@ export async function action({ request }) {
 
       const customerName = [order.customer?.firstName, order.customer?.lastName].filter(Boolean).join(" ") || order.customer?.email || "Customer";
       const companyName = order.purchasingEntity?.company?.name || customerName;
-      const numericOrderId = order.id.split("/").pop();
-      const shopHandle = shop.replace(".myshopify.com", "");
       const currency = order.subtotalPriceSet?.shopMoney?.currencyCode || "NZD";
 
       const { sendSalesRepOrderNotification } = await import("../lib/brevo.server");
@@ -101,14 +100,14 @@ export async function action({ request }) {
         repEmail: testEmail,
         repName: "there",
         orderName: order.name,
-        orderUrl: `https://admin.shopify.com/store/${shopHandle}/orders/${numericOrderId}`,
         customerName,
         companyName,
         lineItems: order.lineItems.nodes.map((li) => ({
           title: li.title,
           sku: li.sku,
           quantity: li.quantity,
-          price: li.originalUnitPriceSet?.shopMoney?.amount,
+          price: li.discountedUnitPriceSet?.shopMoney?.amount,
+          originalPrice: li.originalUnitPriceSet?.shopMoney?.amount,
           imageUrl: li.image?.url || null,
         })),
         subtotal: order.subtotalPriceSet?.shopMoney?.amount,
