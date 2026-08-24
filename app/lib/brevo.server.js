@@ -129,6 +129,11 @@ Dutch Rusk Team`;
   return sendRawFallback({ to, subject, textBody: text, htmlBody: null, tags: ["dr_b2b_reset"] });
 }
 
+// Uses the same design system as the canonical Dutch Rusk / Worthy branded
+// email template: warm off-white page (#FAF8F5), white rounded content card,
+// navy brand colour (#181344), system-ui font stack. Kept lean compared to
+// the full onboarding template (no hero banner or feature grid) since this
+// is a transactional order alert, not a campaign.
 export async function sendSalesRepOrderNotification({
   repEmail, repName, orderName, orderUrl, customerName, companyName, lineItems, subtotal, currency,
 }) {
@@ -140,39 +145,165 @@ export async function sendSalesRepOrderNotification({
     order_url: orderUrl,
     customer_name: customerName,
     company_name: companyName,
-    line_items: lineItems, // [{ title, sku, quantity, price }]
+    line_items: lineItems, // [{ title, sku, quantity, price, imageUrl }]
     subtotal,
     currency,
   };
   if (templateId) return sendTemplate({ templateId, to, params, tags: ["dr_sales_rep_order"] });
 
-  const fmt = (n) => `${currency ?? ""} ${Number(n).toFixed(2)}`.trim();
-  const rows = lineItems
-    .map((li) => `  ${li.quantity} x ${li.title}${li.sku ? ` (${li.sku})` : ""} — ${fmt(li.price)}`)
-    .join("\n");
-  const rowsHtml = lineItems
-    .map((li) => `<tr><td style="padding:4px 8px;">${li.quantity} x ${li.title}${li.sku ? ` (${li.sku})` : ""}</td><td style="padding:4px 8px;text-align:right;">${fmt(li.price)}</td></tr>`)
-    .join("");
+  const fmt = (n) => `${currency ?? ""} ${Number(n ?? 0).toFixed(2)}`.trim();
+  const greetName = repName || "there";
+  const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0668/0861/1129/files/Dutch_Rusk.jpg?v=1785119365";
 
-  const subject = `New order ${orderName} — ${companyName}`;
-  const text = `Hi ${params.rep_name},
+  const text = `Hi ${greetName},
 
-${companyName} (${customerName}) just placed order ${orderName}.
+Good news, ${companyName} just placed an order.
 
-${rows}
+Order: ${orderName}
+Placed by: ${customerName}
+
+${lineItems.map((li) => `  ${li.quantity} x ${li.title}${li.sku ? ` (${li.sku})` : ""}, ${fmt(li.price)} each`).join("\n")}
 
 Subtotal: ${fmt(subtotal)}
 
-View the order: ${orderUrl}
+View the full order here: ${orderUrl}
 
+Cheers,
 Dutch Rusk`;
-  const html = `<p>Hi ${params.rep_name},</p>
-<p><strong>${companyName}</strong> (${customerName}) just placed order <strong>${orderName}</strong>.</p>
-<table style="border-collapse:collapse;width:100%;max-width:500px;">${rowsHtml}</table>
-<p><strong>Subtotal:</strong> ${fmt(subtotal)}</p>
-<p><a href="${orderUrl}">View the order in Shopify</a></p>
-<p>Dutch Rusk</p>`;
-  return sendRawFallback({ to, subject, textBody: text, htmlBody: html, tags: ["dr_sales_rep_order"] });
+
+  const rowsHtml = lineItems
+    .map(
+      (li) => `
+                <tr>
+                  <td style="padding:12px 0; border-bottom:1px solid #E8E8EC;" width="56">
+                    <img src="${li.imageUrl || PLACEHOLDER_IMG}" alt="" width="48" height="48" style="width:48px; height:48px; border-radius:8px; object-fit:cover; display:block; border:1px solid #E8E8EC;" />
+                  </td>
+                  <td style="padding:12px 12px; border-bottom:1px solid #E8E8EC; font-size:14px; color:#333333; line-height:1.4;">
+                    <strong style="color:#181344;">${li.title}</strong>${li.sku ? `<br><span style="color:#666670; font-size:12px;">${li.sku}</span>` : ""}
+                  </td>
+                  <td style="padding:12px 0; border-bottom:1px solid #E8E8EC; font-size:14px; color:#333333; text-align:center; white-space:nowrap;">
+                    x${li.quantity}
+                  </td>
+                  <td style="padding:12px 0; border-bottom:1px solid #E8E8EC; font-size:14px; color:#181344; font-weight:bold; text-align:right; white-space:nowrap;">
+                    ${fmt(li.price)}
+                  </td>
+                </tr>`
+    )
+    .join("");
+
+  const html = `<!DOCTYPE html>
+<html lang="en-NZ">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="x-apple-disable-message-reformatting">
+<title>New order ${orderName}</title>
+<style>
+  @media only screen and (max-width: 600px) {
+    .main-container { width: 100% !important; max-width: 100% !important; }
+    .mobile-pad { padding-left: 20px !important; padding-right: 20px !important; }
+  }
+</style>
+</head>
+<body style="margin:0; padding:0; background-color:#FAF8F5; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#333333; -webkit-font-smoothing:antialiased;">
+  <div style="display:none; font-size:1px; color:#FAF8F5; line-height:1px; max-height:0px; max-width:0px; opacity:0; overflow:hidden;">
+    ${companyName} just placed order ${orderName}, subtotal ${fmt(subtotal)}.
+  </div>
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#FAF8F5; padding:30px 0;">
+    <tr>
+      <td align="center">
+        <!--[if mso | IE]>
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600" align="center" style="width:600px;">
+          <tr><td>
+        <![endif]-->
+        <table class="main-container" role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:600px; margin:0 auto;">
+
+          <tr>
+            <td style="padding:15px 40px 25px 40px; text-align:center;">
+              <img src="https://cdn.shopify.com/s/files/1/0668/0861/1129/files/Worthy_Logo_Full_Colour_1.png?v=1785119365" alt="Worthy" height="36" style="height:36px; width:auto; display:inline-block; vertical-align:middle; border:0; margin-right:12px;" />
+              <img src="https://cdn.shopify.com/s/files/1/0668/0861/1129/files/Dutch_Rusk.jpg?v=1785119365" alt="Dutch Rusk" height="36" style="height:36px; width:auto; display:inline-block; vertical-align:middle; border:0; margin-left:12px;" />
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 10px;">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#FEFEFE; border-radius:12px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.03);">
+
+                <tr>
+                  <td class="mobile-pad" style="padding:36px 40px 8px 40px;">
+                    <h1 style="margin:0 0 16px 0; color:#181344; font-size:24px; font-weight:800; line-height:1.3;">
+                      Hi ${greetName},
+                    </h1>
+                    <p style="margin:0 0 6px 0; font-size:16px; line-height:1.6; color:#333333;">
+                      Good news, <strong style="color:#181344;">${companyName}</strong> just placed an order.
+                    </p>
+                    <p style="margin:0; font-size:14px; color:#666670;">
+                      Order <strong style="color:#181344;">${orderName}</strong>, placed by ${customerName}
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="mobile-pad" style="padding:20px 40px 0 40px;">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                      ${rowsHtml}
+                    </table>
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-top:4px;">
+                      <tr>
+                        <td style="padding:16px 0; text-align:right; font-size:15px; color:#181344;">
+                          <strong>Subtotal: ${fmt(subtotal)}</strong>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="mobile-pad" align="center" style="padding:16px 40px 40px 40px;">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td align="center" style="background-color:#181344; border-radius:6px;">
+                          <a href="${orderUrl}" target="_blank" style="display:inline-block; padding:14px 32px; color:#FEFEFE; text-decoration:none; font-weight:bold; font-size:15px;">
+                            View the order in Shopify &rarr;
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="mobile-pad" style="padding:0 40px 36px 40px; border-top:1px solid #E8E8EC; padding-top:24px;">
+                    <p style="margin:0; font-size:14px; color:#333333; line-height:1.6;">
+                      Cheers,<br>
+                      <strong style="color:#181344;">Dutch Rusk</strong>
+                    </p>
+                  </td>
+                </tr>
+
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="mobile-pad" style="padding:24px 20px; text-align:center;">
+              <div style="color:#181344; font-size:13px; font-weight:bold; margin-bottom:4px;">Dutch Rusk</div>
+              <div style="color:#666670; font-size:12px; line-height:1.5;">14 Echodale Place, Stoke, Nelson 7011, New Zealand</div>
+            </td>
+          </tr>
+
+        </table>
+        <!--[if mso | IE]>
+          </td></tr>
+        </table>
+        <![endif]-->
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  return sendRawFallback({ to, subject: `New order ${orderName}, ${companyName}`, textBody: text, htmlBody: html, tags: ["dr_sales_rep_order"] });
 }
 
 export async function sendLoginOtp({ email, firstName, storeDisplayName, username, code, expiresInMin }) {

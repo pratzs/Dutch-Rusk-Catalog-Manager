@@ -18,7 +18,7 @@ export async function loader({ request }) {
 export async function action({ request }) {
   const { authenticate } = await import("../shopify.server");
   const { default: prisma } = await import("../db.server");
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
@@ -58,23 +58,63 @@ export async function action({ request }) {
   if (intent === "send_test") {
     const testEmail = String(form.get("testEmail") || "").trim();
     if (!testEmail) return { error: "Enter an email address to send the test to." };
+
     try {
+      // Pull your actual most recent order so the test uses real product
+      // names, real customer/company, and real prices -- not made-up data.
+      const res = await admin.graphql(
+        `query LatestOrder {
+          orders(first: 1, sortKey: CREATED_AT, reverse: true) {
+            nodes {
+              id
+              name
+              customer { firstName lastName email }
+              lineItems(first: 20) {
+                nodes {
+                  title
+                  sku
+                  quantity
+                  originalUnitPriceSet { shopMoney { amount currencyCode } }
+                  image { url }
+                }
+              }
+              subtotalPriceSet { shopMoney { amount currencyCode } }
+              purchasingEntity {
+                ... on PurchasingCompany { company { name } }
+              }
+            }
+          }
+        }`
+      );
+      const { data } = await res.json();
+      const order = data?.orders?.nodes?.[0];
+      if (!order) return { error: "Couldn't find any orders on this store to use as a test." };
+
+      const customerName = [order.customer?.firstName, order.customer?.lastName].filter(Boolean).join(" ") || order.customer?.email || "Customer";
+      const companyName = order.purchasingEntity?.company?.name || customerName;
+      const numericOrderId = order.id.split("/").pop();
+      const shopHandle = shop.replace(".myshopify.com", "");
+      const currency = order.subtotalPriceSet?.shopMoney?.currencyCode || "NZD";
+
       const { sendSalesRepOrderNotification } = await import("../lib/brevo.server");
       await sendSalesRepOrderNotification({
         repEmail: testEmail,
-        repName: "Test Rep",
-        orderName: "#TEST-1001",
-        orderUrl: `https://admin.shopify.com/store/${shop.replace(".myshopify.com", "")}/orders`,
-        customerName: "Sample Customer",
-        companyName: "Sample Dairy Ltd",
-        lineItems: [
-          { title: "10pc Extra Peppermint Pellets 14g x 24ct", sku: "372513_Outer", quantity: 2, price: "28.53" },
-          { title: "Mars - Skittles 200g Fruit Large x 12ct", sku: "371663_Bag", quantity: 1, price: "3.63" },
-        ],
-        subtotal: "60.69",
-        currency: "NZD",
+        repName: "there",
+        orderName: order.name,
+        orderUrl: `https://admin.shopify.com/store/${shopHandle}/orders/${numericOrderId}`,
+        customerName,
+        companyName,
+        lineItems: order.lineItems.nodes.map((li) => ({
+          title: li.title,
+          sku: li.sku,
+          quantity: li.quantity,
+          price: li.originalUnitPriceSet?.shopMoney?.amount,
+          imageUrl: li.image?.url || null,
+        })),
+        subtotal: order.subtotalPriceSet?.shopMoney?.amount,
+        currency,
       });
-      return { ok: `Test email sent to ${testEmail}. This is sample data, not a real order.` };
+      return { ok: `Sent. Used your real order ${order.name} (${companyName}) as the test data, check ${testEmail}.` };
     } catch (e) {
       return { error: `Send failed: ${e.message || e}` };
     }
@@ -171,8 +211,8 @@ export default function SalesReps() {
 
       <s-section heading="Send a test email">
         <s-text tone="subdued">
-          Sends a sample order notification (fake order, real formatting) so you can check how it looks
-          before real orders start triggering it.
+          Grabs your most recent real order and sends it to an address of your choosing, so you can check
+          exactly what a sales rep will actually receive.
         </s-text>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "flex-end", marginTop: "10px" }}>
           <div>

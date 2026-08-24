@@ -277,6 +277,25 @@ export const action = async ({ request }) => {
         const shopHandle = shop.replace(".myshopify.com", "");
         const orderUrl = `https://admin.shopify.com/store/${shopHandle}/orders/${numericOrderId}`;
 
+        // Fetch a product image per variant for the email's line-item table.
+        // Only done once we know a rep will actually be emailed, so a normal
+        // order (no rep set up yet) never pays for this extra API call.
+        let imageByVariantId = {};
+        if (variantGids.length > 0) {
+          const imgJson = await graphqlJson(
+            admin,
+            `query LineItemImages($ids: [ID!]!) {
+              nodes(ids: $ids) {
+                ... on ProductVariant { id image { url } }
+              }
+            }`,
+            { ids: variantGids }
+          );
+          for (const node of imgJson?.data?.nodes ?? []) {
+            if (node?.id) imageByVariantId[node.id.split("/").pop()] = node.image?.url ?? null;
+          }
+        }
+
         await sendSalesRepOrderNotification({
           repEmail: rep.email,
           repName: rep.name,
@@ -289,6 +308,7 @@ export const action = async ({ request }) => {
             sku: li.sku,
             quantity: li.quantity,
             price: li.price,
+            imageUrl: imageByVariantId[String(li.variant_id)] || null,
           })),
           subtotal: order.subtotal_price ?? order.total_price,
           currency: order.currency,
