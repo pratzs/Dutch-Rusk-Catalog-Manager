@@ -55,15 +55,43 @@ export async function action({ request }) {
     return { ok: "Removed." };
   }
 
+  if (intent === "send_test") {
+    const testEmail = String(form.get("testEmail") || "").trim();
+    if (!testEmail) return { error: "Enter an email address to send the test to." };
+    try {
+      const { sendSalesRepOrderNotification } = await import("../lib/brevo.server");
+      await sendSalesRepOrderNotification({
+        repEmail: testEmail,
+        repName: "Test Rep",
+        orderName: "#TEST-1001",
+        orderUrl: `https://admin.shopify.com/store/${shop.replace(".myshopify.com", "")}/orders`,
+        customerName: "Sample Customer",
+        companyName: "Sample Dairy Ltd",
+        lineItems: [
+          { title: "10pc Extra Peppermint Pellets 14g x 24ct", sku: "372513_Outer", quantity: 2, price: "28.53" },
+          { title: "Mars - Skittles 200g Fruit Large x 12ct", sku: "371663_Bag", quantity: 1, price: "3.63" },
+        ],
+        subtotal: "60.69",
+        currency: "NZD",
+      });
+      return { ok: `Test email sent to ${testEmail}. This is sample data, not a real order.` };
+    } catch (e) {
+      return { error: `Send failed: ${e.message || e}` };
+    }
+  }
+
   return { error: "Unknown action." };
 }
 
 export default function SalesReps() {
   const { reps } = useLoaderData();
   const fetcher = useFetcher();
+  const testFetcher = useFetcher();
   const busy = fetcher.state !== "idle";
+  const testBusy = testFetcher.state !== "idle";
 
   const [form, setForm] = useState({ repCode: "", name: "", email: "" });
+  const [testEmail, setTestEmail] = useState("");
 
   const submitAdd = () => {
     if (!form.repCode || !form.name || !form.email) return;
@@ -74,6 +102,14 @@ export default function SalesReps() {
     fd.set("email", form.email);
     fetcher.submit(fd, { method: "post" });
     setForm({ repCode: "", name: "", email: "" });
+  };
+
+  const submitTest = () => {
+    if (!testEmail) return;
+    const fd = new FormData();
+    fd.set("intent", "send_test");
+    fd.set("testEmail", testEmail);
+    testFetcher.submit(fd, { method: "post" });
   };
 
   return (
@@ -131,6 +167,34 @@ export default function SalesReps() {
         <s-text tone="subdued" style={{ marginTop: "8px" }}>
           Adding a rep code that already exists updates that rep&apos;s name/email instead of creating a duplicate.
         </s-text>
+      </s-section>
+
+      <s-section heading="Send a test email">
+        <s-text tone="subdued">
+          Sends a sample order notification (fake order, real formatting) so you can check how it looks
+          before real orders start triggering it.
+        </s-text>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "flex-end", marginTop: "10px" }}>
+          <div>
+            <label style={labelStyle} htmlFor="test-email-input">Send test to</label>
+            <input
+              id="test-email-input"
+              style={inputStyle}
+              value={testEmail}
+              onChange={(e) => setTestEmail(e.target.value)}
+              placeholder="you@worthy.nz"
+            />
+          </div>
+          <s-button variant="secondary" disabled={testBusy || undefined} onClick={submitTest}>
+            {testBusy ? "Sending…" : "Send test email"}
+          </s-button>
+        </div>
+        {testFetcher.data?.error ? (
+          <s-text tone="critical" style={{ marginTop: "8px" }}>{testFetcher.data.error}</s-text>
+        ) : null}
+        {testFetcher.data?.ok ? (
+          <s-text tone="success" style={{ marginTop: "8px" }}>{testFetcher.data.ok}</s-text>
+        ) : null}
       </s-section>
 
       <s-section heading={`Sales reps (${reps.length})`}>
