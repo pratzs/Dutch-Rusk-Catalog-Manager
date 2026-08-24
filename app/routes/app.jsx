@@ -23,6 +23,7 @@ export default function App() {
         <s-link href="/app">Home</s-link>
         <s-link href="/app/catalog-manager">Catalog Manager</s-link>
         <s-link href="/app/customers">Customers</s-link>
+        <s-link href="/app/sales-reps">Sales Reps</s-link>
         <s-link href="/app/audit">Audit Report</s-link>
         <s-link href="/app/clone">Copy Rules</s-link>
         <s-link href="/app/migrate">Migrate Tool</s-link>

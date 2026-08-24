@@ -129,6 +129,52 @@ Dutch Rusk Team`;
   return sendRawFallback({ to, subject, textBody: text, htmlBody: null, tags: ["dr_b2b_reset"] });
 }
 
+export async function sendSalesRepOrderNotification({
+  repEmail, repName, orderName, orderUrl, customerName, companyName, lineItems, subtotal, currency,
+}) {
+  const templateId = process.env.BREVO_TEMPLATE_SALES_REP_ORDER;
+  const to = { email: repEmail, name: repName || repEmail };
+  const params = {
+    rep_name: repName || "there",
+    order_name: orderName,
+    order_url: orderUrl,
+    customer_name: customerName,
+    company_name: companyName,
+    line_items: lineItems, // [{ title, sku, quantity, price }]
+    subtotal,
+    currency,
+  };
+  if (templateId) return sendTemplate({ templateId, to, params, tags: ["dr_sales_rep_order"] });
+
+  const fmt = (n) => `${currency ?? ""} ${Number(n).toFixed(2)}`.trim();
+  const rows = lineItems
+    .map((li) => `  ${li.quantity} x ${li.title}${li.sku ? ` (${li.sku})` : ""} — ${fmt(li.price)}`)
+    .join("\n");
+  const rowsHtml = lineItems
+    .map((li) => `<tr><td style="padding:4px 8px;">${li.quantity} x ${li.title}${li.sku ? ` (${li.sku})` : ""}</td><td style="padding:4px 8px;text-align:right;">${fmt(li.price)}</td></tr>`)
+    .join("");
+
+  const subject = `New order ${orderName} — ${companyName}`;
+  const text = `Hi ${params.rep_name},
+
+${companyName} (${customerName}) just placed order ${orderName}.
+
+${rows}
+
+Subtotal: ${fmt(subtotal)}
+
+View the order: ${orderUrl}
+
+Dutch Rusk`;
+  const html = `<p>Hi ${params.rep_name},</p>
+<p><strong>${companyName}</strong> (${customerName}) just placed order <strong>${orderName}</strong>.</p>
+<table style="border-collapse:collapse;width:100%;max-width:500px;">${rowsHtml}</table>
+<p><strong>Subtotal:</strong> ${fmt(subtotal)}</p>
+<p><a href="${orderUrl}">View the order in Shopify</a></p>
+<p>Dutch Rusk</p>`;
+  return sendRawFallback({ to, subject, textBody: text, htmlBody: html, tags: ["dr_sales_rep_order"] });
+}
+
 export async function sendLoginOtp({ email, firstName, storeDisplayName, username, code, expiresInMin }) {
   const templateId = process.env.BREVO_TEMPLATE_OTP;
   const to = { email, name: firstName || email };

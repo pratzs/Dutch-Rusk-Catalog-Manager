@@ -58,7 +58,7 @@ export const action = async ({ request }) => {
   const { authenticate } = await import("../shopify.server");
 
   // ── Standard Webhook Authentication ──────────────────────────────────────
-  const { topic, admin, payload } = await authenticate.webhook(request);
+  const { topic, admin, payload, shop } = await authenticate.webhook(request);
 
   if (topic !== "ORDERS_CREATE") {
     return new Response("Unhandled topic", { status: 200 });
@@ -228,6 +228,97 @@ export const action = async ({ request }) => {
   } catch (err) {
     // Log but always return 200 — a non-200 causes Shopify to retry 19 times
     console.error(`[orders/create] Unhandled error for order ${order?.id}:`, err);
+  }
+
+  // ── Sales rep order notification ─────────────────────────────────────────
+  // Independent of the B2B discount-notes logic above: a sales rep should be
+  // notified of a customer's order regardless of whether that order happened
+  // to carry a catalog discount, so this runs in its own try/catch and never
+  // gates on (or is gated by) the block above.
+  try {
+    const orderId = `gid://shopify/Order/${order.id}`;
+    const repInfoJson = await graphqlJson(
+      admin,
+      `query OrderSalesRepInfo($id: ID!) {
+        order(id: $id) {
+          customAttributes { key value }
+          customer {
+            firstName
+            lastName
+            email
+            salesRepCode: metafield(namespace: "custom", key: "sales_reps") { value }
+          }
+          purchasingEntity {
+            ... on PurchasingCompany {
+              company { name }
+            }
+          }
+        }
+      }`,
+      { id: orderId }
+    );
+
+    const repInfo = repInfoJson?.data?.order;
+    const alreadyNotified = repInfo?.customAttributes?.some((a) => a.key === "Sales Rep Notified");
+    const repCode = repInfo?.customer?.salesRepCode?.value?.trim();
+
+    if (!alreadyNotified && repCode) {
+      const { default: prisma } = await import("../db.server");
+      const rep = await prisma.salesRep.findUnique({
+        where: { shop_repCode: { shop, repCode } },
+      });
+
+      if (rep && rep.active && rep.email) {
+        const { sendSalesRepOrderNotification } = await import("../lib/brevo.server");
+        const customer = repInfo.customer;
+        const customerName = [customer?.firstName, customer?.lastName].filter(Boolean).join(" ") || customer?.email || "Customer";
+        const companyName = repInfo?.purchasingEntity?.company?.name || customerName;
+        const numericOrderId = String(order.id);
+        const shopHandle = shop.replace(".myshopify.com", "");
+        const orderUrl = `https://admin.shopify.com/store/${shopHandle}/orders/${numericOrderId}`;
+
+        await sendSalesRepOrderNotification({
+          repEmail: rep.email,
+          repName: rep.name,
+          orderName,
+          orderUrl,
+          customerName,
+          companyName,
+          lineItems: lineItems.map((li) => ({
+            title: li.title,
+            sku: li.sku,
+            quantity: li.quantity,
+            price: li.price,
+          })),
+          subtotal: order.subtotal_price ?? order.total_price,
+          currency: order.currency,
+        });
+
+        await graphqlJson(
+          admin,
+          `mutation MarkRepNotified($input: OrderInput!) {
+            orderUpdate(input: $input) {
+              userErrors { field message }
+            }
+          }`,
+          {
+            input: {
+              id: orderId,
+              customAttributes: [
+                ...(repInfo.customAttributes ?? []).map((a) => ({ key: a.key, value: a.value })),
+                { key: "Sales Rep Notified", value: rep.email },
+              ],
+            },
+          }
+        );
+
+        console.log(`[orders/create] ${orderName}: notified sales rep ${rep.email} (code ${repCode}).`);
+      } else if (repCode) {
+        console.warn(`[orders/create] ${orderName}: customer has sales rep code "${repCode}" but no matching active SalesRep row for shop ${shop}.`);
+      }
+    }
+  } catch (err) {
+    console.error(`[orders/create] Sales rep notification failed for order ${order?.id}:`, err);
   }
 
   return new Response("OK", { status: 200 });

@@ -219,3 +219,23 @@ model B2BOtpCode {
   @@index([b2bUserId])
   @@index([expiresAt])
 }
+
+// Maps a sales rep code (the value stored in a customer's custom.sales_reps
+// metafield, sourced from Ostendo) to the rep's name/email so the
+// orders/create webhook knows who to notify when that customer places an
+// order. Kept in our own DB rather than looked up from Brevo directly —
+// Brevo has no reliable "find contact by custom attribute" API, so this is
+// the single source of truth; Brevo is only used to send the email.
+model SalesRep {
+  id        String   @id @default(cuid())
+  shop      String
+  repCode   String   // matches customer metafield custom.sales_reps
+  name      String
+  email     String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shop, repCode])
+  @@index([shop])
+}
