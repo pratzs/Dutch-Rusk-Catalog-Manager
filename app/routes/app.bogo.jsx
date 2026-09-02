@@ -175,7 +175,7 @@ export async function action({ request }) {
   }
 }
 
-const emptyForm = { id: "", label: "", buyQty: "", getQty: "", variantIds: [], variantLabels: [] };
+const emptyForm = { id: "", label: "", buyQty: "", getQty: "", items: [] };
 
 export default function Bogo() {
   const { bundles } = useLoaderData();
@@ -194,24 +194,31 @@ export default function Bogo() {
       type: "product",
       multiple: true,
       filter: { variants: true },
-      selectionIds: form.variantIds.map((id) => ({ id })),
     });
     if (!selection) return;
 
-    const variantIds = [];
-    const variantLabels = [];
+    const picked = [];
     for (const item of selection) {
       if (item.variants && item.variants.length) {
         for (const v of item.variants) {
-          variantIds.push(v.id);
-          variantLabels.push(`${item.title} - ${v.title}`);
+          picked.push({ id: v.id, label: `${item.title} - ${v.title}`, imageUrl: v.image?.originalSrc ?? item.images?.[0]?.originalSrc ?? null });
         }
       } else {
-        variantIds.push(item.id);
-        variantLabels.push(item.title);
+        picked.push({ id: item.id, label: item.title, imageUrl: item.images?.[0]?.originalSrc ?? null });
       }
     }
-    setForm((f) => ({ ...f, variantIds, variantLabels }));
+
+    // Additive: merge newly picked items into the existing list rather than
+    // replacing it, so re-opening the picker doesn't wipe out prior selections.
+    setForm((f) => {
+      const existingIds = new Set(f.items.map((it) => it.id));
+      const merged = [...f.items, ...picked.filter((it) => !existingIds.has(it.id))];
+      return { ...f, items: merged };
+    });
+  };
+
+  const removeItem = (id) => {
+    setForm((f) => ({ ...f, items: f.items.filter((it) => it.id !== id) }));
   };
 
   const startEdit = (bundle) => {
@@ -221,8 +228,11 @@ export default function Bogo() {
       label: bundle.label,
       buyQty: String(bundle.buyQty),
       getQty: String(bundle.getQty),
-      variantIds: bundle.variantIds,
-      variantLabels: [`${bundle.variantIds.length} variant(s) currently selected — use "Choose products" to change`],
+      items: bundle.variants.map((v) => ({
+        id: v.id,
+        label: v.variantTitle ? `${v.productTitle} - ${v.variantTitle}` : v.productTitle,
+        imageUrl: v.imageUrl,
+      })),
     });
   };
 
@@ -237,14 +247,14 @@ export default function Bogo() {
   };
 
   const submitSave = () => {
-    if (!form.label || !form.buyQty || !form.getQty || !form.variantIds.length) return;
+    if (!form.label || !form.buyQty || !form.getQty || !form.items.length) return;
     const fd = new FormData();
     fd.set("intent", "save_bundle");
     fd.set("id", form.id);
     fd.set("label", form.label);
     fd.set("buyQty", form.buyQty);
     fd.set("getQty", form.getQty);
-    fd.set("variantIds", JSON.stringify(form.variantIds));
+    fd.set("variantIds", JSON.stringify(form.items.map((it) => it.id)));
     fetcher.submit(fd, { method: "post" });
     cancelEdit();
   };
@@ -360,13 +370,32 @@ export default function Bogo() {
               </div>
             </div>
             <div>
-              <s-button variant="secondary" onClick={pickProducts}>Choose products / variants</s-button>
-              {form.variantLabels.length ? (
-                <div style={{ marginTop: "8px", fontSize: 12, color: "#6d7175" }}>
-                  {form.variantLabels.slice(0, 10).map((l, i) => <div key={i}>{l}</div>)}
-                  {form.variantLabels.length > 10 ? <div>…and {form.variantLabels.length - 10} more</div> : null}
+              <label style={labelStyle}>Products in this deal ({form.items.length})</label>
+              {form.items.length ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: 260, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 6, padding: "8px", marginBottom: "8px" }}>
+                  {form.items.map((it) => (
+                    <div key={it.id} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      {it.imageUrl ? (
+                        <img src={it.imageUrl} alt="" width={28} height={28} style={{ objectFit: "cover", borderRadius: 4, border: "1px solid #e5e7eb" }} />
+                      ) : (
+                        <div style={{ width: 28, height: 28, borderRadius: 4, background: "#f1f2f3", flexShrink: 0 }} />
+                      )}
+                      <span style={{ fontSize: 12, flex: 1 }}>{it.label}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeItem(it.id)}
+                        aria-label={`Remove ${it.label}`}
+                        style={{ border: "none", background: "none", color: "#8c1a10", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 4px" }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ) : null}
+              ) : (
+                <s-text tone="subdued">No products selected yet.</s-text>
+              )}
+              <s-button variant="secondary" onClick={pickProducts}>Add products / variants</s-button>
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
               <s-button variant="primary" disabled={busy || undefined} onClick={submitSave}>Save deal</s-button>
