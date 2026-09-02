@@ -23,22 +23,27 @@ export function run(input) {
   const priceListId = company?.priceListId?.value;
   const discountPct = parseFloat(company?.discountPct?.value ?? "0");
 
-  const discounts = [];
+  // Per line: retailPrice (what the customer would pay with zero discounts),
+  // wholesalePrice (after catalog pricing, or same as retail if none applies),
+  // quantity, and variantId. Free units from BOGO Bundles are valued at
+  // wholesalePrice. Exactly ONE discount entry is emitted per cart line at
+  // the end -- Shopify's checkout appears to silently drop a second entry
+  // that targets a cart line already targeted by an earlier entry from the
+  // same function, even though discountApplicationStrategy is ALL and the
+  // Shopify CLI's local function-run simulator doesn't catch this (it only
+  // executes the code, it doesn't validate against checkout's own rules).
+  const lines = [];
 
-  // Effective per-unit price actually paid after the wholesale discount
-  // (or retail price if no wholesale discount applies to this line) --
-  // BOGO Bundles below needs this to know how much a "free" unit is worth.
-  const effectiveLines = [];
+  for (const line of input.cart.lines) {
+    const variant = line.merchandise;
+    if (variant.__typename !== "ProductVariant") continue;
 
-  if (priceListId) {
-    for (const line of input.cart.lines) {
-      const variant = line.merchandise;
-      if (variant.__typename !== "ProductVariant") continue;
+    // currentPrice here is the price RAISED to Retail by the Transformer.
+    const retailPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
+    let wholesalePrice = retailPrice;
 
-      // currentPrice here is the price RAISED to Retail by the Transformer.
-      const currentPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
+    if (priceListId) {
       const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
-
       let targetWholesalePrice = null;
 
       // ── 1. PRIMARY: Explicit Fixed Price from Sync Map ─────────────────────
@@ -62,44 +67,12 @@ export function run(input) {
         targetWholesalePrice = standardRetail * (1 - discountPct / 100);
       }
 
-      let effectivePrice = currentPrice;
-
-      // APPLY DISCOUNT: calculate the markdown from currentPrice (Retail) to Target Wholesale.
-      if (targetWholesalePrice !== null && currentPrice > targetWholesalePrice + 0.01) {
-        const discountAmount = currentPrice - targetWholesalePrice;
-
-        discounts.push({
-          targets: [
-            {
-              cartLine: {
-                id: line.id,
-                quantity: line.quantity,
-              },
-            },
-          ],
-          value: {
-            fixedAmount: {
-              amount: discountAmount.toFixed(2),
-              appliesToEachItem: true,
-            },
-          },
-          message: "B2B Wholesale Price",
-        });
-
-        effectivePrice = targetWholesalePrice;
+      if (targetWholesalePrice !== null && retailPrice > targetWholesalePrice + 0.01) {
+        wholesalePrice = targetWholesalePrice;
       }
+    }
 
-      effectiveLines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, effectivePrice });
-    }
-  } else {
-    // No B2B catalog on this company -- BOGO Bundles still needs line data,
-    // just at plain retail (line.cost.amountPerQuantity) with no wholesale markdown.
-    for (const line of input.cart.lines) {
-      const variant = line.merchandise;
-      if (variant.__typename !== "ProductVariant") continue;
-      const currentPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
-      effectiveLines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, effectivePrice: currentPrice });
-    }
+    lines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, retailPrice, wholesalePrice, freeQty: 0 });
   }
 
   // ── BOGO Bundles ──────────────────────────────────────────────────────────
@@ -126,7 +99,7 @@ export function run(input) {
         if (!buyQty || buyQty <= 0 || !getQty || getQty <= 0 || variantIds.length === 0) continue;
 
         const variantIdSet = new Set(variantIds);
-        const matchingLines = effectiveLines.filter((line) => variantIdSet.has(line.variantId));
+        const matchingLines = lines.filter((line) => variantIdSet.has(line.variantId));
         if (matchingLines.length === 0) continue;
 
         const totalQty = matchingLines.reduce((sum, line) => sum + line.quantity, 0);
@@ -138,37 +111,47 @@ export function run(input) {
 
         // Cheapest matching line first, so the free units come off the
         // lowest-value items -- matches Shopify's own BXGY convention.
-        const sortedLines = [...matchingLines].sort((a, b) => a.effectivePrice - b.effectivePrice);
+        const sortedLines = [...matchingLines].sort((a, b) => a.wholesalePrice - b.wholesalePrice);
 
         for (const line of sortedLines) {
           if (freeUnitsRemaining <= 0) break;
-          if (!line.effectivePrice || line.effectivePrice <= 0) continue;
+          if (!line.wholesalePrice || line.wholesalePrice <= 0) continue;
 
-          const freeFromThisLine = Math.min(freeUnitsRemaining, line.quantity);
+          const availableQty = line.quantity - line.freeQty;
+          const freeFromThisLine = Math.min(freeUnitsRemaining, availableQty);
           if (freeFromThisLine <= 0) continue;
 
-          discounts.push({
-            targets: [
-              {
-                cartLine: {
-                  id: line.id,
-                  quantity: freeFromThisLine,
-                },
-              },
-            ],
-            value: {
-              fixedAmount: {
-                amount: line.effectivePrice.toFixed(2),
-                appliesToEachItem: true,
-              },
-            },
-            message: bundle.label ?? "Buy X Get Y Free",
-          });
-
+          line.freeQty += freeFromThisLine;
           freeUnitsRemaining -= freeFromThisLine;
         }
       }
     }
+  }
+
+  // ── Emit exactly one discount entry per line ───────────────────────────────
+  const discounts = [];
+  for (const line of lines) {
+    const perUnitWholesaleDiscount = line.retailPrice - line.wholesalePrice;
+    const perUnitDiscount = perUnitWholesaleDiscount + (line.freeQty * line.wholesalePrice) / line.quantity;
+    if (perUnitDiscount <= 0.001) continue;
+
+    discounts.push({
+      targets: [
+        {
+          cartLine: {
+            id: line.id,
+            quantity: line.quantity,
+          },
+        },
+      ],
+      value: {
+        fixedAmount: {
+          amount: perUnitDiscount.toFixed(2),
+          appliesToEachItem: true,
+        },
+      },
+      message: line.freeQty > 0 ? "B2B Wholesale Price + Buy X Get Y Free" : "B2B Wholesale Price",
+    });
   }
 
   if (!discounts.length) return EMPTY_DISCOUNT;
