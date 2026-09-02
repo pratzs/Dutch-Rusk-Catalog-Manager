@@ -1,0 +1,15 @@
+api_version = "2026-04"
+
+[[extensions]]
+uid = "bcd977c8-5d56-4f1b-ba1f-c7e7c12f7131"
+type = "function"
+name = "BOGO Bundles"
+handle = "bogo-bundles"
+
+  [extensions.build]
+  typegen_command = "node --version"
+
+  [[extensions.targeting]]
+  target = "cart.lines.discounts.generate.run"
+  input_query = "src/cart_lines_discounts_generate_run.graphql"
+  export = "cart-lines-discounts-generate-run"
