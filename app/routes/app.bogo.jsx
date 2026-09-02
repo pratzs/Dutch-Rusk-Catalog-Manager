@@ -25,7 +25,40 @@ export async function loader({ request }) {
     bundles = [];
   }
 
-  return { shopId, bundles };
+  const allVariantIds = [...new Set(bundles.flatMap((b) => b.variantIds ?? []))];
+  const variantsById = {};
+  if (allVariantIds.length) {
+    const variantsRes = await admin.graphql(
+      `query BogoVariants($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on ProductVariant {
+            id
+            title
+            image { url(transform: {maxWidth: 64, maxHeight: 64}) }
+            product { title featuredImage { url(transform: {maxWidth: 64, maxHeight: 64}) } }
+          }
+        }
+      }`,
+      { variables: { ids: allVariantIds } }
+    );
+    const { data: variantsData } = await variantsRes.json();
+    for (const node of variantsData?.nodes ?? []) {
+      if (!node) continue;
+      variantsById[node.id] = {
+        id: node.id,
+        productTitle: node.product?.title ?? "(unknown product)",
+        variantTitle: node.title,
+        imageUrl: node.image?.url ?? node.product?.featuredImage?.url ?? null,
+      };
+    }
+  }
+
+  const bundlesWithVariants = bundles.map((b) => ({
+    ...b,
+    variants: (b.variantIds ?? []).map((id) => variantsById[id] ?? { id, productTitle: "(product not found)", variantTitle: "", imageUrl: null }),
+  }));
+
+  return { shopId, bundles: bundlesWithVariants };
 }
 
 async function findPricingDiscountId(admin) {
@@ -256,7 +289,22 @@ export default function Bogo() {
                 <tr key={b.id} style={{ borderTop: "1px solid #e5e7eb", fontSize: 13 }}>
                   <td style={cell}><strong>{b.label}</strong></td>
                   <td style={cell}>Buy {b.buyQty}, get {b.getQty} free</td>
-                  <td style={cell}>{b.variantIds.length} variant(s)</td>
+                  <td style={cell}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: 160, overflowY: "auto", minWidth: 220 }}>
+                      {b.variants.map((v) => (
+                        <div key={v.id} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          {v.imageUrl ? (
+                            <img src={v.imageUrl} alt="" width={28} height={28} style={{ objectFit: "cover", borderRadius: 4, border: "1px solid #e5e7eb" }} />
+                          ) : (
+                            <div style={{ width: 28, height: 28, borderRadius: 4, background: "#f1f2f3", flexShrink: 0 }} />
+                          )}
+                          <span style={{ fontSize: 12 }}>
+                            {v.productTitle}{v.variantTitle ? ` - ${v.variantTitle}` : ""}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </td>
                   <td style={cell}>
                     <div style={{ display: "flex", gap: "6px" }}>
                       <s-button size="slim" variant="secondary" onClick={() => startEdit(b)}>Edit</s-button>
