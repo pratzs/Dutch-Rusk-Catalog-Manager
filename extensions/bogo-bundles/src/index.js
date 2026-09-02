@@ -30,6 +30,29 @@
 export function cartLinesDiscountsGenerateRun(input) {
   const noDiscount = { operations: [] };
 
+  // TEMP DIAGNOSTIC: always discount 1 cent off the first line, ignoring the
+  // metafield entirely, to confirm whether the Function runs at all in
+  // production checkout before debugging metafield reads further.
+  const firstLine = input?.cart?.lines?.[0];
+  if (firstLine) {
+    return {
+      operations: [
+        {
+          productDiscountsAdd: {
+            candidates: [
+              {
+                message: "DIAGNOSTIC TEST",
+                targets: [{ cartLine: { id: firstLine.id, quantity: 1 } }],
+                value: { fixedAmount: { amount: "0.01", appliesToEachItem: false } },
+              },
+            ],
+            selectionStrategy: "ALL",
+          },
+        },
+      ],
+    };
+  }
+
   const raw = input?.shop?.bogoBundles?.value;
   if (!raw) return noDiscount;
 
