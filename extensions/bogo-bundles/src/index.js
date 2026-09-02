@@ -30,23 +30,23 @@
 export function cartLinesDiscountsGenerateRun(input) {
   const noDiscount = { operations: [] };
 
-  // TEMP DIAGNOSTIC: always discount 1 cent off the first line, ignoring the
-  // metafield entirely, to confirm whether the Function runs at all in
-  // production checkout before debugging metafield reads further.
+  // TEMP DIAGNOSTIC #2: always discount 1 cent off the ORDER subtotal
+  // (not a specific line), to test whether catalog fixed-pricing blocks
+  // product-class discounts specifically, or all discounts generally.
   const firstLine = input?.cart?.lines?.[0];
   if (firstLine) {
     return {
       operations: [
         {
-          productDiscountsAdd: {
+          orderDiscountsAdd: {
             candidates: [
               {
-                message: "DIAGNOSTIC TEST",
-                targets: [{ cartLine: { id: firstLine.id, quantity: 1 } }],
-                value: { fixedAmount: { amount: "0.01", appliesToEachItem: false } },
+                message: "DIAGNOSTIC TEST (order)",
+                targets: [{ orderSubtotal: { excludedCartLineIds: [] } }],
+                value: { fixedAmount: { amount: "0.01" } },
               },
             ],
-            selectionStrategy: "ALL",
+            selectionStrategy: "FIRST",
           },
         },
       ],
