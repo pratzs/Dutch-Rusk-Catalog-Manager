@@ -82,7 +82,7 @@ export function run(input) {
   // (tested extensively) never got invoked at checkout, regardless of
   // combinesWith settings. Config lives in the shop metafield
   // custom.bogo_bundles (JSON), edited via the app's BOGO Bundles page.
-  const bogoRaw = input?.shop?.bogoBundles?.value;
+  const bogoRaw = input?.discountNode?.bogoBundles?.value;
   if (bogoRaw) {
     let bundles;
     try {

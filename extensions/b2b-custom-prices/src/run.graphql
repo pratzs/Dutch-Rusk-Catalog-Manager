@@ -1,5 +1,5 @@
 query RunInput {
-  shop {
+  discountNode {
     bogoBundles: metafield(namespace: "custom", key: "bogo_bundles") {
       value
     }

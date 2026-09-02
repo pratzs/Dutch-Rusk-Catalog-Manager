@@ -28,30 +28,57 @@ export async function loader({ request }) {
   return { shopId, bundles };
 }
 
+async function findPricingDiscountId(admin) {
+  const res = await admin.graphql(
+    `query { discountNodes(first: 50) { nodes { id discount { __typename ... on DiscountAutomaticApp { title } } } } }`
+  );
+  const { data } = await res.json();
+  const node = data?.discountNodes?.nodes?.find(
+    (n) => n.discount?.__typename === "DiscountAutomaticApp" && n.discount.title === "B2B Wholesale Custom Pricing"
+  );
+  return node?.id ?? null;
+}
+
 async function saveBundles(admin, shopId, bundles) {
+  const metafields = [
+    {
+      ownerId: shopId,
+      namespace: METAFIELD_NAMESPACE,
+      key: METAFIELD_KEY,
+      type: "json",
+      value: JSON.stringify(bundles),
+    },
+  ];
+
+  // The Function reading BOGO deals at checkout is merged into the
+  // "B2B Wholesale Custom Pricing" discount and reads its config from
+  // discountNode.metafield, not shop.metafield (the latter isn't resolved
+  // at runtime for this deprecated Product Discount API target -- confirmed
+  // by extensive testing). Write to both: shop for the theme's badge
+  // Liquid, and the live discount for the Function itself.
+  const pricingDiscountId = await findPricingDiscountId(admin);
+  if (pricingDiscountId) {
+    metafields.push({
+      ownerId: pricingDiscountId,
+      namespace: METAFIELD_NAMESPACE,
+      key: METAFIELD_KEY,
+      type: "json",
+      value: JSON.stringify(bundles),
+    });
+  }
+
   const res = await admin.graphql(
     `mutation SetBogoBundles($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         userErrors { field message }
       }
     }`,
-    {
-      variables: {
-        metafields: [
-          {
-            ownerId: shopId,
-            namespace: METAFIELD_NAMESPACE,
-            key: METAFIELD_KEY,
-            type: "json",
-            value: JSON.stringify(bundles),
-          },
-        ],
-      },
-    }
+    { variables: { metafields } }
   );
   const { data } = await res.json();
   const userErrors = data?.metafieldsSet?.userErrors ?? [];
   if (userErrors.length) throw new Error(userErrors.map((e) => e.message).join(", "));
+  if (!pricingDiscountId) throw new Error("Saved to the theme badge metafield, but couldn't find the live pricing discount to update -- checkout won't reflect this change until that's fixed.");
 }
 
 async function readBundles(admin) {
