@@ -102,8 +102,11 @@ export function run(input) {
         const matchingLines = lines.filter((line) => variantIdSet.has(line.variantId));
         if (matchingLines.length === 0) continue;
 
+        // "Buy N Get M Free" means N paid + M free = N+M total needed per
+        // group (e.g. Buy 5 Get 1 Free = the 6th unit is free), not N total.
         const totalQty = matchingLines.reduce((sum, line) => sum + line.quantity, 0);
-        const groups = Math.floor(totalQty / buyQty);
+        const groupSize = buyQty + getQty;
+        const groups = Math.floor(totalQty / groupSize);
         if (groups <= 0) continue;
 
         let freeUnitsRemaining = Math.min(groups * getQty, totalQty);
