@@ -1,4 +1,9 @@
 query RunInput {
+  shop {
+    bogoBundles: metafield(namespace: "custom", key: "bogo_bundles") {
+      value
+    }
+  }
   cart {
     buyerIdentity {
       purchasingCompany {
