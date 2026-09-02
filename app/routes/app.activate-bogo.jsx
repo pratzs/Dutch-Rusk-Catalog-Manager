@@ -38,7 +38,7 @@ export default function ActivateBogo() {
       <s-layout><s-layout-section><s-box padding="base" background="bg-surface-secondary" borderRadius="base">
         <s-block-stack gap="base">
           <s-text variant="headingMd" as="h2">Enable Buy-X-Get-Y Bundle Deals</s-text>
-          <s-text>Click below to register the <b>bogo-bundles</b> function as a live automatic discount. Deals themselves are edited via Settings → Custom data → Shop metafields → BOGO Bundles.</s-text>
+          <s-text>Click below to register the <b>bogo-bundles</b> function as a live automatic discount (one-time setup). Once active, manage the actual deals from the <b>BOGO Bundles</b> page in the app nav.</s-text>
           {!functionId ? (
             <s-box padding="base" background="bg-critical" borderRadius="base"><s-text color="critical">Extension not found. Deploy the app first (shopify app deploy).</s-text></s-box>
           ) : (
