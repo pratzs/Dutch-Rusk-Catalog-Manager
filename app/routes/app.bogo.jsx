@@ -261,10 +261,10 @@ export default function Bogo() {
     <s-page heading="BOGO Bundles" back-action-url="/app">
       <s-section heading="How this works">
         <s-text>
-          These are the live Buy-X-Get-Y deals on the storefront, applied by the <b>BOGO Bundles</b> Shopify
-          Function (no combining with other discounts). Add, edit, or remove a deal here each month — no
-          developer involvement needed. Changes take effect immediately at checkout, and matching products
-          automatically get a &quot;Buy X Get Y Free&quot; badge on collection and product pages.
+          These are the live Buy-X-Get-Y deals on the storefront, applied automatically at checkout alongside
+          wholesale pricing. &quot;Buy 10 Get 1 Free&quot; means the 11th item is free, ten paid plus one free.
+          Add, edit, or remove a deal here each month, no developer involvement needed. Changes take effect
+          immediately, and matching products automatically get a badge on collection and product pages.
         </s-text>
       </s-section>
 
