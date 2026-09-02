@@ -19,7 +19,7 @@ export async function action({ request }) {
 
   try {
     const response = await admin.graphql(`mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) { discountCreate: discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) { automaticAppDiscount { discountId } userErrors { field message } } }`, {
-      variables: { automaticAppDiscount: { title: "BOGO Bundles", functionId, discountClasses: ["ORDER"], startsAt: new Date().toISOString(), combinesWith: { orderDiscounts: false, productDiscounts: true, shippingDiscounts: false } } }
+      variables: { automaticAppDiscount: { title: "BOGO Bundles", functionId, discountClasses: ["PRODUCT"], startsAt: new Date().toISOString(), combinesWith: { orderDiscounts: false, productDiscounts: false, shippingDiscounts: false } } }
     });
     const data = await response.json();
     const userErrors = data.data?.discountCreate?.userErrors ?? [];
