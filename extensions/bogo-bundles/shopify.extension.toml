@@ -1,7 +1,7 @@
 api_version = "2026-04"
 
 [[extensions]]
-uid = "bcd977c8-5d56-4f1b-ba1f-c7e7c12f7131"
+uid = "55d07ab6-ded1-4a37-9e5e-a4bebaa0b0a2"
 type = "function"
 name = "BOGO Bundles"
 handle = "bogo-bundles"
