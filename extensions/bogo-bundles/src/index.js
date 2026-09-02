@@ -1,74 +1,52 @@
-// BOGO Bundles — Shopify Function
+// BOGO Bundles — Shopify Function (Product Discount API)
 //
-// Applies "Buy X Get Y Free" deals as a real product discount computed on
-// top of whatever price already resolved for the line (including B2B
-// catalog/price-list pricing). Native Buy X Get Y automatic discounts don't
-// work here because a B2B fixed-price catalog override occupies the same
-// line discount slot and blocks any other product discount from applying.
-// A Function's productDiscountsAdd operation runs against the
-// already-resolved line cost instead, so it doesn't compete for that slot.
+// Applies "Buy X Get Y Free" deals as a real per-line discount. Built on the
+// deprecated purchase.product-discount.run target (not the newer unified
+// cart.lines.discounts.generate.run) because this shop's checkout was
+// verified to actually execute that target -- confirmed by the sibling
+// b2b-custom-prices extension's live "B2B Wholesale Price" discount, which
+// uses the same deprecated API and applies correctly on every order. The
+// unified Discount API target was built, deployed and activated correctly
+// but never once fired at checkout on this shop, even for a trivial
+// always-on 1-cent test discount -- so this target was chosen because it's
+// proven to work here, not out of preference.
 //
 // Config lives entirely in the shop metafield custom.bogo_bundles (JSON),
-// so Ryan can add/edit/remove deals monthly from Shopify Admin →
-// Settings → Custom data → Shop metafields, with no developer involvement.
+// so Ryan can add/edit/remove deals monthly via the app's BOGO Bundles page,
+// with no developer involvement.
 //
 // Shape of custom.bogo_bundles:
 // [
 //   { "id": "musashi-10-1", "label": "Buy 10 Get 1 Free", "buyQty": 10, "getQty": 1,
 //     "variantIds": ["gid://shopify/ProductVariant/123", ...] }
 // ]
-//
-// Per bundle: sum matching-variant quantities across all cart lines, work out
-// how many free units are earned (floor(totalQty / buyQty) * getQty, capped
-// at totalQty), then give away that many units for free — cheapest-priced
-// matching line(s) first, same convention Shopify's own BXGY discount uses.
+
+const EMPTY_DISCOUNT = {
+  discountApplicationStrategy: "ALL",
+  discounts: [],
+};
 
 /**
- * @param {import("../generated/api").CartInput} input
- * @returns {import("../generated/api").CartLinesDiscountsGenerateRunResult}
+ * @param {import("../generated/api").RunInput} input
+ * @returns {import("../generated/api").FunctionRunResult}
  */
-export function cartLinesDiscountsGenerateRun(input) {
-  const noDiscount = { operations: [] };
-
-  // TEMP DIAGNOSTIC #2: always discount 1 cent off the ORDER subtotal
-  // (not a specific line), to test whether catalog fixed-pricing blocks
-  // product-class discounts specifically, or all discounts generally.
-  const firstLine = input?.cart?.lines?.[0];
-  if (firstLine) {
-    return {
-      operations: [
-        {
-          orderDiscountsAdd: {
-            candidates: [
-              {
-                message: "DIAGNOSTIC TEST (order)",
-                targets: [{ orderSubtotal: { excludedCartLineIds: [] } }],
-                value: { fixedAmount: { amount: "0.01" } },
-              },
-            ],
-            selectionStrategy: "FIRST",
-          },
-        },
-      ],
-    };
-  }
-
+export function run(input) {
   const raw = input?.shop?.bogoBundles?.value;
-  if (!raw) return noDiscount;
+  if (!raw) return EMPTY_DISCOUNT;
 
   let bundles;
   try {
     bundles = JSON.parse(raw);
   } catch {
-    return noDiscount;
+    return EMPTY_DISCOUNT;
   }
-  if (!Array.isArray(bundles) || bundles.length === 0) return noDiscount;
+  if (!Array.isArray(bundles) || bundles.length === 0) return EMPTY_DISCOUNT;
 
   const lines = (input.cart.lines ?? []).filter(
     (line) => line.merchandise?.__typename === "ProductVariant"
   );
 
-  const candidates = [];
+  const discounts = [];
 
   for (const bundle of bundles) {
     const buyQty = Number(bundle?.buyQty);
@@ -90,7 +68,7 @@ export function cartLinesDiscountsGenerateRun(input) {
     if (freeUnitsRemaining <= 0) continue;
 
     // Cheapest matching line first, so the free units come off the
-    // lowest-value items — matches Shopify's own BXGY convention.
+    // lowest-value items -- matches Shopify's own BXGY convention.
     const sortedLines = [...matchingLines].sort((a, b) => {
       const priceA = parseFloat(a.cost?.amountPerQuantity?.amount ?? "0");
       const priceB = parseFloat(b.cost?.amountPerQuantity?.amount ?? "0");
@@ -106,7 +84,7 @@ export function cartLinesDiscountsGenerateRun(input) {
       const freeFromThisLine = Math.min(freeUnitsRemaining, line.quantity);
       if (freeFromThisLine <= 0) continue;
 
-      candidates.push({
+      discounts.push({
         message: bundle.label ?? "Buy X Get Y Free",
         targets: [
           {
@@ -128,16 +106,10 @@ export function cartLinesDiscountsGenerateRun(input) {
     }
   }
 
-  if (!candidates.length) return noDiscount;
+  if (!discounts.length) return EMPTY_DISCOUNT;
 
   return {
-    operations: [
-      {
-        productDiscountsAdd: {
-          candidates,
-          selectionStrategy: "ALL",
-        },
-      },
-    ],
+    discountApplicationStrategy: "ALL",
+    discounts,
   };
 }
