@@ -6,7 +6,7 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
   const response = await admin.graphql(`query { shopifyFunctions(first: 50) { nodes { id title apiType } } }`);
   const data = await response.json();
-  const targetFunction = data.data.shopifyFunctions.nodes.find(f => f.title === "bogo-bundles");
+  const targetFunction = data.data.shopifyFunctions.nodes.find(f => f.title === "BOGO Bundles");
   return { functionId: targetFunction?.id ?? null };
 }
 
