@@ -102,31 +102,40 @@ export function run(input) {
         const matchingLines = lines.filter((line) => variantIdSet.has(line.variantId));
         if (matchingLines.length === 0) continue;
 
-        // Optional per-deal override: replace the customer's normal
-        // catalog/wholesale % with a promo-specific one for this bundle's
-        // products, e.g. running "10% off" instead of the usual 20% at the
-        // same time as "Buy 5 Get 1 Free". Only affects units outside the
-        // deal groups (deal-paid units are always full retail regardless).
-        const overridePct = Number(bundle?.overridePct);
-        if (overridePct > 0 && overridePct < 100) {
-          for (const line of matchingLines) {
-            line.wholesalePrice = line.retailPrice * (1 - overridePct / 100);
-          }
-        }
-
         // "Buy N Get M Free" means N paid + M free = N+M total needed per
         // group (e.g. Buy 5 Get 1 Free = the 6th unit is free), not N total.
+        // Below this threshold the deal is inactive and normal catalog
+        // pricing applies untouched -- no override, no free unit.
         const totalQty = matchingLines.reduce((sum, line) => sum + line.quantity, 0);
         const groupSize = buyQty + getQty;
         const groups = Math.floor(totalQty / groupSize);
         if (groups <= 0) continue;
 
+        // Optional per-deal override, only takes effect once the deal is
+        // actually active (checked above): replaces the customer's normal
+        // catalog/wholesale % with a promo-specific one for this bundle's
+        // products, applying to BOTH the paid portion of the deal (instead
+        // of full retail) and any extra units beyond the deal (instead of
+        // the normal catalog %) -- e.g. "10% off + Buy 5 Get 1 Free"
+        // instead of full-retail-plus-free or the normal 20% catalog rate.
+        // Leaving it blank keeps the original rule: paid units at full
+        // retail, extra units at the normal catalog price.
+        const overridePct = Number(bundle?.overridePct);
+        const hasOverride = overridePct > 0 && overridePct < 100;
+        if (hasOverride) {
+          for (const line of matchingLines) {
+            line.wholesalePrice = line.retailPrice * (1 - overridePct / 100);
+            line.dealPaidUsesOverride = true;
+          }
+        }
+
         // The units a deal group consumes (both the paid and the free
-        // portion) don't get the catalog/wholesale discount -- the free
-        // item IS the discount. The paid portion goes back to full retail
-        // ("normal price of Shopify"), otherwise the catalog discount and
-        // the free unit would stack into a loss-making double discount.
-        // Only units beyond what deal groups consume keep the normal
+        // portion) don't get the customer's normal catalog discount -- the
+        // free item IS the discount. The paid portion goes back to full
+        // retail ("normal price of Shopify") unless an override % above
+        // says otherwise, since stacking the catalog discount with a free
+        // unit would be a loss-making double discount. Only units beyond
+        // what deal groups consume keep the normal (or overridden)
         // wholesale price. Free units still come off the cheapest matching
         // line(s) first, matching Shopify's own BXGY convention.
         let freeRemaining = groups * getQty;
@@ -153,12 +162,10 @@ export function run(input) {
   }
 
   // ── Emit one discount entry per price tier on a line ───────────────────────
-  // DIAGNOSTIC: testing whether checkout can show separate quantities per
-  // price tier (e.g. "5 @ retail, 1 @ $0, 1 @ wholesale") as distinct rows
-  // instead of one blended per-unit average, now that the real discountNode
-  // bug (not a duplicate-target issue) is fixed. The earlier "duplicate
-  // target gets dropped" conclusion was reached while that bug was still
-  // live, so it may have been a false conclusion -- re-testing here.
+  // Checkout shows each as its own row (e.g. "5 @ retail, 1 @ $0 free,
+  // 1 @ wholesale") instead of one blended per-unit average price -- this
+  // works fine despite an earlier (mistaken) finding that a second entry on
+  // the same line gets dropped; that was actually the discountNode bug.
   const discounts = [];
   for (const line of lines) {
     const wholesaleQty = line.quantity - line.freeQty - line.dealPaidQty;
@@ -171,9 +178,15 @@ export function run(input) {
       });
     }
 
-    if (wholesaleQty > 0 && line.wholesalePrice < line.retailPrice - 0.001) {
+    // Deal-paid units only get a discount when this bundle has an override %
+    // (see above) -- otherwise they're full retail, no entry needed. When an
+    // override IS active, deal-paid and beyond-the-deal units land on the
+    // same overridden price, so they're combined into a single entry rather
+    // than two identical-looking rows.
+    const discountedQty = (line.dealPaidUsesOverride ? line.dealPaidQty : 0) + wholesaleQty;
+    if (discountedQty > 0 && line.wholesalePrice < line.retailPrice - 0.001) {
       discounts.push({
-        targets: [{ cartLine: { id: line.id, quantity: wholesaleQty } }],
+        targets: [{ cartLine: { id: line.id, quantity: discountedQty } }],
         value: { fixedAmount: { amount: (line.retailPrice - line.wholesalePrice).toFixed(2), appliesToEachItem: true } },
         message: "B2B Wholesale Price",
       });
