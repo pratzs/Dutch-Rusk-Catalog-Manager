@@ -58,7 +58,23 @@ export async function loader({ request }) {
     variants: (b.variantIds ?? []).map((id) => variantsById[id] ?? { id, productTitle: "(product not found)", variantTitle: "", imageUrl: null }),
   }));
 
-  return { shopId, bundles: bundlesWithVariants };
+  const catalogsRes = await admin.graphql(
+    `query BogoCatalogs {
+      catalogs(first: 50) {
+        nodes {
+          id
+          title
+          ... on CompanyLocationCatalog { priceList { id } }
+        }
+      }
+    }`
+  );
+  const { data: catalogsData } = await catalogsRes.json();
+  const catalogs = (catalogsData?.catalogs?.nodes ?? [])
+    .filter((c) => c.priceList?.id)
+    .map((c) => ({ priceListId: c.priceList.id, title: c.title }));
+
+  return { shopId, bundles: bundlesWithVariants, catalogs };
 }
 
 async function findPricingDiscountId(admin) {
@@ -153,6 +169,12 @@ export async function action({ request }) {
       } catch {
         variantIds = [];
       }
+      let catalogIds = [];
+      try {
+        catalogIds = JSON.parse(String(form.get("catalogIds") || "[]"));
+      } catch {
+        catalogIds = [];
+      }
 
       if (!id || !label) return { error: "Give the bundle an ID and a label." };
       if (!buyQty || buyQty <= 0 || !getQty || getQty <= 0) return { error: "Buy and get quantities must be positive numbers." };
@@ -164,6 +186,7 @@ export async function action({ request }) {
       const next = bundles.filter((b) => b.id !== id);
       const entry = { id, label, buyQty, getQty, variantIds };
       if (overridePct !== null) entry.overridePct = overridePct;
+      if (catalogIds.length) entry.catalogIds = catalogIds;
       next.push(entry);
       await saveBundles(admin, shopId, next);
       return { ok: `Saved "${label}".` };
@@ -182,10 +205,10 @@ export async function action({ request }) {
   }
 }
 
-const emptyForm = { id: "", label: "", buyQty: "", getQty: "", overridePct: "", items: [] };
+const emptyForm = { id: "", label: "", buyQty: "", getQty: "", overridePct: "", items: [], catalogIds: [] };
 
 export default function Bogo() {
-  const { bundles } = useLoaderData();
+  const { bundles, catalogs } = useLoaderData();
   const fetcher = useFetcher();
   const busy = fetcher.state !== "idle";
 
@@ -228,6 +251,13 @@ export default function Bogo() {
     setForm((f) => ({ ...f, items: f.items.filter((it) => it.id !== id) }));
   };
 
+  const toggleCatalog = (priceListId) => {
+    setForm((f) => {
+      const has = f.catalogIds.includes(priceListId);
+      return { ...f, catalogIds: has ? f.catalogIds.filter((id) => id !== priceListId) : [...f.catalogIds, priceListId] };
+    });
+  };
+
   const startEdit = (bundle) => {
     setEditingId(bundle.id);
     setForm({
@@ -241,6 +271,7 @@ export default function Bogo() {
         label: v.variantTitle ? `${v.productTitle} - ${v.variantTitle}` : v.productTitle,
         imageUrl: v.imageUrl,
       })),
+      catalogIds: bundle.catalogIds ?? [],
     });
   };
 
@@ -264,6 +295,7 @@ export default function Bogo() {
     fd.set("getQty", form.getQty);
     fd.set("overridePct", form.overridePct);
     fd.set("variantIds", JSON.stringify(form.items.map((it) => it.id)));
+    fd.set("catalogIds", JSON.stringify(form.catalogIds));
     fetcher.submit(fd, { method: "post" });
     cancelEdit();
   };
@@ -314,6 +346,11 @@ export default function Bogo() {
                         + {b.overridePct}% off (instead of catalog price) on other units
                       </div>
                     ) : null}
+                    <div style={{ color: "#6d7175", fontSize: 12, marginTop: 2 }}>
+                      {b.catalogIds?.length
+                        ? `Only: ${b.catalogIds.map((id) => catalogs.find((c) => c.priceListId === id)?.title ?? id).join(", ")}`
+                        : "All catalogs"}
+                    </div>
                   </td>
                   <td style={cell}>
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: 160, overflowY: "auto", minWidth: 220 }}>
@@ -401,6 +438,26 @@ export default function Bogo() {
                 For units beyond the deal, e.g. Dragon bags normally get 20% off catalog price. Set this to
                 10 to run &quot;10% off + Buy 5 Get 1 Free&quot; instead of the usual 20%. Leave blank to keep
                 the normal catalog discount for everything except the free unit.
+              </s-text>
+            </div>
+            <div>
+              <label style={labelStyle}>Which catalogs get this deal?</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", maxHeight: 180, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 6, padding: "8px" }}>
+                {catalogs.map((c) => (
+                  <label key={c.priceListId} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={form.catalogIds.includes(c.priceListId)}
+                      onChange={() => toggleCatalog(c.priceListId)}
+                    />
+                    {c.title}
+                  </label>
+                ))}
+              </div>
+              <s-text tone="subdued" style={{ fontSize: 12, marginTop: 4 }}>
+                Leave everything unchecked to run this deal for every B2B customer. Check specific catalogs (e.g.
+                &quot;General Catalog&quot;) to limit it to just those customers, like this month&apos;s General
+                Catalog-only deals.
               </s-text>
             </div>
             <div>

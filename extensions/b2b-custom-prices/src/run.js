@@ -98,6 +98,13 @@ export function run(input) {
         const variantIds = Array.isArray(bundle?.variantIds) ? bundle.variantIds : [];
         if (!buyQty || buyQty <= 0 || !getQty || getQty <= 0 || variantIds.length === 0) continue;
 
+        // Optional catalog scoping: if the deal lists specific catalogs
+        // (by their price list GID), only apply it to customers on one of
+        // those catalogs. Absent/empty list = applies to every B2B customer,
+        // which keeps existing bundles working unchanged.
+        const catalogIds = Array.isArray(bundle?.catalogIds) ? bundle.catalogIds : [];
+        if (catalogIds.length > 0 && !catalogIds.includes(priceListId)) continue;
+
         const variantIdSet = new Set(variantIds);
         const matchingLines = lines.filter((line) => variantIdSet.has(line.variantId));
         if (matchingLines.length === 0) continue;
