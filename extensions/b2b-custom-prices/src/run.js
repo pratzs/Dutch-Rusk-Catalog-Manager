@@ -102,6 +102,18 @@ export function run(input) {
         const matchingLines = lines.filter((line) => variantIdSet.has(line.variantId));
         if (matchingLines.length === 0) continue;
 
+        // Optional per-deal override: replace the customer's normal
+        // catalog/wholesale % with a promo-specific one for this bundle's
+        // products, e.g. running "10% off" instead of the usual 20% at the
+        // same time as "Buy 5 Get 1 Free". Only affects units outside the
+        // deal groups (deal-paid units are always full retail regardless).
+        const overridePct = Number(bundle?.overridePct);
+        if (overridePct > 0 && overridePct < 100) {
+          for (const line of matchingLines) {
+            line.wholesalePrice = line.retailPrice * (1 - overridePct / 100);
+          }
+        }
+
         // "Buy N Get M Free" means N paid + M free = N+M total needed per
         // group (e.g. Buy 5 Get 1 Free = the 6th unit is free), not N total.
         const totalQty = matchingLines.reduce((sum, line) => sum + line.quantity, 0);
@@ -140,34 +152,32 @@ export function run(input) {
     }
   }
 
-  // ── Emit exactly one discount entry per line ───────────────────────────────
-  // Each unit in a line is exactly one of: free (part of a deal group,
-  // $0), deal-paid (part of a deal group, full retail, no discount), or
-  // wholesale (outside any deal group, normal catalog discount applies).
+  // ── Emit one discount entry per price tier on a line ───────────────────────
+  // DIAGNOSTIC: testing whether checkout can show separate quantities per
+  // price tier (e.g. "5 @ retail, 1 @ $0, 1 @ wholesale") as distinct rows
+  // instead of one blended per-unit average, now that the real discountNode
+  // bug (not a duplicate-target issue) is fixed. The earlier "duplicate
+  // target gets dropped" conclusion was reached while that bug was still
+  // live, so it may have been a false conclusion -- re-testing here.
   const discounts = [];
   for (const line of lines) {
     const wholesaleQty = line.quantity - line.freeQty - line.dealPaidQty;
-    const discountAmount = line.freeQty * line.retailPrice + wholesaleQty * (line.retailPrice - line.wholesalePrice);
-    const perUnitDiscount = discountAmount / line.quantity;
-    if (perUnitDiscount <= 0.001) continue;
 
-    discounts.push({
-      targets: [
-        {
-          cartLine: {
-            id: line.id,
-            quantity: line.quantity,
-          },
-        },
-      ],
-      value: {
-        fixedAmount: {
-          amount: perUnitDiscount.toFixed(2),
-          appliesToEachItem: true,
-        },
-      },
-      message: line.freeQty > 0 ? "B2B Wholesale Price + Buy X Get Y Free" : "B2B Wholesale Price",
-    });
+    if (line.freeQty > 0) {
+      discounts.push({
+        targets: [{ cartLine: { id: line.id, quantity: line.freeQty } }],
+        value: { fixedAmount: { amount: line.retailPrice.toFixed(2), appliesToEachItem: true } },
+        message: "Buy X Get Y Free",
+      });
+    }
+
+    if (wholesaleQty > 0 && line.wholesalePrice < line.retailPrice - 0.001) {
+      discounts.push({
+        targets: [{ cartLine: { id: line.id, quantity: wholesaleQty } }],
+        value: { fixedAmount: { amount: (line.retailPrice - line.wholesalePrice).toFixed(2), appliesToEachItem: true } },
+        message: "B2B Wholesale Price",
+      });
+    }
   }
 
   if (!discounts.length) return EMPTY_DISCOUNT;
