@@ -145,6 +145,8 @@ export async function action({ request }) {
       const label = String(form.get("label") || "").trim();
       const buyQty = Number(form.get("buyQty"));
       const getQty = Number(form.get("getQty"));
+      const overridePctRaw = String(form.get("overridePct") || "").trim();
+      const overridePct = overridePctRaw ? Number(overridePctRaw) : null;
       let variantIds = [];
       try {
         variantIds = JSON.parse(String(form.get("variantIds") || "[]"));
@@ -155,9 +157,14 @@ export async function action({ request }) {
       if (!id || !label) return { error: "Give the bundle an ID and a label." };
       if (!buyQty || buyQty <= 0 || !getQty || getQty <= 0) return { error: "Buy and get quantities must be positive numbers." };
       if (!variantIds.length) return { error: "Select at least one product variant for this bundle." };
+      if (overridePct !== null && (isNaN(overridePct) || overridePct <= 0 || overridePct >= 100)) {
+        return { error: "Override discount % must be a number between 0 and 100 (or left blank)." };
+      }
 
       const next = bundles.filter((b) => b.id !== id);
-      next.push({ id, label, buyQty, getQty, variantIds });
+      const entry = { id, label, buyQty, getQty, variantIds };
+      if (overridePct !== null) entry.overridePct = overridePct;
+      next.push(entry);
       await saveBundles(admin, shopId, next);
       return { ok: `Saved "${label}".` };
     }
@@ -175,7 +182,7 @@ export async function action({ request }) {
   }
 }
 
-const emptyForm = { id: "", label: "", buyQty: "", getQty: "", items: [] };
+const emptyForm = { id: "", label: "", buyQty: "", getQty: "", overridePct: "", items: [] };
 
 export default function Bogo() {
   const { bundles } = useLoaderData();
@@ -228,6 +235,7 @@ export default function Bogo() {
       label: bundle.label,
       buyQty: String(bundle.buyQty),
       getQty: String(bundle.getQty),
+      overridePct: bundle.overridePct != null ? String(bundle.overridePct) : "",
       items: bundle.variants.map((v) => ({
         id: v.id,
         label: v.variantTitle ? `${v.productTitle} - ${v.variantTitle}` : v.productTitle,
@@ -254,6 +262,7 @@ export default function Bogo() {
     fd.set("label", form.label);
     fd.set("buyQty", form.buyQty);
     fd.set("getQty", form.getQty);
+    fd.set("overridePct", form.overridePct);
     fd.set("variantIds", JSON.stringify(form.items.map((it) => it.id)));
     fetcher.submit(fd, { method: "post" });
     cancelEdit();
@@ -298,7 +307,14 @@ export default function Bogo() {
               {bundles.map((b) => (
                 <tr key={b.id} style={{ borderTop: "1px solid #e5e7eb", fontSize: 13 }}>
                   <td style={cell}><strong>{b.label}</strong></td>
-                  <td style={cell}>Buy {b.buyQty}, get {b.getQty} free</td>
+                  <td style={cell}>
+                    Buy {b.buyQty}, get {b.getQty} free
+                    {b.overridePct != null ? (
+                      <div style={{ color: "#6d7175", fontSize: 12, marginTop: 2 }}>
+                        + {b.overridePct}% off (instead of catalog price) on other units
+                      </div>
+                    ) : null}
+                  </td>
                   <td style={cell}>
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: 160, overflowY: "auto", minWidth: 220 }}>
                       {b.variants.map((v) => (
@@ -368,6 +384,24 @@ export default function Bogo() {
                   onChange={(e) => setForm((f) => ({ ...f, getQty: e.target.value }))}
                 />
               </div>
+            </div>
+            <div>
+              <label style={labelStyle} htmlFor="override-input">Override discount % (optional)</label>
+              <input
+                id="override-input"
+                type="number"
+                min="0"
+                max="99"
+                style={inputStyle}
+                value={form.overridePct}
+                onChange={(e) => setForm((f) => ({ ...f, overridePct: e.target.value }))}
+                placeholder="Leave blank to keep each customer's normal catalog price"
+              />
+              <s-text tone="subdued" style={{ fontSize: 12, marginTop: 4 }}>
+                For units beyond the deal, e.g. Dragon bags normally get 20% off catalog price. Set this to
+                10 to run &quot;10% off + Buy 5 Get 1 Free&quot; instead of the usual 20%. Leave blank to keep
+                the normal catalog discount for everything except the free unit.
+              </s-text>
             </div>
             <div>
               <label style={labelStyle}>Products in this deal ({form.items.length})</label>
