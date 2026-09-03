@@ -93,6 +93,44 @@ export const loader = async ({ request }) => {
   };
 };
 
+const statCardStyle = {
+  flex: 1,
+  textAlign: 'center',
+  padding: '22px 18px',
+  border: '1px solid #e1e3e5',
+  borderRadius: '10px',
+  cursor: 'pointer',
+  background: '#fff',
+  font: 'inherit',
+  color: 'inherit',
+  boxShadow: '0 1px 2px rgba(16, 24, 40, 0.04)',
+};
+const statNumberStyle = { fontSize: '2.2rem', fontWeight: '800', lineHeight: 1 };
+const statLabelStyle = { fontWeight: '600', marginTop: '10px', color: '#202223' };
+const statSubStyle = { color: '#6d7175', fontSize: '13px', marginTop: '2px' };
+
+function actionButtonStyle(kind, busy) {
+  const palette = {
+    primary: { idle: '#181344', busy: '#8683a8' },
+    accent: { idle: '#2156c3', busy: '#8eb8e5' },
+    success: { idle: '#008060', busy: '#95c9b4' },
+    danger: { idle: '#d72c0d', busy: '#e8a89c' },
+  }[kind];
+  return {
+    background: busy ? palette.busy : palette.idle,
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '10px 20px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: busy ? 'not-allowed' : 'pointer',
+  };
+}
+
+const toolSectionStyle = { display: 'flex', flexDirection: 'column', gap: '12px' };
+const noteBoxStyle = { border: '1px solid #e1e3e5', background: '#f6f6f7', borderRadius: '8px', padding: '12px 16px', fontSize: '13px', lineHeight: '1.6', color: '#4a4a4a' };
+
 export default function Index() {
   const {
     configuredGroups, unconfiguredGroups,
@@ -202,21 +240,21 @@ export default function Index() {
       {/* Hero Banner */}
       <s-section>
         <div style={{
-          background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
+          background: 'linear-gradient(135deg, #181344 0%, #2a2360 100%)',
           borderRadius: '12px',
           padding: '32px',
           color: '#fff',
         }}>
           <div style={{ fontSize: '22px', fontWeight: '700', marginBottom: '8px' }}>
-            👋 Welcome to the Dutch Rusk Catalog Manager
+            Welcome to the Dutch Rusk Catalog Manager
           </div>
-          <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '15px', marginBottom: '24px', lineHeight: '1.6' }}>
+          <div style={{ color: 'rgba(255,255,255,0.72)', fontSize: '15px', marginBottom: '24px', lineHeight: '1.6', maxWidth: '640px' }}>
             Control exactly what pack sizes and products each B2B customer can see and order —
             without touching Shopify settings manually.
           </div>
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
             <s-button variant="primary" onClick={() => navigate("/app/catalog-manager")}>
-              Open Catalog Manager →
+              Open Catalog Manager
             </s-button>
             <s-button onClick={() => navigate("/app/audit")}>
               View Audit Report
@@ -228,33 +266,27 @@ export default function Index() {
       {/* Stats Row */}
       <s-section heading="At a Glance">
         <s-stack direction="inline" gap="base">
-          <button
-            type="button"
-            onClick={() => navigate("/app/catalog-manager")}
-            style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', cursor: 'pointer', background: '#f6f6f7', font: 'inherit', color: 'inherit' }}>
-            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#008060', lineHeight: 1 }}>{configuredGroups}</div>
-            <div style={{ fontWeight: '600', marginTop: '8px' }}>Customer Groups</div>
-            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>with visibility rules active</div>
+          <button type="button" onClick={() => navigate("/app/catalog-manager")} style={statCardStyle}>
+            <div style={{ ...statNumberStyle, color: '#181344' }}>{configuredGroups}</div>
+            <div style={statLabelStyle}>Customer Groups</div>
+            <div style={statSubStyle}>with visibility rules active</div>
             {unconfiguredGroups > 0 && (
-              <div style={{ color: '#b98900', fontSize: '12px', marginTop: '6px', fontWeight: '500' }}>
-                +{unconfiguredGroups} not configured
+              <div style={{ color: '#946200', fontSize: '12px', marginTop: '8px', fontWeight: '600' }}>
+                {unconfiguredGroups} not yet configured
               </div>
             )}
           </button>
 
-          <button
-            type="button"
-            onClick={() => navigate("/app/audit")}
-            style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', cursor: 'pointer', background: '#f6f6f7', font: 'inherit', color: 'inherit' }}>
-            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#d72c0d', lineHeight: 1 }}>{distinctOverrideProducts}</div>
-            <div style={{ fontWeight: '600', marginTop: '8px' }}>Products with Exceptions</div>
-            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>{totalOverrideRows} rules across {groupsWithOverrides} group{groupsWithOverrides !== 1 ? 's' : ''}</div>
+          <button type="button" onClick={() => navigate("/app/audit")} style={statCardStyle}>
+            <div style={{ ...statNumberStyle, color: '#2156c3' }}>{distinctOverrideProducts}</div>
+            <div style={statLabelStyle}>Products with Exceptions</div>
+            <div style={statSubStyle}>{totalOverrideRows} rules across {groupsWithOverrides} group{groupsWithOverrides !== 1 ? 's' : ''}</div>
           </button>
 
-          <div style={{ flex: 1, textAlign: 'center', padding: '20px', border: '1px solid #e1e3e5', borderRadius: '8px', background: '#f6f6f7' }}>
-            <div style={{ fontSize: '2.4rem', fontWeight: '800', color: '#1a1a2e', lineHeight: 1 }}>{groupsWithBlanket}</div>
-            <div style={{ fontWeight: '600', marginTop: '8px' }}>Groups Hiding Sizes</div>
-            <div style={{ color: '#6d7175', fontSize: '13px', marginTop: '2px' }}>blocking pack types for all products</div>
+          <div style={{ ...statCardStyle, cursor: 'default' }}>
+            <div style={{ ...statNumberStyle, color: '#66270f' }}>{groupsWithBlanket}</div>
+            <div style={statLabelStyle}>Groups Hiding Sizes</div>
+            <div style={statSubStyle}>blocking pack types for all products</div>
           </div>
         </s-stack>
       </s-section>
@@ -267,15 +299,15 @@ export default function Index() {
               .sort((a, b) => b[1] - a[1])
               .map(([type, count]) => (
                 <div key={type} style={{
-                  padding: '10px 16px',
+                  padding: '12px 18px',
                   border: '1px solid #e1e3e5',
                   borderRadius: '8px',
-                  background: '#ffeaeb',
+                  background: '#f6f6f7',
                   textAlign: 'center',
                   minWidth: '100px',
                 }}>
-                  <div style={{ fontSize: '1.4rem', fontWeight: '700', color: '#d72c0d' }}>{count}</div>
-                  <div style={{ fontSize: '13px', fontWeight: '600', color: '#333', marginTop: '2px' }}>{type}</div>
+                  <div style={{ fontSize: '1.4rem', fontWeight: '700', color: '#181344' }}>{count}</div>
+                  <div style={{ fontSize: '13px', fontWeight: '600', color: '#202223', marginTop: '2px' }}>{type}</div>
                   <div style={{ fontSize: '11px', color: '#6d7175', marginTop: '2px' }}>group{count !== 1 ? 's' : ''} blocking</div>
                 </div>
               ))}
@@ -287,7 +319,6 @@ export default function Index() {
       {configuredGroups === 0 && (
         <s-section>
           <div style={{ textAlign: 'center', padding: '40px 20px', border: '1px solid #e1e3e5', borderRadius: '8px', background: '#f6f6f7' }}>
-            <div style={{ fontSize: '48px', marginBottom: '12px' }}>🚀</div>
             <div style={{ fontSize: '18px', fontWeight: '700', marginBottom: '8px' }}>Ready to get started?</div>
             <div style={{ color: '#6d7175', marginBottom: '20px' }}>
               No rules are configured yet. Open the Catalog Manager to set up your first customer group.
@@ -339,19 +370,19 @@ export default function Index() {
       <s-section slot="aside" heading="How It Works">
         <s-stack direction="block" gap="tight">
           <s-box padding="base" borderRadius="base" background="subdued">
-            <div style={{ fontWeight: '700', marginBottom: '4px' }}>1️⃣ Pick a Customer Account</div>
+            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Step 1 — Pick a Customer Account</div>
             <s-text tone="subdued">Go to Catalog Manager and select the B2B customer to configure.</s-text>
           </s-box>
           <s-box padding="base" borderRadius="base" background="subdued">
-            <div style={{ fontWeight: '700', marginBottom: '4px' }}>2️⃣ Block Entire Pack Types</div>
+            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Step 2 — Block Entire Pack Types</div>
             <s-text tone="subdued">Use &ldquo;Manage Rules&rdquo; to hide all Shippers, Bags, etc. for that customer in one click.</s-text>
           </s-box>
           <s-box padding="base" borderRadius="base" background="subdued">
-            <div style={{ fontWeight: '700', marginBottom: '4px' }}>3️⃣ Fine-Tune Per Product</div>
+            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Step 3 — Fine-Tune Per Product</div>
             <s-text tone="subdued">Use &ldquo;Product Overrides&rdquo; to adjust individual products that differ from the blanket rule.</s-text>
           </s-box>
           <s-box padding="base" borderRadius="base" background="subdued">
-            <div style={{ fontWeight: '700', marginBottom: '4px' }}>4️⃣ Changes Go Live Instantly</div>
+            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Step 4 — Changes Go Live Instantly</div>
             <s-text tone="subdued">Once saved, the customer sees the updated view immediately on their next page load.</s-text>
           </s-box>
         </s-stack>
@@ -361,9 +392,17 @@ export default function Index() {
         <s-text tone="subdued">Contact your Digital Lead for support with this tool.</s-text>
       </s-section>
 
+      {/* Maintenance & Sync Tools */}
+      <s-section heading="Maintenance &amp; Sync Tools">
+        <s-text tone="subdued">
+          Behind-the-scenes tools for keeping prices, discounts, and stored data in sync. These run
+          automatically in the background — use the buttons below only for one-time setup or troubleshooting.
+        </s-text>
+      </s-section>
+
       {/* Checkout Strikethrough Sync */}
       <s-section heading="Checkout Strikethrough Prices">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={toolSectionStyle}>
           <s-text>
             B2B catalog customers see discounted prices at checkout, but Shopify doesn&apos;t
             automatically show the original retail price as a strikethrough. Click the button
@@ -371,45 +410,27 @@ export default function Index() {
             one-time setup (or run it again after bulk price updates).
           </s-text>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={runSync}
-              disabled={syncState.running}
-              style={{
-                background: syncState.running ? '#95c9b4' : '#008060',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '10px 20px',
-                fontSize: '14px',
-                fontWeight: '600',
-                cursor: syncState.running ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {syncState.running ? `Syncing… (${syncState.total} updated so far)` : '🏷️ Sync Compare-At Prices'}
+            <button type="button" onClick={runSync} disabled={syncState.running} style={actionButtonStyle('success', syncState.running)}>
+              {syncState.running ? `Syncing… (${syncState.total} updated so far)` : 'Sync Compare-At Prices'}
             </button>
             {syncState.done && (
-              <span style={{ color: '#008060', fontWeight: '600' }}>
-                ✅ Done — {syncState.total} variant(s) updated
-              </span>
+              <span style={{ color: '#008060', fontWeight: '600' }}>Done — {syncState.total} variant(s) updated</span>
             )}
             {syncState.error && (
-              <span style={{ color: '#d72c0d', fontWeight: '600' }}>
-                ❌ {syncState.error}
-              </span>
+              <span style={{ color: '#d72c0d', fontWeight: '600' }}>{syncState.error}</span>
             )}
           </div>
           <s-text tone="subdued">
             This sets compare_at_price = price for any variant missing a compare-at value.
             Regular customers won&apos;t see a strikethrough (price = compare-at, so Shopify hides it),
-            but B2B catalog customers will see ~~retail price~~ their discounted price at checkout.
+            but B2B catalog customers will see their discounted price at checkout against the retail price.
           </s-text>
         </div>
       </s-section>
 
       {/* Catalog Function Price Sync */}
       <s-section heading="Catalog Function Sync (Discount Records on Orders)">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={toolSectionStyle}>
           <s-text>
             Syncs your B2B catalog price lists into Shopify metafields so the
             &ldquo;B2B Catalog Discount&rdquo; Shopify Function can apply real per-line
@@ -418,15 +439,8 @@ export default function Index() {
             The sync runs automatically every 10 minutes and also triggers
             whenever Ostendo updates a product price.
           </s-text>
-          <div style={{
-            background: '#fff8e6',
-            border: '1px solid #fdb714',
-            borderRadius: '8px',
-            padding: '12px 16px',
-            fontSize: '13px',
-            lineHeight: '1.6',
-          }}>
-            <strong>⚠️ Before running:</strong> In Shopify Admin → Markets → Catalogs,
+          <div style={{ ...noteBoxStyle, background: '#fff8e6', border: '1px solid #fdb714' }}>
+            <strong>Before running:</strong> In Shopify Admin → Markets → Catalogs,
             set the blanket % to <strong>0%</strong> on each B2B catalog
             (and remove fixed price overrides). The Function handles all discounting.
             Run &ldquo;Force Full Sync&rdquo; first to populate all metafields, then
@@ -434,43 +448,21 @@ export default function Index() {
             the &ldquo;B2B Catalog Discount&rdquo; function.
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={() => runCatalogSync(false)}
-              disabled={catalogSyncState.running}
-              style={{
-                background: catalogSyncState.running ? '#8eb8e5' : '#2156c3',
-                color: '#fff', border: 'none', borderRadius: '6px',
-                padding: '10px 20px', fontSize: '14px', fontWeight: '600',
-                cursor: catalogSyncState.running ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {catalogSyncState.running ? 'Syncing…' : '🔄 Sync Changed Catalogs'}
+            <button type="button" onClick={() => runCatalogSync(false)} disabled={catalogSyncState.running} style={actionButtonStyle('accent', catalogSyncState.running)}>
+              {catalogSyncState.running ? 'Syncing…' : 'Sync Changed Catalogs'}
             </button>
-            <button
-              type="button"
-              onClick={() => runCatalogSync(true)}
-              disabled={catalogSyncState.running}
-              style={{
-                background: catalogSyncState.running ? '#aaa' : '#66270f',
-                color: '#fff', border: 'none', borderRadius: '6px',
-                padding: '10px 20px', fontSize: '14px', fontWeight: '600',
-                cursor: catalogSyncState.running ? 'not-allowed' : 'pointer',
-              }}
-            >
+            <button type="button" onClick={() => runCatalogSync(true)} disabled={catalogSyncState.running} style={actionButtonStyle('primary', catalogSyncState.running)}>
               Force Full Sync
             </button>
             {catalogSyncState.done && catalogSyncState.result && (
               <span style={{ color: '#008060', fontWeight: '600', fontSize: '13px' }}>
-                ✅ {catalogSyncState.result.message} —{' '}
+                {catalogSyncState.result.message} —{' '}
                 {catalogSyncState.result.updatedCompanies} company metafield(s),{' '}
                 {catalogSyncState.result.updatedVariants} variant metafield(s) written
               </span>
             )}
             {catalogSyncState.error && (
-              <span style={{ color: '#d72c0d', fontWeight: '600' }}>
-                ❌ {catalogSyncState.error}
-              </span>
+              <span style={{ color: '#d72c0d', fontWeight: '600' }}>{catalogSyncState.error}</span>
             )}
           </div>
           <s-text tone="subdued">
@@ -483,43 +475,24 @@ export default function Index() {
 
       {/* Database Cleanup */}
       <s-section heading="Database Cleanup">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={toolSectionStyle}>
           <s-text>
             Remove stale database rows from catalogs that no longer exist in Shopify.
             These orphaned rows inflate your dashboard stats and waste storage.
             Run a <b>dry run</b> first to preview what would be removed.
           </s-text>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={() => runCleanup(true)}
-              disabled={cleanupState.running}
-              style={{
-                background: cleanupState.running ? '#aaa' : '#2156c3',
-                color: '#fff', border: 'none', borderRadius: '6px',
-                padding: '10px 20px', fontSize: '14px', fontWeight: '600',
-                cursor: cleanupState.running ? 'not-allowed' : 'pointer',
-              }}
-            >
+            <button type="button" onClick={() => runCleanup(true)} disabled={cleanupState.running} style={actionButtonStyle('accent', cleanupState.running)}>
               {cleanupState.running ? 'Scanning…' : 'Preview Orphaned Rows'}
             </button>
             {cleanupState.result?.dryRun === true && (cleanupState.result.orphanedRuleCount > 0 || cleanupState.result.totalOrphanedOverrides > 0) && (
-              <button
-                type="button"
-                onClick={() => runCleanup(false)}
-                disabled={cleanupState.running}
-                style={{
-                  background: '#d72c0d', color: '#fff', border: 'none', borderRadius: '6px',
-                  padding: '10px 20px', fontSize: '14px', fontWeight: '600',
-                  cursor: 'pointer',
-                }}
-              >
+              <button type="button" onClick={() => runCleanup(false)} disabled={cleanupState.running} style={actionButtonStyle('danger', false)}>
                 Delete Orphaned Rows
               </button>
             )}
           </div>
           {cleanupState.result?.dryRun === true && (
-            <div style={{ padding: '12px 16px', background: '#f0f7ff', border: '1px solid #b4d4ff', borderRadius: '8px', fontSize: '13px', lineHeight: '1.6' }}>
+            <div style={{ ...noteBoxStyle, background: '#f0f7ff', border: '1px solid #b4d4ff' }}>
               <b>Dry run result:</b> Found <b>{cleanupState.result.orphanedRuleCount}</b> orphaned catalog rule(s)
               and <b>{cleanupState.result.totalOrphanedOverrides}</b> orphaned product override(s).
               {cleanupState.result.orphanedRules.length > 0 && (
@@ -533,7 +506,7 @@ export default function Index() {
             </div>
           )}
           {cleanupState.result?.dryRun === false && (
-            <div style={{ padding: '12px 16px', background: '#f1f8f5', border: '1px solid #95c9b4', borderRadius: '8px', fontSize: '13px', color: '#008060' }}>
+            <div style={{ ...noteBoxStyle, background: '#f1f8f5', border: '1px solid #95c9b4', color: '#008060' }}>
               Deleted <b>{cleanupState.result.deletedRules}</b> catalog rule(s)
               and <b>{cleanupState.result.deletedOverrides}</b> product override(s).
             </div>
@@ -546,7 +519,7 @@ export default function Index() {
 
       {/* B2B Order Discount Records */}
       <s-section heading="B2B Discount Records on Orders">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={toolSectionStyle}>
           <s-text>
             Shopify&apos;s B2B catalog pricing silently lowers prices — no discount records appear on
             orders, so ERPs (Ostendo, Odoo, etc.) can&apos;t see what discount was applied.
@@ -554,15 +527,7 @@ export default function Index() {
             under &ldquo;Additional Details&rdquo; on the order page. Use the button below to backfill
             the last 365 days of existing orders.
           </s-text>
-          <div style={{
-            background: '#f0f7ff',
-            border: '1px solid #b4d4ff',
-            borderRadius: '8px',
-            padding: '12px 16px',
-            fontSize: '13px',
-            color: '#1a4a8a',
-            lineHeight: '1.6',
-          }}>
+          <div style={{ ...noteBoxStyle, background: '#f0f7ff', border: '1px solid #b4d4ff', color: '#1a4a8a' }}>
             <strong>How it works:</strong> For each order line, the app compares the
             B2B price paid against the retail compare-at price to calculate the exact
             saving per item. This is written to the order as &ldquo;Additional Details&rdquo; —
@@ -570,34 +535,18 @@ export default function Index() {
             Shopify Orders API (<code>note_attributes</code> field).
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={runBackfill}
-              disabled={backfillState.running}
-              style={{
-                background: backfillState.running ? '#8eb8e5' : '#1a4a8a',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '10px 20px',
-                fontSize: '14px',
-                fontWeight: '600',
-                cursor: backfillState.running ? 'not-allowed' : 'pointer',
-              }}
-            >
+            <button type="button" onClick={runBackfill} disabled={backfillState.running} style={actionButtonStyle('primary', backfillState.running)}>
               {backfillState.running
                 ? `Backfilling… (${backfillState.updated} updated, ${backfillState.skipped} no-discount)`
-                : '📋 Backfill Discount Records (last 365 days)'}
+                : 'Backfill Discount Records (last 365 days)'}
             </button>
             {backfillState.done && (
               <span style={{ color: '#008060', fontWeight: '600' }}>
-                ✅ Done — {backfillState.updated} order(s) updated, {backfillState.skipped} had no B2B discount
+                Done — {backfillState.updated} order(s) updated, {backfillState.skipped} had no B2B discount
               </span>
             )}
             {backfillState.error && (
-              <span style={{ color: '#d72c0d', fontWeight: '600' }}>
-                ❌ {backfillState.error}
-              </span>
+              <span style={{ color: '#d72c0d', fontWeight: '600' }}>{backfillState.error}</span>
             )}
           </div>
           <s-text tone="subdued">
