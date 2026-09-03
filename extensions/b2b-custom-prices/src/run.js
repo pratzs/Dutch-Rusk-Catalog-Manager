@@ -72,7 +72,7 @@ export function run(input) {
       }
     }
 
-    lines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, retailPrice, wholesalePrice, freeQty: 0 });
+    lines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, retailPrice, wholesalePrice, freeQty: 0, dealPaidQty: 0 });
   }
 
   // ── BOGO Bundles ──────────────────────────────────────────────────────────
@@ -109,33 +109,46 @@ export function run(input) {
         const groups = Math.floor(totalQty / groupSize);
         if (groups <= 0) continue;
 
-        let freeUnitsRemaining = Math.min(groups * getQty, totalQty);
-        if (freeUnitsRemaining <= 0) continue;
+        // The units a deal group consumes (both the paid and the free
+        // portion) don't get the catalog/wholesale discount -- the free
+        // item IS the discount. The paid portion goes back to full retail
+        // ("normal price of Shopify"), otherwise the catalog discount and
+        // the free unit would stack into a loss-making double discount.
+        // Only units beyond what deal groups consume keep the normal
+        // wholesale price. Free units still come off the cheapest matching
+        // line(s) first, matching Shopify's own BXGY convention.
+        let freeRemaining = groups * getQty;
+        let dealPaidRemaining = groups * buyQty;
+        if (freeRemaining <= 0) continue;
 
-        // Cheapest matching line first, so the free units come off the
-        // lowest-value items -- matches Shopify's own BXGY convention.
         const sortedLines = [...matchingLines].sort((a, b) => a.wholesalePrice - b.wholesalePrice);
 
         for (const line of sortedLines) {
-          if (freeUnitsRemaining <= 0) break;
-          if (!line.wholesalePrice || line.wholesalePrice <= 0) continue;
+          let available = line.quantity - line.freeQty - line.dealPaidQty;
+          if (available <= 0) continue;
 
-          const availableQty = line.quantity - line.freeQty;
-          const freeFromThisLine = Math.min(freeUnitsRemaining, availableQty);
-          if (freeFromThisLine <= 0) continue;
-
+          const freeFromThisLine = Math.min(freeRemaining, available);
           line.freeQty += freeFromThisLine;
-          freeUnitsRemaining -= freeFromThisLine;
+          freeRemaining -= freeFromThisLine;
+          available -= freeFromThisLine;
+
+          const dealPaidFromThisLine = Math.min(dealPaidRemaining, available);
+          line.dealPaidQty += dealPaidFromThisLine;
+          dealPaidRemaining -= dealPaidFromThisLine;
         }
       }
     }
   }
 
   // ── Emit exactly one discount entry per line ───────────────────────────────
+  // Each unit in a line is exactly one of: free (part of a deal group,
+  // $0), deal-paid (part of a deal group, full retail, no discount), or
+  // wholesale (outside any deal group, normal catalog discount applies).
   const discounts = [];
   for (const line of lines) {
-    const perUnitWholesaleDiscount = line.retailPrice - line.wholesalePrice;
-    const perUnitDiscount = perUnitWholesaleDiscount + (line.freeQty * line.wholesalePrice) / line.quantity;
+    const wholesaleQty = line.quantity - line.freeQty - line.dealPaidQty;
+    const discountAmount = line.freeQty * line.retailPrice + wholesaleQty * (line.retailPrice - line.wholesalePrice);
+    const perUnitDiscount = discountAmount / line.quantity;
     if (perUnitDiscount <= 0.001) continue;
 
     discounts.push({
