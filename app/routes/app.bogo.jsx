@@ -202,6 +202,31 @@ async function syncDealCollection(admin, bundle) {
     );
   }
 
+  // The deals index renders these with the theme's card-collection snippet,
+  // which only falls back to a product image when a real `collection` object is
+  // in scope -- it isn't on a page template, so give the collection its own
+  // image (the first product's) or the card renders blank.
+  const imageRes = await admin.graphql(
+    `query DealCollectionImage($id: ID!) {
+      collection(id: $id) {
+        image { url }
+        products(first: 1) { nodes { featuredMedia { preview { image { url } } } } }
+      }
+    }`,
+    { variables: { id: collectionId } }
+  );
+  const { data: imageData } = await imageRes.json();
+  const hasImage = Boolean(imageData?.collection?.image?.url);
+  const firstProductImage = imageData?.collection?.products?.nodes?.[0]?.featuredMedia?.preview?.image?.url;
+  if (!hasImage && firstProductImage) {
+    await admin.graphql(
+      `mutation SetDealCollectionImage($input: CollectionInput!) {
+        collectionUpdate(input: $input) { userErrors { field message } }
+      }`,
+      { variables: { input: { id: collectionId, image: { src: firstProductImage } } } }
+    );
+  }
+
   return handle;
 }
 
@@ -345,6 +370,7 @@ export default function Bogo() {
 
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
 
   const pickProducts = async () => {
     if (!window.shopify?.resourcePicker) {
@@ -431,8 +457,15 @@ export default function Bogo() {
     cancelEdit();
   };
 
+  // Inline two-step confirm rather than window.confirm: native dialogs are
+  // blocked outright in some embedded-app contexts, which silently swallowed
+  // the delete instead of running it.
   const submitDelete = (id) => {
-    if (!window.confirm("Remove this deal?")) return;
+    if (confirmingDeleteId !== id) {
+      setConfirmingDeleteId(id);
+      return;
+    }
+    setConfirmingDeleteId(null);
     const fd = new FormData();
     fd.set("intent", "delete_bundle");
     fd.set("id", id);
@@ -500,11 +533,14 @@ export default function Bogo() {
                     </div>
                   </td>
                   <td style={cell}>
-                    <div style={{ display: "flex", gap: "6px" }}>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                       <s-button size="slim" variant="secondary" onClick={() => startEdit(b)}>Edit</s-button>
                       <s-button size="slim" variant="secondary" tone="critical" disabled={busy || undefined} onClick={() => submitDelete(b.id)}>
-                        Remove
+                        {confirmingDeleteId === b.id ? "Confirm remove" : "Remove"}
                       </s-button>
+                      {confirmingDeleteId === b.id ? (
+                        <s-button size="slim" variant="secondary" onClick={() => setConfirmingDeleteId(null)}>Cancel</s-button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
