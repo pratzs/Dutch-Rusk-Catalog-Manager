@@ -88,10 +88,15 @@ async function findPricingDiscountId(admin) {
   return node?.id ?? null;
 }
 
-// Resolves this bundle's variant IDs to their product handle + vendor so the
-// storefront "Special Deals" page can render real product cards (Liquid can't
-// resolve an Admin API variant GID to a product on its own) and show a
-// "Brand - Deal Name" title, without needing a second lookup step at render time.
+const ONLINE_STORE_PUBLICATION_ID = "gid://shopify/Publication/93695902009";
+
+function dealCollectionHandle(bundleId) {
+  return `deal-${bundleId}`;
+}
+
+// Resolves this bundle's variant IDs to their product IDs + vendor. The vendor
+// becomes the "Brand - Deal Name" title; the product IDs populate the deal's
+// storefront collection (see syncDealCollection).
 async function enrichBundleForStorefront(admin, bundle) {
   const variantIds = bundle.variantIds ?? [];
   if (!variantIds.length) return bundle;
@@ -101,7 +106,7 @@ async function enrichBundleForStorefront(admin, bundle) {
       nodes(ids: $ids) {
         ... on ProductVariant {
           id
-          product { handle vendor }
+          product { id vendor }
         }
       }
     }`,
@@ -110,18 +115,105 @@ async function enrichBundleForStorefront(admin, bundle) {
   const { data } = await res.json();
 
   let brand = null;
-  const productHandles = [];
-  const seenHandles = new Set();
+  const productIds = [];
+  const seen = new Set();
   for (const node of data?.nodes ?? []) {
     if (!node?.product) continue;
     if (!brand) brand = node.product.vendor || null;
-    if (!seenHandles.has(node.product.handle)) {
-      seenHandles.add(node.product.handle);
-      productHandles.push(node.product.handle);
+    if (!seen.has(node.product.id)) {
+      seen.add(node.product.id);
+      productIds.push(node.product.id);
     }
   }
 
-  return { ...bundle, brand, productHandles };
+  return { ...bundle, brand, productIds, collectionHandle: dealCollectionHandle(bundle.id) };
+}
+
+async function findCollectionByHandle(admin, handle) {
+  const res = await admin.graphql(
+    `query DealCollection($handle: String!) {
+      collectionByHandle(handle: $handle) {
+        id
+        products(first: 250) { nodes { id } }
+      }
+    }`,
+    { variables: { handle } }
+  );
+  const { data } = await res.json();
+  return data?.collectionByHandle ?? null;
+}
+
+// Each deal is backed by a real collection so the storefront can list every
+// product in it. Liquid's all_products can only resolve 20 unique products per
+// page render -- past that it silently repeats the last one it fetched, which
+// is why the deals page has to read collections, not individual handles.
+async function syncDealCollection(admin, bundle) {
+  const handle = dealCollectionHandle(bundle.id);
+  const title = bundle.brand ? `${bundle.brand} - ${bundle.label}` : bundle.label;
+  const productIds = bundle.productIds ?? [];
+  const existing = await findCollectionByHandle(admin, handle);
+
+  let collectionId = existing?.id;
+  if (!collectionId) {
+    const res = await admin.graphql(
+      `mutation CreateDealCollection($input: CollectionInput!) {
+        collectionCreate(input: $input) { collection { id } userErrors { field message } }
+      }`,
+      { variables: { input: { title, handle, descriptionHtml: "" } } }
+    );
+    const { data } = await res.json();
+    const errors = data?.collectionCreate?.userErrors ?? [];
+    if (errors.length) throw new Error(`Couldn't create the deal's collection: ${errors.map((e) => e.message).join(", ")}`);
+    collectionId = data?.collectionCreate?.collection?.id;
+
+    await admin.graphql(
+      `mutation PublishDealCollection($id: ID!, $input: [PublicationInput!]!) {
+        publishablePublish(id: $id, input: $input) { userErrors { field message } }
+      }`,
+      { variables: { id: collectionId, input: [{ publicationId: ONLINE_STORE_PUBLICATION_ID }] } }
+    );
+  } else {
+    await admin.graphql(
+      `mutation RenameDealCollection($input: CollectionInput!) {
+        collectionUpdate(input: $input) { userErrors { field message } }
+      }`,
+      { variables: { input: { id: collectionId, title } } }
+    );
+  }
+
+  const currentIds = (existing?.products?.nodes ?? []).map((p) => p.id);
+  const toAdd = productIds.filter((id) => !currentIds.includes(id));
+  const toRemove = currentIds.filter((id) => !productIds.includes(id));
+
+  if (toAdd.length) {
+    await admin.graphql(
+      `mutation AddDealProducts($id: ID!, $productIds: [ID!]!) {
+        collectionAddProducts(id: $id, productIds: $productIds) { userErrors { field message } }
+      }`,
+      { variables: { id: collectionId, productIds: toAdd } }
+    );
+  }
+  if (toRemove.length) {
+    await admin.graphql(
+      `mutation RemoveDealProducts($id: ID!, $productIds: [ID!]!) {
+        collectionRemoveProducts(id: $id, productIds: $productIds) { userErrors { field message } }
+      }`,
+      { variables: { id: collectionId, productIds: toRemove } }
+    );
+  }
+
+  return handle;
+}
+
+async function deleteDealCollection(admin, bundleId) {
+  const existing = await findCollectionByHandle(admin, dealCollectionHandle(bundleId));
+  if (!existing?.id) return;
+  await admin.graphql(
+    `mutation DeleteDealCollection($input: CollectionDeleteInput!) {
+      collectionDelete(input: $input) { userErrors { field message } }
+    }`,
+    { variables: { input: { id: existing.id } } }
+  );
 }
 
 async function saveBundles(admin, shopId, bundles) {
@@ -224,6 +316,7 @@ export async function action({ request }) {
       if (overridePct !== null) entry.overridePct = overridePct;
       if (catalogIds.length) entry.catalogIds = catalogIds;
       entry = await enrichBundleForStorefront(admin, entry);
+      await syncDealCollection(admin, entry);
       next.push(entry);
       await saveBundles(admin, shopId, next);
       return { ok: `Saved "${label}".` };
@@ -233,6 +326,7 @@ export async function action({ request }) {
       const id = String(form.get("id") || "");
       const next = bundles.filter((b) => b.id !== id);
       await saveBundles(admin, shopId, next);
+      await deleteDealCollection(admin, id);
       return { ok: "Deal removed." };
     }
 
