@@ -88,6 +88,42 @@ async function findPricingDiscountId(admin) {
   return node?.id ?? null;
 }
 
+// Resolves this bundle's variant IDs to their product handle + vendor so the
+// storefront "Special Deals" page can render real product cards (Liquid can't
+// resolve an Admin API variant GID to a product on its own) and show a
+// "Brand - Deal Name" title, without needing a second lookup step at render time.
+async function enrichBundleForStorefront(admin, bundle) {
+  const variantIds = bundle.variantIds ?? [];
+  if (!variantIds.length) return bundle;
+
+  const res = await admin.graphql(
+    `query BundleStorefrontInfo($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on ProductVariant {
+          id
+          product { handle vendor }
+        }
+      }
+    }`,
+    { variables: { ids: variantIds } }
+  );
+  const { data } = await res.json();
+
+  let brand = null;
+  const productHandles = [];
+  const seenHandles = new Set();
+  for (const node of data?.nodes ?? []) {
+    if (!node?.product) continue;
+    if (!brand) brand = node.product.vendor || null;
+    if (!seenHandles.has(node.product.handle)) {
+      seenHandles.add(node.product.handle);
+      productHandles.push(node.product.handle);
+    }
+  }
+
+  return { ...bundle, brand, productHandles };
+}
+
 async function saveBundles(admin, shopId, bundles) {
   const metafields = [
     {
@@ -184,9 +220,10 @@ export async function action({ request }) {
       }
 
       const next = bundles.filter((b) => b.id !== id);
-      const entry = { id, label, buyQty, getQty, variantIds };
+      let entry = { id, label, buyQty, getQty, variantIds };
       if (overridePct !== null) entry.overridePct = overridePct;
       if (catalogIds.length) entry.catalogIds = catalogIds;
+      entry = await enrichBundleForStorefront(admin, entry);
       next.push(entry);
       await saveBundles(admin, shopId, next);
       return { ok: `Saved "${label}".` };
