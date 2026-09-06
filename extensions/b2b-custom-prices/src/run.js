@@ -72,7 +72,9 @@ export function run(input) {
       }
     }
 
-    lines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, retailPrice, wholesalePrice, freeQty: 0, dealPaidQty: 0 });
+    // dealPaidPrice stays null unless an active bundle with an override % sets
+    // it; null means the deal's paid units sit at full retail.
+    lines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, retailPrice, wholesalePrice, freeQty: 0, dealPaidQty: 0, dealPaidPrice: null });
   }
 
   // ── BOGO Bundles ──────────────────────────────────────────────────────────
@@ -119,20 +121,32 @@ export function run(input) {
         if (groups <= 0) continue;
 
         // Optional per-deal override, only takes effect once the deal is
-        // actually active (checked above): replaces the customer's normal
-        // catalog/wholesale % with a promo-specific one for this bundle's
-        // products, applying to BOTH the paid portion of the deal (instead
-        // of full retail) and any extra units beyond the deal (instead of
-        // the normal catalog %) -- e.g. "10% off + Buy 5 Get 1 Free"
-        // instead of full-retail-plus-free or the normal 20% catalog rate.
-        // Leaving it blank keeps the original rule: paid units at full
-        // retail, extra units at the normal catalog price.
+        // actually active (checked above): it sets the price of the PAID
+        // units inside the deal, instead of those units falling back to full
+        // retail -- e.g. "10% off + Buy 5 Get 1 Free" rather than
+        // full-retail-plus-free. Leaving it blank keeps the original rule of
+        // deal-paid units at full retail.
+        //
+        // The promo rate also applies to units beyond the deal groups, as
+        // configured -- but only ever as a REDUCTION. If the customer's own
+        // catalog rate is already deeper than the promo, they keep it. A
+        // promotion must never leave a customer paying more than their catalog
+        // price on stock the deal didn't consume; before this floor, catalogs
+        // priced below the override (Night 'n Day, Metromart) were charged the
+        // dearer promo rate on those units.
         const overridePct = Number(bundle?.overridePct);
         const hasOverride = overridePct > 0 && overridePct < 100;
         if (hasOverride) {
           for (const line of matchingLines) {
-            line.wholesalePrice = line.retailPrice * (1 - overridePct / 100);
-            line.dealPaidUsesOverride = true;
+            const overridePrice = line.retailPrice * (1 - overridePct / 100);
+            // Beyond-deal units: promo rate, floored at the catalog price.
+            line.wholesalePrice = Math.min(line.wholesalePrice, overridePrice);
+            // Deal-paid units: the promo rate itself. Deliberately NOT floored
+            // at catalog -- pairing the catalog discount with a free unit is
+            // the loss-making stack removed in 13ae4ca. A line can match more
+            // than one bundle, so keep the cheapest for a stable outcome.
+            line.dealPaidPrice =
+              line.dealPaidPrice === null ? overridePrice : Math.min(line.dealPaidPrice, overridePrice);
           }
         }
 
@@ -185,18 +199,38 @@ export function run(input) {
       });
     }
 
-    // Deal-paid units only get a discount when this bundle has an override %
-    // (see above) -- otherwise they're full retail, no entry needed. When an
-    // override IS active, deal-paid and beyond-the-deal units land on the
-    // same overridden price, so they're combined into a single entry rather
-    // than two identical-looking rows.
-    const discountedQty = (line.dealPaidUsesOverride ? line.dealPaidQty : 0) + wholesaleQty;
-    if (discountedQty > 0 && line.wholesalePrice < line.retailPrice - 0.001) {
-      discounts.push({
-        targets: [{ cartLine: { id: line.id, quantity: discountedQty } }],
-        value: { fixedAmount: { amount: (line.retailPrice - line.wholesalePrice).toFixed(2), appliesToEachItem: true } },
-        message: "B2B Wholesale Price",
-      });
+    // Two separate tiers now, because they are priced by different rules:
+    //   - deal-paid units   -> the bundle's override %, or full retail if none
+    //   - beyond-deal units -> the better of the catalog price and the promo
+    // They only share a row when both land on the same price, which keeps
+    // checkout from showing two identical-looking lines.
+    const dealPaidPrice = line.dealPaidPrice === null ? line.retailPrice : line.dealPaidPrice;
+    const samePrice = Math.abs(dealPaidPrice - line.wholesalePrice) < 0.005;
+
+    if (samePrice) {
+      const qty = line.dealPaidQty + wholesaleQty;
+      if (qty > 0 && line.wholesalePrice < line.retailPrice - 0.001) {
+        discounts.push({
+          targets: [{ cartLine: { id: line.id, quantity: qty } }],
+          value: { fixedAmount: { amount: (line.retailPrice - line.wholesalePrice).toFixed(2), appliesToEachItem: true } },
+          message: "B2B Wholesale Price",
+        });
+      }
+    } else {
+      if (line.dealPaidQty > 0 && dealPaidPrice < line.retailPrice - 0.001) {
+        discounts.push({
+          targets: [{ cartLine: { id: line.id, quantity: line.dealPaidQty } }],
+          value: { fixedAmount: { amount: (line.retailPrice - dealPaidPrice).toFixed(2), appliesToEachItem: true } },
+          message: "Deal Price",
+        });
+      }
+      if (wholesaleQty > 0 && line.wholesalePrice < line.retailPrice - 0.001) {
+        discounts.push({
+          targets: [{ cartLine: { id: line.id, quantity: wholesaleQty } }],
+          value: { fixedAmount: { amount: (line.retailPrice - line.wholesalePrice).toFixed(2), appliesToEachItem: true } },
+          message: "B2B Wholesale Price",
+        });
+      }
     }
   }
 
