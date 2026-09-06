@@ -142,9 +142,10 @@ async function runSync(admin, shop, options = {}) {
         for (const variantId of batchIds) {
           const vData = existingMetaBatch[variantId];
           const standardPrice = parseFloat(vData?.compareAtPrice || vData?.price || "0");
-          let merged = {};
-          try { if (vData?.metaValue) merged = JSON.parse(vData.metaValue); } catch { merged = {}; }
-          
+          // Rebuilt from scratch each run rather than merged onto the previous
+          // value, so entries for deleted price lists can't linger.
+          const merged = {};
+
           for (const pl of toSync) {
             let price = allOverridesByList[pl.id]?.[variantId];
             
@@ -162,9 +163,25 @@ async function runSync(admin, shop, options = {}) {
                     price = retail.toFixed(2);
                 }
             }
-            merged[pl.id] = price;
+            // Only keep entries that are a GENUINE discount against standard
+            // retail. A price equal to (or above) retail means this catalog has
+            // no special rate for the variant, and both Functions already treat
+            // "absent" and "not a discount" identically -- the transformer only
+            // raises when standardRetail > the catalog price, and the discount
+            // only fires when it can go below the line price.
+            //
+            // This matters because the whole map is sent to those Functions on
+            // EVERY cart line, and their input is capped. Storing all 12 price
+            // lists per variant made large carts blow the cap: the transformer
+            // would raise to retail while the discount Function silently failed,
+            // and the customer paid full retail (orders #1409, #1850, #1884).
+            // Pruning cuts the map from 12 entries to ~1.5 and the payload by
+            // 87%, without changing a single price.
+            if (parseFloat(price) < standardPrice - 0.005) {
+              merged[pl.id] = price;
+            }
           }
-          
+
           metafieldsToWrite.push(
             { ownerId: variantId, namespace: "custom", key: "catalog_fixed_prices", type: "json", value: JSON.stringify(merged) },
             { ownerId: variantId, namespace: "custom", key: "standard_retail_price", type: "number_decimal", value: String(standardPrice) }

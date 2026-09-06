@@ -54,6 +54,154 @@ function hasErrors(json, dataPath) {
   return Boolean(userErrors?.length);
 }
 
+/**
+ * Compare what each line actually cost the buyer against the catalog price
+ * Shopify itself would quote for their company location. Anything billed above
+ * catalog means the pricing Functions didn't complete, so the order is tagged
+ * `pricing-error` and given a note naming the affected lines and the amount.
+ *
+ * Tagging (rather than emailing) is deliberate: the tag is filterable in the
+ * admin and can drive a Flow alert, and it survives without extra credentials.
+ */
+async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids) {
+  const locationId =
+    order?.purchasing_entity?.company_location?.id ??
+    order?.company_location_id ??
+    null;
+  if (!locationId) return; // not a B2B company order — native pricing applies
+
+  const companyLocationGid = String(locationId).startsWith("gid://")
+    ? String(locationId)
+    : `gid://shopify/CompanyLocation/${locationId}`;
+
+  const json = await graphqlJson(
+    admin,
+    `query CatalogPrices($ids: [ID!]!, $loc: ID!) {
+      shop {
+        bogoBundles: metafield(namespace: "custom", key: "bogo_bundles") { value }
+      }
+      nodes(ids: $ids) {
+        ... on ProductVariant {
+          id
+          sku
+          contextualPricing(context: { companyLocationId: $loc }) {
+            price { amount }
+          }
+        }
+      }
+    }`,
+    { ids: variantGids, loc: companyLocationGid }
+  );
+
+  if (json.errors?.length) {
+    console.error(`[orders/create] ${orderName}: catalog price lookup failed`, json.errors);
+    return;
+  }
+
+  const catalogByVariant = {};
+  for (const node of json.data?.nodes ?? []) {
+    const amount = node?.contextualPricing?.price?.amount;
+    if (node?.id && amount != null) {
+      catalogByVariant[node.id.split("/").pop()] = { price: parseFloat(amount), sku: node.sku };
+    }
+  }
+
+  // Products in a BOGO bundle are exempt. A deal deliberately prices its paid
+  // units above catalog (the free unit is the discount instead), so comparing
+  // them to catalog would tag legitimate deal orders every time. The guard is
+  // here to catch the Functions failing, not to second-guess deal economics.
+  const dealVariantIds = new Set();
+  const bogoRaw = json.data?.shop?.bogoBundles?.value;
+  if (bogoRaw) {
+    try {
+      for (const bundle of JSON.parse(bogoRaw) ?? []) {
+        for (const gid of bundle?.variantIds ?? []) dealVariantIds.add(String(gid).split("/").pop());
+      }
+    } catch {
+      // Unparseable config: check every line rather than skipping silently.
+    }
+  }
+
+  const offenders = [];
+  let overcharge = 0;
+  let skippedDealLines = 0;
+
+  for (const li of order.line_items ?? []) {
+    if (!li.variant_id) continue;
+    if (dealVariantIds.has(String(li.variant_id))) { skippedDealLines++; continue; }
+    const catalog = catalogByVariant[String(li.variant_id)];
+    if (!catalog || !isFinite(catalog.price)) continue;
+
+    const qty = parseInt(li.quantity ?? 1, 10);
+    // li.price is the pre-discount unit price; subtract what was actually
+    // discounted off this line to get what the buyer really paid per unit.
+    const allocated = (li.discount_allocations ?? []).reduce(
+      (sum, d) => sum + parseFloat(d.amount ?? "0"),
+      0
+    );
+    const paidPerUnit = parseFloat(li.price ?? "0") - (qty > 0 ? allocated / qty : 0);
+    if (!isFinite(paidPerUnit)) continue;
+
+    // A cent of tolerance: the discount amount the Function emits is rounded to
+    // cents and then allocated per line, so a correctly priced line can land a
+    // fraction above the exact catalog figure. Anything real is far larger --
+    // the failures this catches bill the whole retail margin.
+    const over = paidPerUnit - catalog.price;
+    if (over > 0.011) {
+      overcharge += over * qty;
+      offenders.push(`${catalog.sku || li.sku || li.variant_id}: paid ${paidPerUnit.toFixed(2)} vs catalog ${catalog.price.toFixed(2)} x${qty}`);
+    }
+  }
+
+  // Don't tag an order over small change; only a real shortfall is worth a flag.
+  if (offenders.length === 0 || overcharge <= 0.5) {
+    console.log(
+      `[orders/create] ${orderName}: pricing OK — every line at or below catalog` +
+        (skippedDealLines ? ` (${skippedDealLines} deal line(s) exempt).` : ".")
+    );
+    return;
+  }
+
+  // Deal lines were excluded from the sum, so when any were skipped the figure
+  // is a floor, not a total. Say so rather than quoting it as exact.
+  const atLeast = skippedDealLines > 0 ? "at least " : "";
+
+  console.error(
+    `[orders/create] ${orderName}: OVERCHARGE — ${offenders.length} line(s), ${atLeast}$${overcharge.toFixed(2)} above catalog. ${offenders.slice(0, 5).join(" | ")}`
+  );
+
+  const tagJson = await graphqlJson(
+    admin,
+    `mutation TagOrder($id: ID!, $tags: [String!]!) {
+      tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+    }`,
+    { id: `gid://shopify/Order/${order.id}`, tags: ["pricing-error"] }
+  );
+  if (hasErrors(tagJson, "tagsAdd")) {
+    console.error(`[orders/create] ${orderName}: failed to tag pricing-error`, tagJson.errors ?? tagJson.data?.tagsAdd?.userErrors);
+  }
+
+  const existing = (order.note_attributes ?? []).filter((n) => n.name !== "PRICING ERROR");
+  await graphqlJson(
+    admin,
+    `mutation NoteOrder($input: OrderInput!) {
+      orderUpdate(input: $input) { userErrors { field message } }
+    }`,
+    {
+      input: {
+        id: `gid://shopify/Order/${order.id}`,
+        customAttributes: [
+          ...existing.map((n) => ({ key: String(n.name), value: String(n.value) })),
+          {
+            key: "PRICING ERROR",
+            value: `${offenders.length} line(s) billed ${atLeast}$${overcharge.toFixed(2)} above catalog price${skippedDealLines ? ` (${skippedDealLines} deal line(s) not checked)` : ""}. ${offenders.slice(0, 3).join(" | ")}`,
+          },
+        ],
+      },
+    }
+  );
+}
+
 export const action = async ({ request }) => {
   const { authenticate } = await import("../shopify.server");
 
@@ -75,6 +223,26 @@ export const action = async ({ request }) => {
 
   if (variantGids.length === 0) {
     return new Response("OK", { status: 200 });
+  }
+
+  // ── Overcharge guard ──────────────────────────────────────────────────────
+  // Runs before anything else, because it is the one check that costs money to
+  // get wrong. Catalog pricing on this shop is applied by two chained Functions
+  // (b2b-price-transformer raises each line to retail, b2b-custom-prices brings
+  // it back to the catalog price). If the second one doesn't run, the first has
+  // already raised the price and the buyer silently pays full retail. That is
+  // invisible on the order itself — it just looks like an order with no
+  // discounts. It happened on #1409, #1850 and #1884 ($1,632 above catalog) and
+  // again to #1867-#1870 during a discount deploy gap.
+  //
+  // So every order is re-priced against Shopify's own contextual catalog price
+  // and tagged if any line came through above it. Read-only: it never edits
+  // amounts, it only makes the problem impossible to miss.
+  try {
+    await flagLinesBilledAboveCatalog(admin, order, orderName, variantGids);
+  } catch (err) {
+    // Never let the guard's own failure block the notes below.
+    console.error(`[orders/create] ${orderName}: overcharge guard failed —`, err?.message ?? err);
   }
 
   try {
