@@ -70,7 +70,7 @@ describe("no cart size can be overcharged", () => {
   });
 
   test("above the guard, no size is charged above catalog even if the discount is DEAD", () => {
-    for (const n of sizes.filter((n) => n > 60)) {
+    for (const n of sizes.filter((n) => n > 40)) {
       const price = finalPrice(n, { discountRuns: false });
       expect(`${n} lines -> ${price <= 15.000001 ? "catalog or better" : `OVERCHARGED at ${price}`}`)
         .toBe(`${n} lines -> catalog or better`);
@@ -84,12 +84,12 @@ describe("no cart size can be overcharged", () => {
   // band, which caused every overcharge found in the 21 May - 6 Sept audit; it
   // cannot close this one. Detection at order time is the backstop.
   test("KNOWN RESIDUAL: below the guard, a dead discount Function still bills retail", () => {
-    expect(finalPrice(40, { discountRuns: false })).toBe(20);
+    expect(finalPrice(30, { discountRuns: false })).toBe(20);
   });
 
   test("the transform stands down above its line guard", () => {
-    expect(transformRun(buildCart(60)).operations.length).toBe(60);
-    expect(transformRun(buildCart(61)).operations).toEqual([]);
+    expect(transformRun(buildCart(40)).operations.length).toBe(40);
+    expect(transformRun(buildCart(41)).operations).toEqual([]);
     expect(transformRun(buildCart(104)).operations).toEqual([]);
   });
 });
