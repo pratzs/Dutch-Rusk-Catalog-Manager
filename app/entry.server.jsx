@@ -4,6 +4,12 @@ import { ServerRouter } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { startPricingHealthTimer } from "./lib/pricing-health.server";
+
+// Watch the B2B pricing pair (cart transform + wholesale discount) and put it
+// back if either half drops. Started here so it runs once per server process.
+// See lib/pricing-health.server.js for why this matters and how to disable it.
+startPricingHealthTimer();
 
 export const streamTimeout = 5000;
 
