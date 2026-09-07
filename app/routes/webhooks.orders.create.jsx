@@ -63,6 +63,35 @@ function hasErrors(json, dataPath) {
  * Tagging (rather than emailing) is deliberate: the tag is filterable in the
  * admin and can drive a Flow alert, and it survives without extra credentials.
  */
+/** Add tags without letting a tagging failure break the rest of the webhook. */
+async function tagOrder(admin, order, orderName, tags) {
+  try {
+    const res = await graphqlJson(
+      admin,
+      `mutation TagOrder($id: ID!, $tags: [String!]!) {
+        tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+      }`,
+      { id: `gid://shopify/Order/${order.id}`, tags }
+    );
+    if (hasErrors(res, "tagsAdd")) {
+      console.error(`[orders/create] ${orderName}: failed to tag ${tags.join(",")}`, res.errors ?? res.data?.tagsAdd?.userErrors);
+    }
+  } catch (err) {
+    console.error(`[orders/create] ${orderName}: tagging threw —`, err?.message ?? err);
+  }
+}
+
+/** Email a human. Never allowed to break the webhook. */
+async function alert({ subject, lines }) {
+  try {
+    const { sendPricingAlert } = await import("../lib/brevo.server");
+    const r = await sendPricingAlert({ subject, lines });
+    if (r?.skipped) console.warn(`[orders/create] pricing alert not sent: ${r.skipped}`);
+  } catch (err) {
+    console.error(`[orders/create] pricing alert failed to send —`, err?.message ?? err);
+  }
+}
+
 async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids) {
   const locationId =
     order?.purchasing_entity?.company_location?.id ??
@@ -84,6 +113,7 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
         ... on ProductVariant {
           id
           sku
+          standardRetail: metafield(namespace: "custom", key: "standard_retail_price") { value }
           contextualPricing(context: { companyLocationId: $loc }) {
             price { amount }
           }
@@ -99,11 +129,13 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
   }
 
   const catalogByVariant = {};
+  const retailByVariant = {};
   for (const node of json.data?.nodes ?? []) {
+    if (!node?.id) continue;
+    const key = node.id.split("/").pop();
     const amount = node?.contextualPricing?.price?.amount;
-    if (node?.id && amount != null) {
-      catalogByVariant[node.id.split("/").pop()] = { price: parseFloat(amount), sku: node.sku };
-    }
+    if (amount != null) catalogByVariant[key] = { price: parseFloat(amount), sku: node.sku };
+    if (node.standardRetail?.value != null) retailByVariant[key] = parseFloat(node.standardRetail.value);
   }
 
   // Products in a BOGO bundle are exempt. A deal deliberately prices its paid
@@ -125,11 +157,22 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
   const offenders = [];
   let overcharge = 0;
   let skippedDealLines = 0;
+  // For the "missing discount rows" check below: did this order have any line
+  // where the catalog price is genuinely under retail, i.e. a saving that
+  // should have been shown to the buyer?
+  let discountWasAvailable = false;
+  let allocatedTotal = 0;
 
   for (const li of order.line_items ?? []) {
     if (!li.variant_id) continue;
+    allocatedTotal += (li.discount_allocations ?? []).reduce((s, d) => s + parseFloat(d.amount ?? "0"), 0);
+    const cat = catalogByVariant[String(li.variant_id)];
+    const retailMeta = retailByVariant[String(li.variant_id)];
+    if (cat && isFinite(cat.price) && isFinite(retailMeta) && cat.price < retailMeta - 0.011) {
+      discountWasAvailable = true;
+    }
     if (dealVariantIds.has(String(li.variant_id))) { skippedDealLines++; continue; }
-    const catalog = catalogByVariant[String(li.variant_id)];
+    const catalog = cat;
     if (!catalog || !isFinite(catalog.price)) continue;
 
     const qty = parseInt(li.quantity ?? 1, 10);
@@ -154,11 +197,52 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
   }
 
   // Don't tag an order over small change; only a real shortfall is worth a flag.
-  if (offenders.length === 0 || overcharge <= 0.5) {
-    console.log(
-      `[orders/create] ${orderName}: pricing OK — every line at or below catalog` +
-        (skippedDealLines ? ` (${skippedDealLines} deal line(s) exempt).` : ".")
+  // ── Missing discount rows ────────────────────────────────────────────────
+  // The buyer-visible saving on this shop comes from the cart transform raising
+  // each line to retail and the "B2B Wholesale Custom Pricing" discount pulling
+  // it back. If a small order has a saving available but carries NO discount at
+  // all, that pair did not both run: the price may still be right, but the
+  // struck-through "was" price and the "B2B Wholesale Price" rows are gone,
+  // which is not acceptable here. That is what orders #1894 and #1895 looked
+  // like. Above the transform's own line guard this is EXPECTED, so it is not
+  // flagged there — see MAX_LINES_TO_TRANSFORM in b2b-price-transformer.
+  const TRANSFORM_LINE_GUARD = 45;
+  const lineCount = (order.line_items ?? []).filter((li) => li.variant_id).length;
+  const missingRows =
+    discountWasAvailable && allocatedTotal <= 0.005 && lineCount <= TRANSFORM_LINE_GUARD;
+
+  if (missingRows) {
+    console.error(
+      `[orders/create] ${orderName}: NO DISCOUNT ROWS on a ${lineCount}-line order that had a catalog saving available — the transform/discount pair did not both run.`
     );
+    await tagOrder(admin, order, orderName, ["pricing-no-discount-rows"]);
+    await alert({
+      subject: `Dutch Rusk: ${orderName} has no discount rows`,
+      lines: [
+        `Order ${orderName} came through with NO discount lines, but this customer`,
+        `does have catalog savings on it. Prices may still be correct — the`,
+        `problem is the buyer-visible saving is missing (no struck-through "was"`,
+        `price, no "B2B Wholesale Price" rows).`,
+        ``,
+        `That means the cart transform and the wholesale discount did not both`,
+        `run. Check that:`,
+        `  1. a CartTransform is still registered (cartTransforms query)`,
+        `  2. the "B2B Wholesale Custom Pricing" automatic discount is ACTIVE`,
+        ``,
+        `line items : ${lineCount}`,
+        `company    : ${order?.purchasing_entity?.company?.name ?? "(unknown)"}`,
+        `admin      : https://admin.shopify.com/store/dutchrusk/orders/${order.id}`,
+      ],
+    });
+  }
+
+  if (offenders.length === 0 || overcharge <= 0.5) {
+    if (!missingRows) {
+      console.log(
+        `[orders/create] ${orderName}: pricing OK — every line at or below catalog` +
+          (skippedDealLines ? ` (${skippedDealLines} deal line(s) exempt).` : ".")
+      );
+    }
     return;
   }
 
@@ -170,16 +254,20 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
     `[orders/create] ${orderName}: OVERCHARGE — ${offenders.length} line(s), ${atLeast}$${overcharge.toFixed(2)} above catalog. ${offenders.slice(0, 5).join(" | ")}`
   );
 
-  const tagJson = await graphqlJson(
-    admin,
-    `mutation TagOrder($id: ID!, $tags: [String!]!) {
-      tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
-    }`,
-    { id: `gid://shopify/Order/${order.id}`, tags: ["pricing-error"] }
-  );
-  if (hasErrors(tagJson, "tagsAdd")) {
-    console.error(`[orders/create] ${orderName}: failed to tag pricing-error`, tagJson.errors ?? tagJson.data?.tagsAdd?.userErrors);
-  }
+  await tagOrder(admin, order, orderName, ["pricing-error"]);
+  await alert({
+    subject: `Dutch Rusk: ${orderName} billed ${atLeast}$${overcharge.toFixed(2)} above catalog`,
+    lines: [
+      `Order ${orderName} charged MORE than the customer's catalog price.`,
+      ``,
+      `over by    : ${atLeast}$${overcharge.toFixed(2)}`,
+      `lines      : ${offenders.length}${skippedDealLines ? ` (${skippedDealLines} deal line(s) not checked, so the figure is a floor)` : ""}`,
+      `company    : ${order?.purchasing_entity?.company?.name ?? "(unknown)"}`,
+      `admin      : https://admin.shopify.com/store/dutchrusk/orders/${order.id}`,
+      ``,
+      ...offenders.slice(0, 15).map((o) => `  ${o}`),
+    ],
+  });
 
   const existing = (order.note_attributes ?? []).filter((n) => n.name !== "PRICING ERROR");
   await graphqlJson(

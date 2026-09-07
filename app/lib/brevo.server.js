@@ -324,3 +324,29 @@ If you didn't request this, you can ignore this email.
 Dutch Rusk Team`;
   return sendRawFallback({ to, subject, textBody: text, htmlBody: null, tags: ["dr_login_otp"] });
 }
+
+/**
+ * Alert a human that a B2B order's pricing looked wrong.
+ *
+ * Two things get flagged (see webhooks.orders.create.jsx):
+ *   - a line billed ABOVE the customer's catalog price
+ *   - a small order with NO discount rows when the catalog does offer a discount,
+ *     which is how "the strikethrough disappeared" shows up on an order
+ *
+ * Deliberately plain text and no Brevo template, so it works without anyone
+ * having to create one. Recipient comes from PRICING_ALERT_EMAIL.
+ */
+export async function sendPricingAlert({ subject, lines }) {
+  const to = process.env.PRICING_ALERT_EMAIL;
+  if (!to) return { skipped: "PRICING_ALERT_EMAIL not set" };
+  const textBody = lines.join("\n");
+  return await sendRawFallback({
+    to: { email: to, name: "Dutch Rusk pricing alert" },
+    subject,
+    textBody,
+    htmlBody: `<pre style="font:13px/1.5 ui-monospace,Menlo,Consolas,monospace">${
+      textBody.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))
+    }</pre>`,
+    tags: ["pricing-alert"],
+  });
+}
