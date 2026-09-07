@@ -16,6 +16,28 @@
   const SS_PRE    = "cvh4:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
   const SS_TTL_MS = 60 * 1000; // 60-second TTL — keeps storefront fresh after admin rule changes
 
+  // ── Last-known-good store (localStorage, no TTL) ──────────────────────────
+  // sessionStorage dies with the tab, so every fresh visit used to be a
+  // blocking API call, and any failure on that call showed "Back Soon" on
+  // in-stock product. This store survives tab close and is ONLY read when the
+  // API cannot be reached, however old it is: showing yesterday's pack-size
+  // rules is far better than telling a buyer a stocked item is unavailable.
+  // Freshness is still driven by SS_TTL_MS above; this is purely a safety net.
+  const LKG_PRE = "cvh4lkg:" + (CUSTOMER_ID || LOCATION_ID || "") + ":";
+
+  function lkgGet(pid) {
+    try {
+      const raw = localStorage.getItem(LKG_PRE + pid);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed?.hiddenVariantTypes) ? parsed : null;
+    } catch (_) { return null; }
+  }
+
+  function lkgSet(pid, rules) {
+    try { localStorage.setItem(LKG_PRE + pid, JSON.stringify(rules)); } catch (_) { /* quota/private mode */ }
+  }
+
   try {
     const prev = sessionStorage.getItem("cvh4:who");
     if (prev !== (CUSTOMER_ID || LOCATION_ID || "")) {
@@ -25,6 +47,37 @@
     }
     sessionStorage.setItem("cvh4:who", CUSTOMER_ID || LOCATION_ID || "");
   } catch (_) { /* sessionStorage unavailable (private mode/quota) */ }
+
+  // Identity change must also invalidate the last-known-good store, or one
+  // buyer could be shown another company's pack-size rules.
+  try {
+    const prevWho = localStorage.getItem("cvh4lkg:who");
+    if (prevWho !== (CUSTOMER_ID || LOCATION_ID || "")) {
+      Object.keys(localStorage).filter(k => k.startsWith("cvh4lkg:")).forEach(k => localStorage.removeItem(k));
+      LOG("Last-known-good store cleared (identity changed)");
+    }
+    localStorage.setItem("cvh4lkg:who", CUSTOMER_ID || LOCATION_ID || "");
+  } catch (_) { /* localStorage unavailable */ }
+
+  // ── Resilient fetch ───────────────────────────────────────────────────────
+  // The app runs on a single small instance and every product card on every
+  // page view asks it for rules, so the odd request does time out or drop.
+  // One quick retry turns most of those into a success before any fallback or
+  // "Back Soon" decision is reached.
+  async function fetchWithRetry(url, attempts = 2) {
+    let lastErr;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) return res;
+        lastErr = new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        lastErr = err;
+      }
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 250 * (i + 1)));
+    }
+    throw lastErr;
+  }
 
   // ── Loading-mask CSS fallback ─────────────────────────────────────────────
   // catalog-hider.liquid injects the primary CSS (using :not([data-cvh-processed])
@@ -105,28 +158,31 @@
       if (locationId) params.set("locationId", locationId);
       if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
       if (productId) params.set("productId", productId);
-      params.set("_t", Date.now());
+      // No cache-buster — the response is cacheable for a short window.
 
       const url = `${APP_URL}/api/catalog-rules?${params}`;
       LOG(`fetchRules [API FETCH] → ${url}`);
 
-      const res = await fetch(url);
-      if (!res.ok) {
-        WARN(`fetchRules: API returned ${res.status} — failing closed (keeping mask)`);
-        return null;
-      }
+      const res = await fetchWithRetry(url);
       const data = await res.json();
       LOG(`fetchRules [API RESPONSE] productId="${productId || "(blanket)"}"`, data);
 
       if (Array.isArray(data.hiddenVariantTypes)) {
         rulesCache[cacheKey] = data;
+        if (productId) lkgSet(String(productId).split("/").pop(), data);
         try { sessionStorage.setItem(ssKey, JSON.stringify({ ...data, _cvh_exp: Date.now() + SS_TTL_MS })); } catch (_) { /* sessionStorage unavailable (private mode/quota) */ }
       } else {
         WARN("fetchRules: API response missing hiddenVariantTypes array", data);
       }
       return data;
     } catch (err) {
-      WARN("fetchRules: fetch failed — failing closed (keeping mask):", err);
+      // Prefer the last good answer over "Back Soon" on a stocked product.
+      const lkg = productId ? lkgGet(String(productId).split("/").pop()) : null;
+      if (lkg) {
+        WARN("fetchRules: fetch failed — serving last-known-good rules:", err?.message ?? err);
+        return { ...lkg, _cvh_stale: true };
+      }
+      WARN("fetchRules: fetch failed and nothing cached — failing closed (keeping mask):", err);
       return null;
     }
   }
@@ -138,28 +194,42 @@
   // the supplied resultMap (pass null for background-refresh calls).
   async function doFetchBatchChunked(locationId, normPids, resultMap) {
     const CHUNK_SIZE = 50;
-    for (let i = 0; i < normPids.length; i += CHUNK_SIZE) {
-      const chunk = normPids.slice(i, i + CHUNK_SIZE);
+    // Collection pages collect one entry per variant element, so the same
+    // product arrived 5-6 times over (48 ids for 8 products was typical in the
+    // server logs). Dedupe before asking: fewer, smaller requests.
+    const uniquePids = [...new Set(normPids.map(String))];
+    if (uniquePids.length !== normPids.length) {
+      LOG(`doFetchBatchChunked: deduped ${normPids.length} ids → ${uniquePids.length} unique`);
+    }
+
+    // Fall back to the last good answer rather than declaring stock unavailable.
+    const degrade = (chunk, why) => {
+      let recovered = 0;
+      for (const pid of chunk) {
+        const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
+        const lkg = lkgGet(pid);
+        const value = lkg ? { ...lkg, _cvh_stale: true } : { _cvh_error: true };
+        if (lkg) recovered++;
+        rulesCache[cacheKey] = value;
+        if (resultMap) resultMap[pid] = value;
+      }
+      WARN(`doFetchBatchChunked: ${why} — served ${recovered}/${chunk.length} from last-known-good, ${chunk.length - recovered} unresolved`);
+    };
+
+    for (let i = 0; i < uniquePids.length; i += CHUNK_SIZE) {
+      const chunk = uniquePids.slice(i, i + CHUNK_SIZE);
       try {
         const params = new URLSearchParams();
         params.set("productIds", chunk.join(","));
         if (locationId) params.set("locationId", locationId);
         if (CUSTOMER_ID) { params.set("customerId", CUSTOMER_ID); if (SHOP) params.set("shop", SHOP); }
-        params.set("_t", Date.now());
+        // No cache-busting parameter: the response carries a short Cache-Control
+        // so the browser can serve repeat views without touching the app at all.
 
         const url = `${APP_URL}/api/catalog-rules?${params}`;
         LOG(`doFetchBatchChunked [API FETCH] ${chunk.length} products →`, url.slice(0, 120) + "...");
 
-        const res = await fetch(url);
-        if (!res.ok) {
-          WARN(`doFetchBatchChunked: API returned ${res.status} — failing closed for chunk [${i}..${i + chunk.length - 1}]`);
-          for (const pid of chunk) {
-            const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
-            rulesCache[cacheKey] = { _cvh_error: true };
-            if (resultMap) resultMap[pid] = { _cvh_error: true };
-          }
-          continue;
-        }
+        const res = await fetchWithRetry(url);
         const data = await res.json();
         LOG(`doFetchBatchChunked [API RESPONSE] returned ${Object.keys(data.batch ?? {}).length} rules`);
 
@@ -169,19 +239,22 @@
               const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
               rulesCache[cacheKey] = rules;
               if (resultMap) resultMap[pid] = rules;
+              lkgSet(pid, rules);
               try {
                 sessionStorage.setItem(SS_PRE + pid, JSON.stringify({ ...rules, _cvh_exp: Date.now() + SS_TTL_MS }));
               } catch (_) { /* sessionStorage unavailable (private mode/quota) */ }
             }
           }
+          // Anything the API didn't answer for still needs a value, or the card
+          // is left masked forever.
+          for (const pid of chunk) {
+            if (!Object.prototype.hasOwnProperty.call(data.batch, pid)) degrade([pid], `no rules returned for ${pid}`);
+          }
+        } else {
+          degrade(chunk, "response had no batch payload");
         }
       } catch (err) {
-        WARN(`doFetchBatchChunked: fetch failed for chunk [${i}..${i + chunk.length - 1}] — failing closed:`, err);
-        for (const pid of chunk) {
-          const cacheKey = `${locationId || CUSTOMER_ID}::${pid}`;
-          rulesCache[cacheKey] = { _cvh_error: true };
-          if (resultMap) resultMap[pid] = { _cvh_error: true };
-        }
+        degrade(chunk, `fetch failed after retry (${err?.message ?? err})`);
       }
     }
   }

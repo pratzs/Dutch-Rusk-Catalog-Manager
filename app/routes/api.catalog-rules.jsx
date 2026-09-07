@@ -9,6 +9,24 @@ const CORS_HEADERS = {
   "Expires": "0"
 };
 
+// Successful rule lookups are cacheable for a short window.
+//
+// This endpoint is hit by every product card on every storefront page view,
+// and the app runs on a single small instance. Previously the storefront also
+// added a `_t=<now>` cache-buster, so nothing was ever reused: a shopper
+// paging through a collection re-asked for the same rules constantly, and the
+// occasional slow or failed request showed "Back Soon" on stocked product.
+//
+// 60 seconds matches the storefront's own rule TTL, so admin changes still show
+// up about as quickly as before. `private` is essential — the answer depends on
+// the buyer's company location, so it must never sit in a shared/CDN cache.
+const CACHEABLE_HEADERS = {
+  ...CORS_HEADERS,
+  "Cache-Control": "private, max-age=60",
+  "Pragma": "",
+  "Expires": ""
+};
+
 async function catalogIdFromLocationGid(prisma, locationGid) {
   if (!locationGid) return null;
   const normalized = String(locationGid).includes("/") ? locationGid : `gid://shopify/CompanyLocation/${locationGid}`;
@@ -217,7 +235,7 @@ export async function loader({ request }) {
         batch,
         debug: { version: "247", resolvedCatalogId: catalogId, ruleFound: !!rule, productCount: cleanIds.length }
       }),
-      { status: 200, headers: CORS_HEADERS }
+      { status: 200, headers: CACHEABLE_HEADERS }
     );
   }
 
@@ -241,6 +259,6 @@ export async function loader({ request }) {
           : null,
       }
     }),
-    { status: 200, headers: CORS_HEADERS }
+    { status: 200, headers: CACHEABLE_HEADERS }
   );
 }
