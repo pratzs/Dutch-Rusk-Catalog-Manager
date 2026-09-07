@@ -61,7 +61,7 @@ function finalPrice(lineCount, { discountRuns }) {
 }
 
 describe("no cart size can be overcharged", () => {
-  const sizes = [1, 5, 20, 40, 41, 47, 48, 59, 60, 61, 72, 100, 104, 150, 250];
+  const sizes = [1, 5, 20, 40, 45, 46, 47, 48, 59, 60, 61, 72, 100, 104, 150, 250];
 
   test("with the discount Function working, every size lands on catalog price", () => {
     for (const n of sizes) {
@@ -70,7 +70,7 @@ describe("no cart size can be overcharged", () => {
   });
 
   test("above the guard, no size is charged above catalog even if the discount is DEAD", () => {
-    for (const n of sizes.filter((n) => n > 40)) {
+    for (const n of sizes.filter((n) => n > 45)) {
       const price = finalPrice(n, { discountRuns: false });
       expect(`${n} lines -> ${price <= 15.000001 ? "catalog or better" : `OVERCHARGED at ${price}`}`)
         .toBe(`${n} lines -> catalog or better`);
@@ -88,8 +88,8 @@ describe("no cart size can be overcharged", () => {
   });
 
   test("the transform stands down above its line guard", () => {
-    expect(transformRun(buildCart(40)).operations.length).toBe(40);
-    expect(transformRun(buildCart(41)).operations).toEqual([]);
+    expect(transformRun(buildCart(45)).operations.length).toBe(45);
+    expect(transformRun(buildCart(46)).operations).toEqual([]);
     expect(transformRun(buildCart(104)).operations).toEqual([]);
   });
 });

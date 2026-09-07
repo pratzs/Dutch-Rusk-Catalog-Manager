@@ -43,29 +43,39 @@ const NO_CHANGES = {
 // That is what happened to #1409 (47 lines), #1850 (48) and #1884 (59):
 // $1,632 above catalog.
 //
-// The binding limit is INSTRUCTIONS, not input size. Measured with the real
-// Shopify function runner against the actual wasm, using order #1884's own
-// lines and a pruned price map, against the 11M budget:
+// The binding limit is INSTRUCTIONS, not input size. Input is capped at 125KB
+// and never came close (largest cart tested: 47KB). Measured with the real
+// Shopify function runner against the actual wasm, against the 11M budget.
 //
-//     35 lines  6.96M      50 lines   9.59M
-//     40 lines  7.78M      55 lines  10.40M
-//     45 lines  8.81M      60 lines  11.36M  <-- over, Function killed
+// WORST CASE -- 45 lines drawn from the 200 largest live price maps (up to
+// 553B each, vs a 47B median), every line matching a BOGO bundle, quantity 22
+// so all five deals activate and allocate:
 //
-// (Input size is capped at 125KB and never came close; the largest cart tested
-// was 47KB. An earlier guess that input size was the cause was wrong, and a
-// "faster" hand-rolled string scan to replace JSON.parse measured SLOWER in
-// QuickJS -- 12.43M at 60 lines -- so it was reverted.)
+//     40 lines   9.25M   (16% headroom)
+//     45 lines  10.04M   ( 9% headroom)   <-- guard set here
+//     50 lines  10.93M   (0.6% headroom)  <-- effectively at the limit
+//     55 lines  11.73M   OVER, Function killed
 //
-// 40 sits ~29% under the ceiling, which is the margin for carts heavier than
-// #1884's: bigger price maps, more BOGO matches, higher quantities. Standing
-// down inverts the failure -- the line keeps Shopify's own catalog price,
-// which is the correct price. A cart above this loses only the struck-through
-// "was" price, never the amount charged.
+// A typical cart is far lighter -- order #1884's own 45 lines measure 8.81M --
+// so 9% worst-case headroom is really ~20% in practice. 50 was rejected: 0.6%
+// is not a margin, and when this Function is killed the buyer pays FULL RETAIL
+// because the transform has already raised the prices (that is what happened
+// to #1409, #1850 and #1884: $1,632 above catalog).
 //
-// Raising this number is not a free win: it must be re-measured with
-// `shopify app function run` first. Switching BOGO off would free ~1.5-2M
-// instructions (the config parse) and support roughly 55.
-const MAX_LINES_TO_TRANSFORM = 40;
+// The per-line cost is dominated by JSON.parse of the price map, so the way to
+// raise this number is to shrink that map, NOT to nudge the guard up. Shortening
+// the map keys (dropping the "gid://shopify/PriceList/" prefix, 48 bytes/entry
+// down to 21) would roughly halve it and support ~70 lines, but it needs a
+// coordinated change to both Functions and the sync, so it is not done here.
+//
+// Standing down inverts the failure: the line keeps Shopify's own catalog
+// price, which is correct. A cart above this still shows a struck-through "was"
+// price -- sections/main-cart.liquid falls back to item.variant.compare_at_price
+// -- it just loses the explicit "B2B Wholesale Price" discount row.
+//
+// DO NOT raise without re-measuring: `shopify app function run --input <cart>`
+// inside extensions/b2b-custom-prices prints Instructions against the limit.
+const MAX_LINES_TO_TRANSFORM = 45;
 
 export function run(input) {
   const company = input.cart.buyerIdentity?.purchasingCompany?.company;
