@@ -79,18 +79,14 @@ export function run(input) {
 
   // ── BOGO Bundles ──────────────────────────────────────────────────────────
   //
-  // ⚠️  BOGO IS OFF as of 2026-09-07: custom.bogo_bundles is set to [].
+  // ACTIVE — the five deals in custom.bogo_bundles are live again.
   //
-  // The cart transform that used to raise lines to retail has been removed, so
-  // B2B carts now carry Shopify's native catalog price and NOTHING can raise a
-  // line. That matters here: this deal logic assumes deal-paid units can sit at
-  // full retail while the free unit is the discount. Without inflation the best
-  // it can do is catalog price PLUS a free unit — which is exactly the
-  // loss-making stack removed in 13ae4ca.
-  //
-  // So do not simply re-populate custom.bogo_bundles. Either reprice the deals
-  // knowing every paid unit is now at the customer's catalog rate, or run them
-  // as native Shopify Buy X Get Y automatic discounts instead.
+  // Note the dependency: this deal logic assumes deal-paid units can sit at
+  // full retail while the free unit IS the discount. That only holds while the
+  // b2b-price-transformer cart transform is registered and raising lines. If
+  // that Function is ever removed again, nothing can raise a line and the best
+  // this can do is catalog price PLUS a free unit — the loss-making stack
+  // removed in 13ae4ca. The two must be enabled or disabled together.
   //
   // Merged into this same function/discount because this shop's checkout only
   // ever executes one active Product Discount API function at a time --

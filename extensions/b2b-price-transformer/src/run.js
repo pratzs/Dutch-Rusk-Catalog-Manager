@@ -1,32 +1,22 @@
 // @ts-check
 //
-// ⚠️  UNREGISTERED AS OF 2026-09-07 — this Function no longer runs.
+// ACTIVE. Registered as gid://shopify/CartTransform/162660665.
 //
-// Its CartTransform (gid://shopify/CartTransform/131301689) was deleted so that
-// Shopify prices B2B carts natively from the catalog price lists, with no
-// Function in the pricing path at all.
+// This Function raises each B2B line to its retail price so the paired product
+// discount ("B2B Wholesale Custom Pricing") can take it back down to the
+// catalog price. That round trip is what produces the visible saving the
+// business runs on: the struck-through "was" price and the explicit
+// "B2B Wholesale Price" discount rows on the cart, at checkout, and on the
+// order in the admin (see order #1892 for the intended result).
 //
-// Why it had to go: this Function raised every line to retail so a paired
-// discount Function could bring it back down, which made a correct price depend
-// on BOTH Functions finishing. Shopify Functions get 11M instructions, and a
-// cart burns roughly 0.16M per line — so past ~57 lines the discount died, this
-// one had already raised the prices, and the buyer paid full retail (#1409,
-// #1850, #1884: $1,632 above catalog). Even just RECEIVING a 300-line cart costs
-// 13.3M, over the budget. No guard value, optimisation or payload pruning gets
-// this design to the 100-200 line carts the business expects.
+// It was briefly removed on 2026-09-07 in favour of Shopify's native catalog
+// pricing, which has no cart-size ceiling. That priced correctly but produced
+// orders with no discount lines at all, which is not acceptable — the discount
+// rows are a requirement, not a side effect. Reverted the same day.
 //
-// Native catalog pricing has no such ceiling because none of our code runs. The
-// storefront display survived the change because the theme was already written
-// for it: sections/main-cart.liquid falls back to
-// `item.variant.compare_at_price` when there is no discount, for line prices,
-// line totals and the cart total, and snippets/price.liquid uses compare-at on
-// product and collection pages. Checkout savings come from the
-// standard_retail_price metafield via the checkout-price-display extension.
-//
-// DO NOT re-register this without re-reading the above. If it is ever needed
-// again, recreate the CartTransform and note that the guard below was measured
-// against the 11M budget and must be re-measured with `shopify app function run`
-// before being raised.
+// The cost of keeping this design is the ceiling below. Read the guard comment
+// before touching it: the limit is real, measured, and it is what caused
+// #1409, #1850 and #1884 to bill full retail.
 //
 /**
  * @typedef {import("../generated/api").RunInput} RunInput
