@@ -1,9 +1,31 @@
 {% comment %}
-  Only inject hiding logic for active B2B customers.
-  Retail visitors and customers not assigned to any catalog see everything.
+  B2B storefront helpers.
+
+  This snippet used to carry the variant hiding: CSS that masked every variant
+  picker until JavaScript had fetched this buyer's catalog rules and hidden the
+  pack sizes they may not order. That is gone, because Shopify does it properly
+  now. ProductVariant supports variant-level publishing, so a pack size can be
+  excluded from a catalog and Shopify enforces it server-side -- the variant is
+  not in the page at all, and a product with every variant excluded returns a
+  404 rather than an unbuyable card.
+
+  Removing it fixes a real customer-facing fault rather than just tidying up.
+  The old path called the app for every product card on every page view, and any
+  slow or failed answer left the card reading "Back Soon" on stocked product,
+  stuck that way until the shopper reloaded.
+
+  The rules still exist in the Catalog Manager as the policy. What enforces them
+  is api.catalog-variant-sync, which keeps Shopify's variant exclusions matching
+  the rules, including for products published later.
+
+  What is left here:
+    - the "Special Deals" menu gate, since deal eligibility is not something
+      Shopify can express
+    - a struck-through retail price for variants that have no compare-at price
+      set, which the theme cannot show on its own
 
   Variables expected from the block (via render tag):
-    app_url  — base URL of the deployed Catalog Manager app, e.g. https://your-app.onrender.com
+    app_url  — base URL of the deployed Catalog Manager app
 {% endcomment %}
 {% if customer and customer.b2b? %}
   {%- comment -%}
@@ -13,159 +35,6 @@
   {%- if cvh_location_id == blank -%}
     {%- assign cvh_location_id = cart.company_location.id -%}
   {%- endif -%}
-  {%- assign cvh_app_url = app_url | default: 'https://dutch-rusk-catalog-manager.onrender.com' | strip_newlines -%}
-
-  {%- comment -%}
-    ── Instant variant mask for collection pages ──────────────────────────────
-    STRATEGY: CSS :not([data-cvh-processed]) hides variant pickers on every
-    unprocessed card the moment the stylesheet is parsed — no JS needed to
-    stamp a loading attribute. This eliminates the race between JS execution
-    and browser paint, and covers infinite-scroll cards automatically since
-    newly inserted DOM nodes without [data-cvh-processed] are hidden by the
-    already-live CSS rule.
-
-    catalog-variant-hider.js fetches catalog rules and sets [data-cvh-processed]
-    after applying them, restoring visibility for the allowed variants only.
-
-    Product pages are excluded ({% unless product %}) because they have no
-    card containers and use a separate single-product fetch path.
-  {%- endcomment -%}
-  {% unless product %}
-  <style id="cvh-b2b-mask">
-    /*
-     * This block is ONLY rendered for B2B customers — the Liquid guard above
-     * ensures retail visitors never receive it.
-     *
-     * Strategy: hide variant pickers on ALL unprocessed cards by default using
-     * :not([data-cvh-processed]). This is CSS-only — no JS attribute-stamping
-     * race condition. The moment this stylesheet is parsed, every matching card
-     * (including ones loaded later via infinite scroll) has its pickers hidden.
-     * catalog-variant-hider.js sets [data-cvh-processed] after applying rules,
-     * which restores visibility for the allowed variants only.
-     */
-
-    /* ── Layer 1a: hide while unprocessed — CSS-only, covers initial page load ─
-     * Works because this <style> is parsed before the browser first paints the
-     * product grid. Any card without [data-cvh-processed] is hidden immediately.
-     */
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) input[type="radio"],
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) input[type="radio"] + label,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) label[for],
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) label,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) variant-selects,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) fieldset,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) .swatch-element,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) .variant-input,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) .product-form__input,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) button[data-variant-id],
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article):not([data-cvh-processed]) select[name="id"] {
-      opacity: 0 !important;
-      pointer-events: none !important;
-      user-select: none !important;
-      transition: none !important;
-    }
-
-    /* ── Layer 1b: hide while loading — JS-applied, covers infinite scroll ────
-     * Infinite scroll injects new cards via JS. The browser can paint new nodes
-     * before the CSS engine recalculates :not() on them. catalog-variant-hider.js
-     * stamps [data-cvh-loading] synchronously in the MutationObserver callback
-     * (before any await) to close that gap. This selector is intentionally broad
-     * so it works even when the card container class doesn't match layer 1a.
-     */
-    [data-cvh-loading] input[type="radio"],
-    [data-cvh-loading] input[type="radio"] + label,
-    [data-cvh-loading] label[for],
-    [data-cvh-loading] label,
-    [data-cvh-loading] variant-selects,
-    [data-cvh-loading] fieldset,
-    [data-cvh-loading] .swatch-element,
-    [data-cvh-loading] .variant-input,
-    [data-cvh-loading] .product-form__input,
-    [data-cvh-loading] button[data-variant-id],
-    [data-cvh-loading] select[name="id"] {
-      opacity: 0 !important;
-      pointer-events: none !important;
-      user-select: none !important;
-      transition: none !important;
-    }
-
-    /* ── Layer 2: restore after processing ────────────────────────────────── */
-    /*
-     * IMPORTANT — specificity must match the hiding rules above.
-     * The :is() in layer 1a takes the specificity of its most specific
-     * argument (li.grid__item = 0,1,1), so the full hiding rule is (0,2,2).
-     * A bare [data-cvh-processed] selector is only (0,1,1) and loses the
-     * !important battle, leaving cards permanently hidden.
-     * Using the same :is() list here gives (0,2,2), and because this block
-     * comes AFTER the hiding rules, it wins the cascade when specificities tie.
-     */
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] label[for],
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] label,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] variant-selects,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] fieldset,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] .swatch-element,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] .variant-input,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] .product-form__input,
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] button[data-variant-id],
-    :is(.product-card, .card-wrapper, .product-card-wrapper, li.grid__item, article)[data-cvh-processed] select[name="id"] {
-      opacity: 1 !important;
-      pointer-events: auto !important;
-      user-select: auto !important;
-    }
-  </style>
-  <script>
-    /* Pre-warm the Render API server (fire-and-forget).
-     * Render free/starter tiers sleep after inactivity; waking it now —
-     * before the deferred JS even starts — saves 10-30 s on the first
-     * catalog-rules call. No card-masking needed here: the CSS above already
-     * hides all unprocessed cards the moment it is parsed. */
-    (function () {
-      try {
-        fetch(
-          '{{ cvh_app_url }}/api/catalog-rules?_ping=1&shop={{ shop.permanent_domain | url_encode }}',
-          { method: 'GET', mode: 'cors', cache: 'no-store' }
-        ).catch(function () {});
-      } catch (e) {}
-    })();
-  </script>
-  {% endunless %}
-  {% if product %}
-  <style id="cvh-b2b-mask-pdp">
-    product-form:not([data-cvh-processed]) variant-selects,
-    product-form:not([data-cvh-processed]) fieldset,
-    product-form:not([data-cvh-processed]) .product-form__input,
-    product-form:not([data-cvh-processed]) .swatch-element,
-    product-form:not([data-cvh-processed]) .variant-input,
-    product-form:not([data-cvh-processed]) select[name="id"],
-    .product__info-container:not([data-cvh-processed]) variant-selects,
-    .product__info-container:not([data-cvh-processed]) fieldset,
-    .product__info-container:not([data-cvh-processed]) .product-form__input,
-    .product__info-container:not([data-cvh-processed]) .swatch-element,
-    .product__info-container:not([data-cvh-processed]) .variant-input,
-    .product__info-container:not([data-cvh-processed]) select[name="id"] {
-      opacity: 0 !important;
-      pointer-events: none !important;
-      user-select: none !important;
-      transition: none !important;
-    }
-    product-form[data-cvh-processed] variant-selects,
-    product-form[data-cvh-processed] fieldset,
-    product-form[data-cvh-processed] .product-form__input,
-    product-form[data-cvh-processed] .swatch-element,
-    product-form[data-cvh-processed] .variant-input,
-    product-form[data-cvh-processed] select[name="id"],
-    .product__info-container[data-cvh-processed] variant-selects,
-    .product__info-container[data-cvh-processed] fieldset,
-    .product__info-container[data-cvh-processed] .product-form__input,
-    .product__info-container[data-cvh-processed] .swatch-element,
-    .product__info-container[data-cvh-processed] .variant-input,
-    .product__info-container[data-cvh-processed] select[name="id"] {
-      opacity: 1 !important;
-      pointer-events: auto !important;
-      user-select: auto !important;
-    }
-  </style>
-  {% endif %}
 
   {%- comment -%}
     ── "Special Deals" menu gate ──────────────────────────────────────────────
@@ -200,6 +69,26 @@
     }
   </style>
 
+  {%- comment -%}
+    The retail price to strike through, for variants with no compare-at price.
+    Two different units are in play and mixing them was a real bug: the
+    custom.standard_retail_price metafield is a plain decimal (24.30), while
+    compare_at_price and price are in cents and need money_without_currency.
+    Piping the metafield through that filter read 24.30 as cents and emitted
+    0.24, which is below every real price, so no strikethrough was ever drawn.
+    Kept separate here.
+  {%- endcomment -%}
+  {%- assign cvh_retail = '' -%}
+  {%- if product -%}
+    {%- assign cvh_variant = product.selected_or_first_available_variant -%}
+    {%- assign cvh_retail_meta = cvh_variant.metafields.custom.standard_retail_price -%}
+    {%- if cvh_retail_meta != blank -%}
+      {%- assign cvh_retail = cvh_retail_meta -%}
+    {%- elsif cvh_variant.compare_at_price != blank -%}
+      {%- assign cvh_retail = cvh_variant.compare_at_price | money_without_currency -%}
+    {%- endif -%}
+  {%- endif -%}
+
 <div
   id="catalog-variant-hider-data"
   data-app-url="{{ app_url | default: 'https://dutch-rusk-catalog-manager.onrender.com' | strip_newlines }}"
@@ -208,7 +97,7 @@
   data-shop="{{ shop.permanent_domain }}"
   {% if product %}
     data-product-id="gid://shopify/Product/{{ product.id }}"
-    data-standard-retail-price="{{ product.selected_or_first_available_variant.metafields.custom.standard_retail_price | default: product.selected_or_first_available_variant.compare_at_price | default: product.selected_or_first_available_variant.price | money_without_currency }}"
+    data-standard-retail-price="{{ cvh_retail }}"
   {% endif %}
   style="display:none;"
   aria-hidden="true"
