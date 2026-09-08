@@ -106,13 +106,15 @@ export default function CatalogManager() {
   return (
     <s-page heading="B2B Catalog Manager">
 
-      <s-section heading="How to use this tool">
+      <s-section heading="Where pack sizes are controlled">
         <s-text>
-          This app controls which products and sizes are <b>visible</b> to specific B2B customers.
+          Pack size visibility is set in <b>Shopify</b>, not here. Open the catalog under Catalogs,
+          find the product, and use <b>Exclude from catalog</b> on the individual variant. Shopify
+          enforces it, so an excluded size never appears for that customer and cannot be added to a cart.
         </s-text>
         <ul style={{ paddingLeft: '20px', margin: '10px 0 0' }}>
-          <li><b>Manage Rules:</b> Block entire sizes (e.g., block all &ldquo;Shipper&rdquo; sizes) for a customer group.</li>
-          <li><b>Product Overrides:</b> Select specific products to manually Show/Hide them for a customer.</li>
+          <li>A product published to a catalog starts with <b>every</b> pack size visible, so exclude the ones that customer should not see when you add it.</li>
+          <li>This app no longer holds visibility rules. It handles catalog pricing, the checkout strikethrough prices and BOGO bundles.</li>
         </ul>
         <s-text tone="subdued">Any new B2B catalogs created in Shopify will automatically appear in this list.</s-text>
       </s-section>
