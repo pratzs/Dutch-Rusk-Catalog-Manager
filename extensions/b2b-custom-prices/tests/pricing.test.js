@@ -206,3 +206,32 @@ describe("a deal never changes the price of products outside it", () => {
     expect(out[L(2)]).toEqual([{ qty: 4, unit: 21.0, message: "B2B Wholesale Price" }]);
   });
 });
+
+describe("a deal must not discount a line the transform did not raise", () => {
+  // The transform stands down above its line guard, and then every line arrives
+  // already at the catalog price. A deal computing a percentage off THAT price
+  // discounts it twice and hands over a free unit on top. Order #1913 (48 lines,
+  // Night n Day) lost roughly $38 that way: eight Dragon bags at the Night n Day
+  // rate of 14.00 were taken to 12.60, plus a free unit.
+  const bundles = [{ id: "d", buyQty: 5, getQty: 1, overridePct: 10, variantIds: ["gid://shopify/ProductVariant/A"] }];
+
+  test("transform raised the line: the deal applies as configured", () => {
+    // cost 20.00 is retail, catalog is 15.00 -> the transform clearly raised it
+    const lines = [line(1, "A", 7, 20.0, 15.0)];
+    const out = pricePerUnit(run(input(lines, { bundles })), lines);
+    expect(out[L(1)].some((t) => t.unit === 0)).toBe(true); // free unit given
+  });
+
+  test("transform stood down: no free unit, no second discount, catalog price stands", () => {
+    // cost 15.00 IS the catalog price -> the transform did not raise this line
+    const lines = [line(1, "A", 7, 15.0, 15.0)];
+    const out = pricePerUnit(run(input(lines, { bundles })), lines);
+    expect(out[L(1)]).toEqual([{ qty: 7, unit: 15.0, message: "(undiscounted)" }]);
+  });
+
+  test("no catalog price known: the deal still applies to the plain price", () => {
+    const lines = [line(1, "A", 7, 20.0, null)];
+    const out = pricePerUnit(run(input(lines, { bundles })), lines);
+    expect(out[L(1)].some((t) => t.unit === 0)).toBe(true);
+  });
+});

@@ -42,6 +42,10 @@ export function run(input) {
     const retailPrice = parseFloat(line.cost?.amountPerQuantity?.amount ?? "0");
     let wholesalePrice = retailPrice;
 
+    // The catalog price for this buyer, kept in scope so the BOGO block below
+    // can tell whether the cart transform actually raised this line.
+    let catalogPriceForLine = null;
+
     if (priceListId) {
       const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
       let targetWholesalePrice = null;
@@ -67,14 +71,32 @@ export function run(input) {
         targetWholesalePrice = standardRetail * (1 - discountPct / 100);
       }
 
+      catalogPriceForLine = targetWholesalePrice;
+
       if (targetWholesalePrice !== null && retailPrice > targetWholesalePrice + 0.01) {
         wholesalePrice = targetWholesalePrice;
       }
     }
 
+    // Did the cart transform actually raise this line to retail?
+    //
+    // It stands down above its own line guard, and when it does the line
+    // arrives already at the catalog price. Every BOGO calculation below is a
+    // percentage OFF this price, so on a stood-down cart a deal would discount
+    // the catalog price a second time and hand over a free unit on top. That is
+    // real margin: order #1913 (48 lines, Night n Day) took a further 10% off
+    // eight Dragon bags that were already at the Night n Day rate.
+    //
+    // If the line sits at its catalog price, the transform did not raise it.
+    // When no catalog price is known the transform would not have raised it
+    // either, and the price in hand is the plain one, so a deal off it is
+    // legitimate — hence the default of true.
+    const transformRaised =
+      catalogPriceForLine === null ? true : retailPrice > catalogPriceForLine + 0.011;
+
     // dealPaidPrice stays null unless an active bundle with an override % sets
     // it; null means the deal's paid units sit at full retail.
-    lines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, retailPrice, wholesalePrice, freeQty: 0, dealPaidQty: 0, dealPaidPrice: null });
+    lines.push({ id: line.id, quantity: line.quantity, variantId: variant.id, retailPrice, wholesalePrice, freeQty: 0, dealPaidQty: 0, dealPaidPrice: null, transformRaised });
   }
 
   // ── BOGO Bundles ──────────────────────────────────────────────────────────
@@ -118,7 +140,10 @@ export function run(input) {
         if (catalogIds.length > 0 && !catalogIds.includes(priceListId)) continue;
 
         const variantIdSet = new Set(variantIds);
-        const matchingLines = lines.filter((line) => variantIdSet.has(line.variantId));
+        // Only lines the transform actually raised. On a cart big enough that
+        // the transform stood down, every line is already at its catalog price
+        // and a deal here would discount it twice — see transformRaised above.
+        const matchingLines = lines.filter((line) => variantIdSet.has(line.variantId) && line.transformRaised);
         if (matchingLines.length === 0) continue;
 
         // "Buy N Get M Free" means N paid + M free = N+M total needed per
