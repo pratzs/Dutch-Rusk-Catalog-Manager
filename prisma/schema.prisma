@@ -57,6 +57,13 @@ model LocationCatalogMap {
   id          String   @id @default(cuid())
   locationGid String   @unique
   catalogId   String
+  // EVERY price list this location can be priced from, as a JSON array of
+  // Shopify PriceList GIDs. `catalogId` above holds only one catalog, and for
+  // a location attached to two catalogs (six companies do, e.g. Zone Bowling
+  // Henderson is on both TEEG and its own list) whichever the sync saw last
+  // wins. That arbitrary single value is fine for variant-hiding rules but not
+  // for deciding whether a buyer can get a deal, so the full set is kept here.
+  priceListIds String  @default("[]")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }

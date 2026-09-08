@@ -198,14 +198,40 @@ async function runSync(admin, shop, options = {}) {
     let updatedCompanies = 0;
     const locationUpserts = [];
 
+    // A location can sit on more than one catalog, so collect the full set of
+    // price lists per location before writing anything. Upserting inside the
+    // catalog loop (as this used to) left whichever catalog came last, which is
+    // arbitrary -- that is why Zone Bowling Henderson, on both TEEG and its own
+    // list, resolved to the wrong one.
+    const priceListsByLocation = new Map();
+
     for (const { priceListId, catalogId, companyIds, locationIds } of catalogDataMap) {
       for (const locId of locationIds) {
-        locationUpserts.push(prisma.locationCatalogMap.upsert({ where: { locationGid: locId }, update: { catalogId }, create: { locationGid: locId, catalogId } }));
+        let entry = priceListsByLocation.get(locId);
+        if (!entry) {
+          entry = { catalogId, priceListIds: [] };
+          priceListsByLocation.set(locId, entry);
+        }
+        // catalogId deliberately keeps its old last-one-wins behaviour: the
+        // variant-hiding rules keyed off it have been running on that value and
+        // this change is only meant to add priceListIds, not move any buyer to
+        // a different rule set.
+        entry.catalogId = catalogId;
+        if (!entry.priceListIds.includes(priceListId)) entry.priceListIds.push(priceListId);
       }
       for (const companyId of companyIds) {
         companyMetafields.push({ ownerId: companyId, namespace: "custom", key: "catalog_pricelist_id", type: "single_line_text_field", value: priceListId });
         updatedCompanies++;
       }
+    }
+
+    for (const [locationGid, { catalogId, priceListIds }] of priceListsByLocation) {
+      const serialised = JSON.stringify(priceListIds);
+      locationUpserts.push(prisma.locationCatalogMap.upsert({
+        where: { locationGid },
+        update: { catalogId, priceListIds: serialised },
+        create: { locationGid, catalogId, priceListIds: serialised },
+      }));
     }
 
     if (locationUpserts.length > 0) await Promise.all(locationUpserts);

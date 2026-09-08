@@ -27,11 +27,108 @@ const CACHEABLE_HEADERS = {
   "Expires": ""
 };
 
+function normalizeLocationGid(locationGid) {
+  return String(locationGid).includes("/") ? locationGid : `gid://shopify/CompanyLocation/${locationGid}`;
+}
+
+/**
+ * One lookup, both answers. This endpoint is hit by every product card on every
+ * page view, so it deliberately reads the mapping row once and derives both the
+ * catalog id and the price list set from it rather than querying twice.
+ */
+async function locationMapping(prisma, locationGid) {
+  if (!locationGid) return { catalogId: null, priceListIds: [] };
+  const mapping = await prisma.locationCatalogMap.findUnique({ where: { locationGid: normalizeLocationGid(locationGid) } });
+  let priceListIds = [];
+  try {
+    const ids = JSON.parse(mapping?.priceListIds ?? "[]");
+    if (Array.isArray(ids)) priceListIds = ids;
+  } catch {
+    priceListIds = [];
+  }
+  return { catalogId: mapping?.catalogId ?? null, priceListIds };
+}
+
 async function catalogIdFromLocationGid(prisma, locationGid) {
-  if (!locationGid) return null;
-  const normalized = String(locationGid).includes("/") ? locationGid : `gid://shopify/CompanyLocation/${locationGid}`;
-  const mapping = await prisma.locationCatalogMap.findUnique({ where: { locationGid: normalized } });
-  return mapping?.catalogId ?? null;
+  return (await locationMapping(prisma, locationGid)).catalogId;
+}
+
+/** Runs an admin GraphQL query with the shop's offline token. */
+function adminGql(prisma, shop) {
+  return async (query) => {
+    const session = await prisma.session.findFirst({ where: { shop, isOnline: false } });
+    if (!session?.accessToken) throw new Error("no offline session");
+    const res = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
+      body: JSON.stringify({ query }),
+    });
+    const json = await res.json();
+    if (json.errors) throw new Error(JSON.stringify(json.errors));
+    return json.data;
+  };
+}
+
+/**
+ * Whether to show the "Special Deals" menu item to this buyer.
+ *
+ * Returns null for "don't know" -- a retail visitor, a location we have no
+ * price lists for, or an unreadable deal config. The storefront leaves the menu
+ * hidden in that case, which is the safe direction: a buyer who cannot get a
+ * deal must never be shown the link, and a General buyer briefly missing it is
+ * the lesser problem.
+ */
+async function resolveDealsEligible(prisma, shop, locationId, buyerPriceLists) {
+  if (!shop) return null;
+  try {
+    let priceLists = Array.isArray(buyerPriceLists) ? buyerPriceLists : [];
+
+    // The priceListIds column is filled by the price sync, so it starts empty
+    // on existing rows and stays empty for any location added since the last
+    // run. Rather than depend on that ordering, look the location's catalogs up
+    // once and write the answer back -- so the first buyer from a location pays
+    // one extra query and nobody after them does.
+    if (priceLists.length === 0 && locationId) {
+      priceLists = await backfillLocationPriceLists(prisma, shop, locationId);
+    }
+    if (priceLists.length === 0) return null;
+
+    const { getDealScope, isDealEligible } = await import("../lib/deals.server");
+    const scope = await getDealScope(shop, adminGql(prisma, shop));
+    return isDealEligible(scope, priceLists);
+  } catch (e) {
+    console.error("[catalog-rules] deals eligibility failed:", e?.message || e);
+    return null;
+  }
+}
+
+/** Ask Shopify which price lists a location has, and remember the answer. */
+async function backfillLocationPriceLists(prisma, shop, locationId) {
+  const gid = normalizeLocationGid(locationId);
+  const data = await adminGql(prisma, shop)(`{
+    companyLocation(id: "${gid}") {
+      catalogs(first: 20) { nodes { ... on CompanyLocationCatalog { priceList { id } } } }
+    }
+  }`);
+  const ids = [];
+  for (const node of data?.companyLocation?.catalogs?.nodes ?? []) {
+    const id = node?.priceList?.id;
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  if (ids.length === 0) return [];
+
+  // Only update an existing row. Creating one would invent a catalogId the
+  // variant-hiding rules would then key off, and that is not this function's
+  // job -- the price sync owns that mapping.
+  try {
+    await prisma.locationCatalogMap.updateMany({
+      where: { locationGid: gid },
+      data: { priceListIds: JSON.stringify(ids) },
+    });
+  } catch (e) {
+    console.error("[catalog-rules] could not cache location price lists:", e?.message || e);
+  }
+  return ids;
 }
 
 async function resolveB2BContext(prisma, customerId, shop) {
@@ -153,13 +250,31 @@ export async function loader({ request }) {
 
   const { default: prisma } = await import("../db.server");
   const shop       = url.searchParams.get("shop");
+
+  // ── Deals-only path — used by the "Special Deals" menu gate ───────────────
+  // Runs on every page, including ones with no product cards, so it skips all
+  // the variant-rule work and answers from one mapping row plus the cached deal
+  // config. The storefront caches the answer for half an hour, so this is a
+  // handful of requests per buyer per day, not one per page view.
+  if (url.searchParams.get("dealsOnly")) {
+    const locId = url.searchParams.get("locationId");
+    const { priceListIds } = locId ? await locationMapping(prisma, locId) : { priceListIds: [] };
+    const eligible = await resolveDealsEligible(prisma, shop, locId, priceListIds);
+    return new Response(
+      JSON.stringify({ dealsEligible: eligible }),
+      { status: 200, headers: { ...CORS_HEADERS, "Cache-Control": "private, max-age=1800", "Pragma": "", "Expires": "" } }
+    );
+  }
+
   const customerId = url.searchParams.get("customerId");
   const productIdsParam = url.searchParams.get("productIds"); // batch: comma-separated
   const productId       = url.searchParams.get("productId");  // single
 
   // ── Resolve catalog ID (same for both single and batch) ───────────────────
   let locationId = url.searchParams.get("locationId");
-  let catalogId  = locationId ? await catalogIdFromLocationGid(prisma, locationId) : null;
+  const mapping  = locationId ? await locationMapping(prisma, locationId) : { catalogId: null, priceListIds: [] };
+  let catalogId  = mapping.catalogId;
+  const buyerPriceLists = mapping.priceListIds;
 
   // resolveB2BContext makes a live Shopify Admin GraphQL call — only fall back
   // to it when locationId didn't already resolve the catalog. Previously this
@@ -233,7 +348,8 @@ export async function loader({ request }) {
     return new Response(
       JSON.stringify({
         batch,
-        debug: { version: "247", resolvedCatalogId: catalogId, ruleFound: !!rule, productCount: cleanIds.length }
+        dealsEligible: await resolveDealsEligible(prisma, shop, locationId, buyerPriceLists),
+        debug: { version: "248", resolvedCatalogId: catalogId, ruleFound: !!rule, productCount: cleanIds.length }
       }),
       { status: 200, headers: CACHEABLE_HEADERS }
     );

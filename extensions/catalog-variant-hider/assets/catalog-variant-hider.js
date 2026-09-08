@@ -38,6 +38,63 @@
     try { localStorage.setItem(LKG_PRE + pid, JSON.stringify(rules)); } catch (_) { /* quota/private mode */ }
   }
 
+  // ── "Special Deals" menu gate ─────────────────────────────────────────────
+  // catalog-hider.liquid hides the menu item for every B2B buyer up front; this
+  // is the only thing that reveals it, and only for a buyer whose catalog an
+  // actual deal targets. Deliberately one-directional: a buyer who cannot get a
+  // deal must never see the link, not even for a frame, and if the app cannot be
+  // reached the item simply stays hidden.
+  //
+  // Cached for half an hour because deal scoping changes rarely. That makes this
+  // a few requests per buyer per day rather than one per page view -- the app is
+  // a single small instance, and per-page-view calls are what used to make
+  // stocked product read "Back Soon".
+  const DEALS_KEY = "cvh4deals:" + (CUSTOMER_ID || LOCATION_ID || "");
+  const DEALS_TTL_MS = 30 * 60 * 1000;
+
+  function revealDeals() {
+    document.documentElement.classList.add("cvh-deals-ok");
+  }
+
+  function dealsCacheRead() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(DEALS_KEY) || "null");
+      if (typeof parsed?.eligible !== "boolean") return null;
+      return parsed;
+    } catch (_) { return null; }
+  }
+
+  async function applyDealsMenuGate(locationOverride) {
+    const locationId = locationOverride || LOCATION_ID;
+    const cached = dealsCacheRead();
+    // Show it straight away on a repeat visit, before the network call, so an
+    // eligible buyer does not watch the menu item pop in on every page.
+    if (cached?.eligible) revealDeals();
+    if (cached && Date.now() - cached.at < DEALS_TTL_MS) return;
+
+    // Some themes do not give the snippet a location; init() resolves one from
+    // cart.js and calls this again with it.
+    if (!SHOP || !locationId) return;
+
+    try {
+      const url = `${APP_URL}/api/catalog-rules?dealsOnly=1&shop=${encodeURIComponent(SHOP)}`
+        + `&locationId=${encodeURIComponent(locationId)}`;
+      const res = await fetchWithRetry(url);
+      if (!res || !res.ok) return; // leave whatever the cache already decided
+      const data = await res.json();
+      // null means the app could not work it out. Keep the last known answer
+      // rather than flipping the menu on a shrug.
+      if (typeof data?.dealsEligible !== "boolean") return;
+
+      try { localStorage.setItem(DEALS_KEY, JSON.stringify({ eligible: data.dealsEligible, at: Date.now() })); } catch (_) { /* quota */ }
+      if (data.dealsEligible) revealDeals();
+      else document.documentElement.classList.remove("cvh-deals-ok");
+      LOG("Special Deals menu:", data.dealsEligible ? "shown (catalog has deals)" : "hidden (no deals for this catalog)");
+    } catch (e) {
+      WARN("deals menu gate failed, leaving menu as-is:", e && e.message);
+    }
+  }
+
   try {
     const prev = sessionStorage.getItem("cvh4:who");
     if (prev !== (CUSTOMER_ID || LOCATION_ID || "")) {
@@ -53,7 +110,9 @@
   try {
     const prevWho = localStorage.getItem("cvh4lkg:who");
     if (prevWho !== (CUSTOMER_ID || LOCATION_ID || "")) {
-      Object.keys(localStorage).filter(k => k.startsWith("cvh4lkg:")).forEach(k => localStorage.removeItem(k));
+      Object.keys(localStorage)
+        .filter(k => k.startsWith("cvh4lkg:") || k.startsWith("cvh4deals:"))
+        .forEach(k => localStorage.removeItem(k));
       LOG("Last-known-good store cleared (identity changed)");
     }
     localStorage.setItem("cvh4lkg:who", CUSTOMER_ID || LOCATION_ID || "");
@@ -593,6 +652,10 @@
     }
     LOG("resolvedLocationId →", resolvedLocationId);
 
+    // The early gate call bails out when the snippet had no location. Now that
+    // one has been resolved, give the menu a second chance.
+    if (!LOCATION_ID && resolvedLocationId) applyDealsMenuGate(resolvedLocationId);
+
     if (singleProductId) {
       // ── PRODUCT PAGE ──────────────────────────────────────────────────────
       const rules = await fetchRules(resolvedLocationId, singleProductId);
@@ -717,6 +780,11 @@
       new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
     }
   }
+
+  // The menu gate runs on every page, not just ones with product cards, and is
+  // deliberately not awaited: it must not be able to delay or break variant
+  // hiding, and variant hiding must not delay the menu appearing.
+  applyDealsMenuGate();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

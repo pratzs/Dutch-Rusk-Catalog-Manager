@@ -167,6 +167,39 @@
   </style>
   {% endif %}
 
+  {%- comment -%}
+    ── "Special Deals" menu gate ──────────────────────────────────────────────
+    BOGO deals are scoped per catalog in the Catalog Manager BOGO page, and at
+    the moment all five are limited to the General Catalog. A buyer on any other
+    catalog who follows this menu item sees offers they cannot get, so the link
+    is hidden for them.
+
+    Hidden by default and only ever revealed, deliberately. The eligibility
+    answer arrives from the app, so the alternative -- show it, then remove it
+    -- would flash offers at buyers who are not entitled to them, and would
+    leave the link in place whenever the app is unreachable. This way an
+    ineligible buyer never sees it at all, and the worst case for a General
+    buyer is the item appearing a moment late (instantly on repeat visits,
+    which are cached in localStorage).
+
+    Deals are scoped by catalog, not hard-coded here: if a deal is later opened
+    up to another catalog in the admin, that catalog's buyers start seeing this
+    link on their own with no theme change.
+  {%- endcomment -%}
+  <style id="cvh-deals-mask">
+    /*
+     * Matches the menu item in any menu it appears in (header, mobile drawer,
+     * footer) by its page URL rather than its label, so renaming the menu item
+     * does not silently un-hide it. The <li> is hidden as well as the link so
+     * the nav does not keep an empty gap where it was.
+     */
+    html:not(.cvh-deals-ok) a[href$="/pages/special-deals"],
+    html:not(.cvh-deals-ok) li:has(> a[href$="/pages/special-deals"]),
+    html:not(.cvh-deals-ok) li:has(> details > summary > a[href$="/pages/special-deals"]) {
+      display: none !important;
+    }
+  </style>
+
 <div
   id="catalog-variant-hider-data"
   data-app-url="{{ app_url | default: 'https://dutch-rusk-catalog-manager.onrender.com' | strip_newlines }}"
