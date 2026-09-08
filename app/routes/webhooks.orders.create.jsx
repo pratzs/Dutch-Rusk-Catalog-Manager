@@ -157,22 +157,20 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
   const offenders = [];
   let overcharge = 0;
   let skippedDealLines = 0;
-  // For the "missing discount rows" check below: did this order have any line
-  // where the catalog price is genuinely under retail, i.e. a saving that
-  // should have been shown to the buyer?
-  let discountWasAvailable = false;
-  let allocatedTotal = 0;
+  // Whether the discount rows are acceptable is decided by the shared, tested
+  // classifier so it cannot drift from what the tests pin.
+  const { classifyPricingRows, TRANSFORM_LINE_GUARD } = await import("../lib/pricing-flags.server");
+  const rows = classifyPricingRows({
+    lineItems: order.line_items ?? [],
+    catalogByVariant,
+    retailByVariant,
+    dealVariantIds,
+  });
 
   for (const li of order.line_items ?? []) {
     if (!li.variant_id) continue;
-    allocatedTotal += (li.discount_allocations ?? []).reduce((s, d) => s + parseFloat(d.amount ?? "0"), 0);
-    const cat = catalogByVariant[String(li.variant_id)];
-    const retailMeta = retailByVariant[String(li.variant_id)];
-    if (cat && isFinite(cat.price) && isFinite(retailMeta) && cat.price < retailMeta - 0.011) {
-      discountWasAvailable = true;
-    }
     if (dealVariantIds.has(String(li.variant_id))) { skippedDealLines++; continue; }
-    const catalog = cat;
+    const catalog = catalogByVariant[String(li.variant_id)];
     if (!catalog || !isFinite(catalog.price)) continue;
 
     const qty = parseInt(li.quantity ?? 1, 10);
@@ -196,40 +194,61 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
     }
   }
 
-  // Don't tag an order over small change; only a real shortfall is worth a flag.
-  // ── Missing discount rows ────────────────────────────────────────────────
+  // ── Missing or partial discount rows ─────────────────────────────────────
   // The buyer-visible saving on this shop comes from the cart transform raising
   // each line to retail and the "B2B Wholesale Custom Pricing" discount pulling
-  // it back. If a small order has a saving available but carries NO discount at
-  // all, that pair did not both run: the price may still be right, but the
+  // it back. When that does not happen the price may still be right, but the
   // struck-through "was" price and the "B2B Wholesale Price" rows are gone,
-  // which is not acceptable here. That is what orders #1894 and #1895 looked
-  // like. Above the transform's own line guard this is EXPECTED, so it is not
-  // flagged there — see MAX_LINES_TO_TRANSFORM in b2b-price-transformer.
-  const TRANSFORM_LINE_GUARD = 45;
-  const lineCount = (order.line_items ?? []).filter((li) => li.variant_id).length;
-  const missingRows =
-    discountWasAvailable && allocatedTotal <= 0.005 && lineCount <= TRANSFORM_LINE_GUARD;
+  // which is not acceptable here.
+  //
+  // Above the transform's line guard a missing row is EXPLAINED, but it is not
+  // acceptable -- the rule on this shop is that no order goes out without its
+  // struck-through price. It used to be excluded from this check for being
+  // expected, which is why #1904 (65 lines), #1914 (48) and #1920 (56) all went
+  // out silently. Now it alerts either way and the message says which cause it
+  // is, so an over-guard order is not mistaken for the pair having broken.
+  const { lineCount, overGuard, missingRows, partialRows, linesWithSaving, linesStruck } = rows;
 
-  if (missingRows) {
+  if (rows.shouldAlert) {
+    const scope = missingRows
+      ? `NO DISCOUNT ROWS`
+      : `PARTIAL DISCOUNT ROWS (${linesStruck}/${linesWithSaving} lines struck)`;
     console.error(
-      `[orders/create] ${orderName}: NO DISCOUNT ROWS on a ${lineCount}-line order that had a catalog saving available — the transform/discount pair did not both run.`
+      `[orders/create] ${orderName}: ${scope} on a ${lineCount}-line order that had a catalog saving available.` +
+        (overGuard ? ` Over the ${TRANSFORM_LINE_GUARD}-line transform guard.` : "")
     );
-    await tagOrder(admin, order, orderName, ["pricing-no-discount-rows"]);
+    await tagOrder(admin, order, orderName, [
+      missingRows ? "pricing-no-discount-rows" : "pricing-partial-discount-rows",
+    ]);
+
+    const cause = overGuard
+      ? [
+          `CAUSE: this cart is ${lineCount} lines, over the ${TRANSFORM_LINE_GUARD}-line guard in`,
+          `b2b-price-transformer. Above that the transform stands down on purpose,`,
+          `so the buyer pays the correct catalog price natively but gets no rows.`,
+          `The prices are RIGHT. Only the visible saving is missing.`,
+        ]
+      : [
+          `CAUSE: unknown, and this cart is UNDER the ${TRANSFORM_LINE_GUARD}-line guard, so it`,
+          `is not the known cart-size limit. Check that:`,
+          `  1. a CartTransform is still registered (cartTransforms query)`,
+          `  2. the "B2B Wholesale Custom Pricing" automatic discount is ACTIVE`,
+          `  3. the buyer's company is not on more than one catalog -- the`,
+          `     Function reads a single price list from custom.catalog_pricelist_id`,
+          `     and finds nothing when the price came from the other catalog`,
+        ];
+
     await alert({
-      subject: `Dutch Rusk: ${orderName} has no discount rows`,
+      subject: `Dutch Rusk: ${orderName} ${missingRows ? "has no discount rows" : "is missing some discount rows"}`,
       lines: [
-        `Order ${orderName} came through with NO discount lines, but this customer`,
-        `does have catalog savings on it. Prices may still be correct — the`,
-        `problem is the buyer-visible saving is missing (no struck-through "was"`,
-        `price, no "B2B Wholesale Price" rows).`,
+        `Order ${orderName} came through ${missingRows ? "with NO discount lines" : `with only ${linesStruck} of ${linesWithSaving} discountable lines struck`},`,
+        `but this customer does have catalog savings on it. The buyer-visible`,
+        `saving is missing: no struck-through "was" price, no "B2B Wholesale`,
+        `Price" rows.`,
         ``,
-        `That means the cart transform and the wholesale discount did not both`,
-        `run. Check that:`,
-        `  1. a CartTransform is still registered (cartTransforms query)`,
-        `  2. the "B2B Wholesale Custom Pricing" automatic discount is ACTIVE`,
+        ...cause,
         ``,
-        `line items : ${lineCount}`,
+        `line items : ${lineCount}${overGuard ? ` (over guard)` : ""}`,
         `company    : ${order?.purchasing_entity?.company?.name ?? "(unknown)"}`,
         `admin      : https://admin.shopify.com/store/dutchrusk/orders/${order.id}`,
       ],
@@ -237,7 +256,7 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
   }
 
   if (offenders.length === 0 || overcharge <= 0.5) {
-    if (!missingRows) {
+    if (!missingRows && !partialRows) {
       console.log(
         `[orders/create] ${orderName}: pricing OK — every line at or below catalog` +
           (skippedDealLines ? ` (${skippedDealLines} deal line(s) exempt).` : ".")
