@@ -36,9 +36,11 @@ function normalizeLocationGid(locationGid) {
  * page view, so it deliberately reads the mapping row once and derives both the
  * catalog id and the price list set from it rather than querying twice.
  */
-async function locationMapping(prisma, locationGid) {
+async function locationMapping(prisma, locationGid, cache) {
   if (!locationGid) return { catalogId: null, priceListIds: [] };
-  const mapping = await prisma.locationCatalogMap.findUnique({ where: { locationGid: normalizeLocationGid(locationGid) } });
+  const gid = normalizeLocationGid(locationGid);
+  const { locationFor } = await import("../lib/rules-cache.server");
+  const mapping = locationFor(cache, gid) ?? (cache ? null : await prisma.locationCatalogMap.findUnique({ where: { locationGid: gid } }));
   let priceListIds = [];
   try {
     const ids = JSON.parse(mapping?.priceListIds ?? "[]");
@@ -49,8 +51,8 @@ async function locationMapping(prisma, locationGid) {
   return { catalogId: mapping?.catalogId ?? null, priceListIds };
 }
 
-async function catalogIdFromLocationGid(prisma, locationGid) {
-  return (await locationMapping(prisma, locationGid)).catalogId;
+async function catalogIdFromLocationGid(prisma, locationGid, cache) {
+  return (await locationMapping(prisma, locationGid, cache)).catalogId;
 }
 
 /** Runs an admin GraphQL query with the shop's offline token. */
@@ -125,13 +127,15 @@ async function backfillLocationPriceLists(prisma, shop, locationId) {
       where: { locationGid: gid },
       data: { priceListIds: JSON.stringify(ids) },
     });
+    const { noteLocationPriceLists } = await import("../lib/rules-cache.server");
+    noteLocationPriceLists(gid, ids);
   } catch (e) {
     console.error("[catalog-rules] could not cache location price lists:", e?.message || e);
   }
   return ids;
 }
 
-async function resolveB2BContext(prisma, customerId, shop) {
+async function resolveB2BContext(prisma, customerId, shop, cache) {
   if (!customerId || !shop) return null;
   const customerGid = String(customerId).includes("/") ? customerId : `gid://shopify/Customer/${customerId}`;
   const session = await prisma.session.findFirst({ where: { shop, isOnline: false } });
@@ -153,7 +157,7 @@ async function resolveB2BContext(prisma, customerId, shop) {
     const profiles = gqlData.data?.customer?.companyContactProfiles ?? [];
     for (const profile of profiles) {
       for (const loc of profile.company?.locations?.nodes ?? []) {
-        const id = await catalogIdFromLocationGid(prisma, loc.id);
+        const id = await catalogIdFromLocationGid(prisma, loc.id, cache);
         if (id) return id;
       }
     }
@@ -166,8 +170,15 @@ async function resolveB2BContext(prisma, customerId, shop) {
 
 function isLegacyId(value) { return String(value).includes("/") || /^\d{10,}$/.test(String(value)); }
 
-async function findRule(prisma, catalogId) {
+async function findRule(prisma, catalogId, cache) {
   if (!catalogId) return null;
+  if (cache) {
+    const { ruleFor } = await import("../lib/rules-cache.server");
+    const cached = ruleFor(cache, catalogId);
+    // undefined means the cache won't choose between duplicate rows for this
+    // catalog, so fall through to the original query and keep behaviour identical.
+    if (cached !== undefined) return cached;
+  }
   const cleanId = String(catalogId).includes("/") ? catalogId.split("/").pop() : catalogId;
   return await prisma.catalogRule.findFirst({
     where: {
@@ -181,8 +192,12 @@ async function findRule(prisma, catalogId) {
   });
 }
 
-async function findOverride(prisma, catalogId, productId) {
+async function findOverride(prisma, catalogId, productId, cache) {
   if (!catalogId || !productId) return null;
+  if (cache) {
+    const { overrideFor } = await import("../lib/rules-cache.server");
+    return overrideFor(cache, catalogId, productId);
+  }
   const cleanCat = String(catalogId).includes("/") ? catalogId.split("/").pop() : catalogId;
   const cleanProd = String(productId).includes("/") ? productId.split("/").pop() : productId;
   const fullProd = `gid://shopify/Product/${cleanProd}`;
@@ -245,11 +260,27 @@ export async function loader({ request }) {
   // The liquid snippet fires this immediately on B2B page loads so the instance
   // is already warm by the time the real catalog-rules call arrives.
   if (url.searchParams.get("_ping")) {
-    return new Response(JSON.stringify({ ok: true, t: Date.now() }), { status: 200, headers: CORS_HEADERS });
+    // `&cache=1` reports the in-memory rules cache, so its health can be
+    // checked without waiting for a shopper to hit a collection page.
+    let rulesCache;
+    if (url.searchParams.get("cache")) {
+      const { rulesCacheStatus } = await import("../lib/rules-cache.server");
+      rulesCache = rulesCacheStatus();
+    }
+    return new Response(JSON.stringify({ ok: true, t: Date.now(), ...(rulesCache ? { rulesCache } : {}) }), { status: 200, headers: CORS_HEADERS });
   }
 
   const { default: prisma } = await import("../db.server");
   const shop       = url.searchParams.get("shop");
+
+  // Catalog rules, product overrides and location mappings all come from
+  // memory. The database sits in Oregon while this runs in Singapore, so each
+  // query it saves is a ~150-200ms trans-Pacific round trip, and this endpoint
+  // is hit by every product card on every page view. A null cache means the
+  // data isn't usable yet and every lookup below falls back to the database on
+  // its own, so behaviour is identical either way.
+  const { getRulesCache } = await import("../lib/rules-cache.server");
+  const cache = await getRulesCache(prisma);
 
   // ── Deals-only path — used by the "Special Deals" menu gate ───────────────
   // Runs on every page, including ones with no product cards, so it skips all
@@ -258,7 +289,7 @@ export async function loader({ request }) {
   // handful of requests per buyer per day, not one per page view.
   if (url.searchParams.get("dealsOnly")) {
     const locId = url.searchParams.get("locationId");
-    const { priceListIds } = locId ? await locationMapping(prisma, locId) : { priceListIds: [] };
+    const { priceListIds } = locId ? await locationMapping(prisma, locId, cache) : { priceListIds: [] };
     const eligible = await resolveDealsEligible(prisma, shop, locId, priceListIds);
     return new Response(
       JSON.stringify({ dealsEligible: eligible }),
@@ -272,7 +303,7 @@ export async function loader({ request }) {
 
   // ── Resolve catalog ID (same for both single and batch) ───────────────────
   let locationId = url.searchParams.get("locationId");
-  const mapping  = locationId ? await locationMapping(prisma, locationId) : { catalogId: null, priceListIds: [] };
+  const mapping  = locationId ? await locationMapping(prisma, locationId, cache) : { catalogId: null, priceListIds: [] };
   let catalogId  = mapping.catalogId;
   const buyerPriceLists = mapping.priceListIds;
 
@@ -284,7 +315,7 @@ export async function loader({ request }) {
   // even though the locationId path had already succeeded.
   if (customerId && !catalogId) {
     try {
-      const b2bContext = await resolveB2BContext(prisma, customerId, shop);
+      const b2bContext = await resolveB2BContext(prisma, customerId, shop, cache);
       if (b2bContext) catalogId = b2bContext;
     } catch (e) {
       console.error("[catalog-rules] B2B context resolution failed, returning 503:", e.message || e);
@@ -308,7 +339,7 @@ export async function loader({ request }) {
   }
 
   // ── Fetch the blanket rule (shared by both modes) ─────────────────────────
-  const rule = await findRule(prisma, catalogId);
+  const rule = await findRule(prisma, catalogId, cache);
   const cleanCatalogId = String(catalogId).includes("/") ? catalogId.split("/").pop() : catalogId;
 
   // ══ BATCH MODE — productIds=id1,id2,id3,... ═══════════════════════════════
@@ -316,21 +347,28 @@ export async function loader({ request }) {
     const rawIds   = productIdsParam.split(",").map(s => s.trim()).filter(Boolean);
     const cleanIds = rawIds.map(id => String(id).includes("/") ? id.split("/").pop() : id);
 
-    // One DB query for ALL overrides in this batch
-    const allOverrides = cleanIds.length > 0
-      ? await prisma.productOverride.findMany({
-          where: {
-            catalogId: cleanCatalogId,
-            productId: { in: [...cleanIds, ...cleanIds.map(id => `gid://shopify/Product/${id}`)] }
-          }
-        })
-      : [];
-
-    // Build override lookup: cleanProductId → override row
+    // Overrides for this batch. From memory when the cache is up, otherwise one
+    // query for the whole batch as before.
     const overrideMap = {};
-    for (const ov of allOverrides) {
-      const cleanProd = String(ov.productId).includes("/") ? ov.productId.split("/").pop() : ov.productId;
-      overrideMap[cleanProd] = ov;
+    if (cache) {
+      const { overrideFor } = await import("../lib/rules-cache.server");
+      for (const cleanId of cleanIds) {
+        const ov = overrideFor(cache, cleanCatalogId, cleanId);
+        if (ov) overrideMap[cleanId] = ov;
+      }
+    } else {
+      const allOverrides = cleanIds.length > 0
+        ? await prisma.productOverride.findMany({
+            where: {
+              catalogId: cleanCatalogId,
+              productId: { in: [...cleanIds, ...cleanIds.map(id => `gid://shopify/Product/${id}`)] }
+            }
+          })
+        : [];
+      for (const ov of allOverrides) {
+        const cleanProd = String(ov.productId).includes("/") ? ov.productId.split("/").pop() : ov.productId;
+        overrideMap[cleanProd] = ov;
+      }
     }
 
     // Compute merged rules for each product
@@ -356,7 +394,7 @@ export async function loader({ request }) {
   }
 
   // ══ SINGLE MODE — productId=xxx (unchanged behaviour) ═════════════════════
-  const override = productId ? await findOverride(prisma, catalogId, productId) : null;
+  const override = productId ? await findOverride(prisma, catalogId, productId, cache) : null;
   const { hiddenTypes, hiddenIds, overrideActive } = computeProductRules(rule, override);
 
   return new Response(
