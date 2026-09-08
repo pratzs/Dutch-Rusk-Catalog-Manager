@@ -11,22 +11,6 @@ import { startPricingHealthTimer } from "./lib/pricing-health.server";
 // See lib/pricing-health.server.js for why this matters and how to disable it.
 startPricingHealthTimer();
 
-// Load the catalog rules into memory before the first shopper asks for them.
-// The database is in Oregon and this runs in Singapore, so the first request
-// would otherwise wait on three trans-Pacific round trips.
-(async () => {
-  try {
-    const [{ default: prisma }, { warmRulesCache }] = await Promise.all([
-      import("./db.server"),
-      import("./lib/rules-cache.server"),
-    ]);
-    warmRulesCache(prisma);
-  } catch (e) {
-    // Not fatal: every lookup falls back to the database on its own.
-    console.error("[rules-cache] could not warm at boot:", e?.message || e);
-  }
-})();
-
 export const streamTimeout = 5000;
 
 export default async function handleRequest(

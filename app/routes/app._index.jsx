@@ -1,113 +1,17 @@
 import React from 'react';
-import { useLoaderData, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
-
-const SYSTEM_CHANNEL_KEYWORDS = [
-  "channel catalog", "point of sale", "hydrogen", "graphiql",
-  "online store", "buy button", "facebook", "instagram", "google", "pinterest",
-];
 
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-
-  // Fetch real catalogs from Shopify to filter out orphaned DB rows
-  let activeCatalogIds = new Set();
-  try {
-    let hasNext = true;
-    let cursor = null;
-    while (hasNext) {
-      const args = cursor ? `first: 250, after: "${cursor}"` : `first: 250`;
-      const res = await admin.graphql(`query { catalogs(${args}) { pageInfo { hasNextPage endCursor } nodes { id title } } }`);
-      const d = await res.json();
-      const nodes = d.data.catalogs.nodes || [];
-      nodes.forEach(c => {
-        const lower = c.title.toLowerCase();
-        if (!SYSTEM_CHANNEL_KEYWORDS.some(kw => lower.includes(kw))) {
-          activeCatalogIds.add(c.id.split("/").pop());
-        }
-      });
-      hasNext = d.data.catalogs.pageInfo.hasNextPage;
-      cursor = d.data.catalogs.pageInfo.endCursor;
-    }
-  } catch (_) {
-    // best-effort catalog fetch, ignore failure and fall back to no active-catalog filtering
-  }
-
-  const [allRules, , recentRulesRaw, overrideCounts, overrideProductGroups] = await Promise.all([
-    prisma.catalogRule.findMany(),
-    prisma.productOverride.count(),
-    prisma.catalogRule.findMany({ orderBy: { updatedAt: "desc" }, take: 10 }),
-    prisma.productOverride.groupBy({ by: ["catalogId"], _count: { catalogId: true } }),
-    prisma.productOverride.groupBy({ by: ["catalogId"] }).then(r => new Set(r.map(x => x.catalogId))),
-  ]);
-
-  // Filter to only active Shopify catalogs
-  const activeRules = allRules.filter(r => activeCatalogIds.has(r.catalogId));
-
-  const overrideCountMap = {};
-  overrideCounts.forEach((o) => { overrideCountMap[o.catalogId] = o._count.catalogId; });
-
-  // Count overrides only for active catalogs
-  const activeOverrideCounts = overrideCounts.filter(o => activeCatalogIds.has(o.catalogId));
-  const totalOverrideRows = activeOverrideCounts.reduce((sum, o) => sum + o._count.catalogId, 0);
-  const groupsWithOverrides = activeOverrideCounts.length;
-
-  // Distinct products with overrides (across active catalogs only)
-  const activeOverrideProductIds = await prisma.productOverride.findMany({
-    where: { catalogId: { in: [...activeCatalogIds] } },
-    select: { productId: true },
-    distinct: ["productId"],
-  });
-  const distinctOverrideProducts = activeOverrideProductIds.length;
-
-  const totalGroups = activeCatalogIds.size;
-  const groupsWithBlanket = activeRules.filter(r => r.hiddenVariantTypes.length > 0).length;
-  const configuredGroups = activeRules.filter(r =>
-    r.hiddenVariantTypes.length > 0 || overrideProductGroups.has(r.catalogId)
-  ).length;
-  // Also count active catalogs that have overrides but no CatalogRule row
-  const catalogIdsWithRules = new Set(activeRules.map(r => r.catalogId));
-  const overrideOnlyCatalogs = [...activeCatalogIds].filter(id =>
-    !catalogIdsWithRules.has(id) && overrideProductGroups.has(id)
-  ).length;
-  const finalConfigured = configuredGroups + overrideOnlyCatalogs;
-  const unconfiguredGroups = totalGroups - finalConfigured;
-
-  const packTypeBreakdown = {};
-  activeRules.forEach(r => {
-    r.hiddenVariantTypes.forEach(t => {
-      packTypeBreakdown[t] = (packTypeBreakdown[t] || 0) + 1;
-    });
-  });
-
-  // Recent rules — only show active catalogs
-  const recentRules = recentRulesRaw.filter(r => activeCatalogIds.has(r.catalogId)).slice(0, 5);
-
-  return {
-    totalGroups, configuredGroups: finalConfigured, unconfiguredGroups,
-    groupsWithBlanket, groupsWithOverrides,
-    totalOverrideRows, distinctOverrideProducts,
-    packTypeBreakdown,
-    recentRules, overrideCountMap,
-  };
+  // Nothing to load. The variant-hiding feature has been removed: pack-size
+  // restrictions are now Shopify's own variant-level publishing, so there are
+  // no rules, overrides or "blocked sizes" figures left for this page to
+  // report. What remains on it is the price and strikethrough sync tooling,
+  // which is all driven client-side from the buttons below.
+  await authenticate.admin(request);
+  return {};
 };
 
-const statCardStyle = {
-  flex: 1,
-  textAlign: 'center',
-  padding: '22px 18px',
-  border: '1px solid #e1e3e5',
-  borderRadius: '10px',
-  cursor: 'pointer',
-  background: '#fff',
-  font: 'inherit',
-  color: 'inherit',
-  boxShadow: '0 1px 2px rgba(16, 24, 40, 0.04)',
-};
-const statNumberStyle = { fontSize: '2.2rem', fontWeight: '800', lineHeight: 1 };
-const statLabelStyle = { fontWeight: '600', marginTop: '10px', color: '#202223' };
-const statSubStyle = { color: '#6d7175', fontSize: '13px', marginTop: '2px' };
 
 function actionButtonStyle(kind, busy) {
   const palette = {
@@ -132,34 +36,11 @@ const toolSectionStyle = { display: 'flex', flexDirection: 'column', gap: '12px'
 const noteBoxStyle = { border: '1px solid #e1e3e5', background: '#f6f6f7', borderRadius: '8px', padding: '12px 16px', fontSize: '13px', lineHeight: '1.6', color: '#4a4a4a' };
 
 export default function Index() {
-  const {
-    configuredGroups, unconfiguredGroups,
-    groupsWithBlanket, groupsWithOverrides,
-    totalOverrideRows, distinctOverrideProducts,
-    packTypeBreakdown,
-    recentRules, overrideCountMap,
-  } = useLoaderData();
   const navigate = useNavigate();
   const [syncState, setSyncState] = React.useState({ running: false, total: 0, done: false, error: null });
   const [backfillState, setBackfillState] = React.useState({ running: false, updated: 0, skipped: 0, done: false, error: null });
   const [catalogSyncState, setCatalogSyncState] = React.useState({ running: false, done: false, error: null, result: null });
-  const [cleanupState, setCleanupState] = React.useState({ running: false, done: false, error: null, result: null });
 
-  async function runCleanup(dryRun = true) {
-    setCleanupState({ running: true, done: false, error: null, result: null });
-    try {
-      const url = dryRun ? '/api/cleanup-orphans?dryRun=true' : '/api/cleanup-orphans';
-      const res = await fetch(url, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        setCleanupState({ running: false, done: false, error: data.error || 'Request failed', result: null });
-        return;
-      }
-      setCleanupState({ running: false, done: true, error: null, result: data });
-    } catch (err) {
-      setCleanupState({ running: false, done: false, error: err.message, result: null });
-    }
-  }
 
   async function runSync() {
     setSyncState({ running: true, total: 0, done: false, error: null });
@@ -249,141 +130,32 @@ export default function Index() {
             Welcome to the Dutch Rusk Catalog Manager
           </div>
           <div style={{ color: 'rgba(255,255,255,0.72)', fontSize: '15px', marginBottom: '24px', lineHeight: '1.6', maxWidth: '640px' }}>
-            Control exactly what pack sizes and products each B2B customer can see and order —
-            without touching Shopify settings manually.
+            Catalog pricing, checkout strikethrough prices and BOGO bundles for the B2B store.
+            Pack size visibility is handled by Shopify catalogs directly.
           </div>
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
             <s-button variant="primary" onClick={() => navigate("/app/catalog-manager")}>
               Open Catalog Manager
             </s-button>
-            <s-button onClick={() => navigate("/app/audit")}>
-              View Audit Report
-            </s-button>
           </div>
         </div>
       </s-section>
 
-      {/* Stats Row */}
-      <s-section heading="At a Glance">
-        <s-stack direction="inline" gap="base">
-          <button type="button" onClick={() => navigate("/app/catalog-manager")} style={statCardStyle}>
-            <div style={{ ...statNumberStyle, color: '#181344' }}>{configuredGroups}</div>
-            <div style={statLabelStyle}>Customer Groups</div>
-            <div style={statSubStyle}>with visibility rules active</div>
-            {unconfiguredGroups > 0 && (
-              <div style={{ color: '#946200', fontSize: '12px', marginTop: '8px', fontWeight: '600' }}>
-                {unconfiguredGroups} not yet configured
-              </div>
-            )}
-          </button>
 
-          <button type="button" onClick={() => navigate("/app/audit")} style={statCardStyle}>
-            <div style={{ ...statNumberStyle, color: '#2156c3' }}>{distinctOverrideProducts}</div>
-            <div style={statLabelStyle}>Products with Exceptions</div>
-            <div style={statSubStyle}>{totalOverrideRows} rules across {groupsWithOverrides} group{groupsWithOverrides !== 1 ? 's' : ''}</div>
-          </button>
 
-          <div style={{ ...statCardStyle, cursor: 'default' }}>
-            <div style={{ ...statNumberStyle, color: '#66270f' }}>{groupsWithBlanket}</div>
-            <div style={statLabelStyle}>Groups Hiding Sizes</div>
-            <div style={statSubStyle}>blocking pack types for all products</div>
-          </div>
-        </s-stack>
-      </s-section>
-
-      {/* Pack Type Breakdown */}
-      {Object.keys(packTypeBreakdown).length > 0 && (
-        <s-section heading="Blocked Sizes Breakdown">
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            {Object.entries(packTypeBreakdown)
-              .sort((a, b) => b[1] - a[1])
-              .map(([type, count]) => (
-                <div key={type} style={{
-                  padding: '12px 18px',
-                  border: '1px solid #e1e3e5',
-                  borderRadius: '8px',
-                  background: '#f6f6f7',
-                  textAlign: 'center',
-                  minWidth: '100px',
-                }}>
-                  <div style={{ fontSize: '1.4rem', fontWeight: '700', color: '#181344' }}>{count}</div>
-                  <div style={{ fontSize: '13px', fontWeight: '600', color: '#202223', marginTop: '2px' }}>{type}</div>
-                  <div style={{ fontSize: '11px', color: '#6d7175', marginTop: '2px' }}>group{count !== 1 ? 's' : ''} blocking</div>
-                </div>
-              ))}
-          </div>
-        </s-section>
-      )}
-
-      {/* Getting Started — shown only when nothing is configured */}
-      {configuredGroups === 0 && (
-        <s-section>
-          <div style={{ textAlign: 'center', padding: '40px 20px', border: '1px solid #e1e3e5', borderRadius: '8px', background: '#f6f6f7' }}>
-            <div style={{ fontSize: '18px', fontWeight: '700', marginBottom: '8px' }}>Ready to get started?</div>
-            <div style={{ color: '#6d7175', marginBottom: '20px' }}>
-              No rules are configured yet. Open the Catalog Manager to set up your first customer group.
-            </div>
-            <s-button variant="primary" onClick={() => navigate("/app/catalog-manager")}>
-              Open Catalog Manager
-            </s-button>
-          </div>
-        </s-section>
-      )}
-
-      {/* Recent Activity */}
-      {recentRules.length > 0 && (
-        <s-section heading="Recently Updated">
-          <s-stack direction="block" gap="tight">
-            {recentRules.map((rule) => {
-              const hasTypes = rule.hiddenVariantTypes.length > 0;
-              const overrideCount = overrideCountMap[rule.catalogId] || 0;
-              return (
-                <s-box key={rule.id} padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                  <s-stack direction="inline" gap="base" align="center">
-                    <s-stack direction="block" gap="extraTight" style={{ flex: 1 }}>
-                      <s-text fontWeight="bold">{rule.catalogName}</s-text>
-                      <s-text tone="subdued">
-                        {hasTypes ? `Blocking: ${rule.hiddenVariantTypes.join(", ")}` : "No pack types blocked"}
-                        {overrideCount > 0 && ` · ${overrideCount} product exception${overrideCount !== 1 ? 's' : ''}`}
-                        {!hasTypes && overrideCount === 0 && " — No restrictions set"}
-                      </s-text>
-                    </s-stack>
-                    <s-stack direction="inline" gap="tight">
-                      <s-button variant="secondary" size="slim"
-                        onClick={() => navigate(`/app/catalog-rules?catalogId=${encodeURIComponent(rule.catalogId)}&catalogName=${encodeURIComponent(rule.catalogName)}`)}>
-                        Edit Rules
-                      </s-button>
-                      <s-button variant="secondary" size="slim"
-                        onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(rule.catalogId)}&catalogName=${encodeURIComponent(rule.catalogName)}`)}>
-                        Product Overrides
-                      </s-button>
-                    </s-stack>
-                  </s-stack>
-                </s-box>
-              );
-            })}
-          </s-stack>
-        </s-section>
-      )}
-
-      {/* Sidebar */}
-      <s-section slot="aside" heading="How It Works">
+      <s-section slot="aside" heading="How Pack Sizes Work Now">
         <s-stack direction="block" gap="tight">
           <s-box padding="base" borderRadius="base" background="subdued">
-            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Step 1 — Pick a Customer Account</div>
-            <s-text tone="subdued">Go to Catalog Manager and select the B2B customer to configure.</s-text>
+            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Shopify controls this directly</div>
+            <s-text tone="subdued">Pack sizes a customer may not order are excluded from their catalog in Shopify itself, under Catalogs. Shopify enforces it, so the excluded size never appears and cannot be added to a cart.</s-text>
           </s-box>
           <s-box padding="base" borderRadius="base" background="subdued">
-            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Step 2 — Block Entire Pack Types</div>
-            <s-text tone="subdued">Use &ldquo;Manage Rules&rdquo; to hide all Shippers, Bags, etc. for that customer in one click.</s-text>
+            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Where to change it</div>
+            <s-text tone="subdued">Open the catalog in Shopify, find the product, and use Exclude from catalog on the individual variant. This app no longer holds visibility rules.</s-text>
           </s-box>
           <s-box padding="base" borderRadius="base" background="subdued">
-            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Step 3 — Fine-Tune Per Product</div>
-            <s-text tone="subdued">Use &ldquo;Product Overrides&rdquo; to adjust individual products that differ from the blanket rule.</s-text>
-          </s-box>
-          <s-box padding="base" borderRadius="base" background="subdued">
-            <div style={{ fontWeight: '700', marginBottom: '4px' }}>Step 4 — Changes Go Live Instantly</div>
-            <s-text tone="subdued">Once saved, the customer sees the updated view immediately on their next page load.</s-text>
+            <div style={{ fontWeight: '700', marginBottom: '4px' }}>New products need excluding</div>
+            <s-text tone="subdued">A product published to a catalog arrives with every pack size visible, so exclude the ones that customer should not see when you add it.</s-text>
           </s-box>
         </s-stack>
       </s-section>
@@ -473,49 +245,6 @@ export default function Index() {
         </div>
       </s-section>
 
-      {/* Database Cleanup */}
-      <s-section heading="Database Cleanup">
-        <div style={toolSectionStyle}>
-          <s-text>
-            Remove stale database rows from catalogs that no longer exist in Shopify.
-            These orphaned rows inflate your dashboard stats and waste storage.
-            Run a <b>dry run</b> first to preview what would be removed.
-          </s-text>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <button type="button" onClick={() => runCleanup(true)} disabled={cleanupState.running} style={actionButtonStyle('accent', cleanupState.running)}>
-              {cleanupState.running ? 'Scanning…' : 'Preview Orphaned Rows'}
-            </button>
-            {cleanupState.result?.dryRun === true && (cleanupState.result.orphanedRuleCount > 0 || cleanupState.result.totalOrphanedOverrides > 0) && (
-              <button type="button" onClick={() => runCleanup(false)} disabled={cleanupState.running} style={actionButtonStyle('danger', false)}>
-                Delete Orphaned Rows
-              </button>
-            )}
-          </div>
-          {cleanupState.result?.dryRun === true && (
-            <div style={{ ...noteBoxStyle, background: '#f0f7ff', border: '1px solid #b4d4ff' }}>
-              <b>Dry run result:</b> Found <b>{cleanupState.result.orphanedRuleCount}</b> orphaned catalog rule(s)
-              and <b>{cleanupState.result.totalOrphanedOverrides}</b> orphaned product override(s).
-              {cleanupState.result.orphanedRules.length > 0 && (
-                <div style={{ marginTop: '6px' }}>
-                  Stale catalogs: {cleanupState.result.orphanedRules.map(r => r.catalogName || r.catalogId).join(', ')}
-                </div>
-              )}
-              {cleanupState.result.orphanedRuleCount === 0 && cleanupState.result.totalOrphanedOverrides === 0 && (
-                <div style={{ marginTop: '4px', color: '#008060' }}>No orphaned rows found — database is clean.</div>
-              )}
-            </div>
-          )}
-          {cleanupState.result?.dryRun === false && (
-            <div style={{ ...noteBoxStyle, background: '#f1f8f5', border: '1px solid #95c9b4', color: '#008060' }}>
-              Deleted <b>{cleanupState.result.deletedRules}</b> catalog rule(s)
-              and <b>{cleanupState.result.deletedOverrides}</b> product override(s).
-            </div>
-          )}
-          {cleanupState.error && (
-            <span style={{ color: '#d72c0d', fontWeight: '600' }}>{cleanupState.error}</span>
-          )}
-        </div>
-      </s-section>
 
       {/* B2B Order Discount Records */}
       <s-section heading="B2B Discount Records on Orders">

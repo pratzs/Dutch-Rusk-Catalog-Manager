@@ -55,16 +55,6 @@ export async function loader({ request }) {
   // The 'type' field caused a 500 error in this API version, so title-matching is used.
   const catalogs = allNodes.filter(cat => !isSystemChannel(cat.title));
 
-  const [rules, overrideCounts] = await Promise.all([
-    prisma.catalogRule.findMany(),
-    prisma.productOverride.groupBy({ by: ["catalogId"], _count: { catalogId: true } }),
-  ]);
-
-  const rulesMap = {};
-  rules.forEach((r) => { rulesMap[r.catalogId] = r; });
-
-  const overrideCountMap = {};
-  overrideCounts.forEach((o) => { overrideCountMap[o.catalogId] = o._count.catalogId; });
 
   // Location sync runs in the background — fire-and-forget so it doesn't block page load.
   (async () => {
@@ -106,11 +96,11 @@ export async function loader({ request }) {
     }
   })();
 
-  return { catalogs, rulesMap, overrideCountMap, pageInfo };
+  return { catalogs, pageInfo };
 }
 
 export default function CatalogManager() {
-  const { catalogs, rulesMap, overrideCountMap, pageInfo } = useLoaderData();
+  const { catalogs, pageInfo } = useLoaderData();
   const navigate = useNavigate();
 
   return (
@@ -127,65 +117,26 @@ export default function CatalogManager() {
         <s-text tone="subdued">Any new B2B catalogs created in Shopify will automatically appear in this list.</s-text>
       </s-section>
 
-      <s-section heading="Your Active Catalogs"
-        action-label="Clone Rules" action-url="/app/clone"
-        secondary-action-label="Audit Report" secondary-action-url="/app/audit">
+      <s-section heading="Your Active Catalogs">
         <s-stack direction="block" gap="base">
           {catalogs.length === 0 ? (
             <s-box padding="base" background="subdued" borderRadius="base">
               <s-text>No B2B catalogs found. Create B2B catalogs in Shopify Admin first.</s-text>
             </s-box>
           ) : (
-            catalogs.map((catalog) => {
-              const cleanId = catalog.id.split("/").pop();
-              const rule = rulesMap[cleanId];
-              const hiddenTypes = rule?.hiddenVariantTypes || [];
-              const overrideCount = overrideCountMap[cleanId] || 0;
-              const isConfigured = hiddenTypes.length > 0 || overrideCount > 0;
-
-              return (
-                <s-box key={catalog.id} padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                  <s-stack direction="inline" gap="base" align="center">
-                    <s-stack direction="block" gap="extraTight" style={{ flex: 1 }}>
-                      <s-stack direction="inline" gap="tight" align="center">
-                        <s-text fontWeight="bold">{catalog.title}</s-text>
-                        {!isConfigured && (
-                          <span style={{ fontSize: '11px', background: '#f1f1f1', color: '#6d7175', padding: '2px 8px', borderRadius: '12px', fontWeight: '500' }}>
-                            Not configured
-                          </span>
-                        )}
-                      </s-stack>
-                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
-                        {hiddenTypes.length > 0 ? (
-                          hiddenTypes.map((t) => (
-                            <span key={t} style={{ fontSize: '12px', background: '#ffeaeb', color: '#d72c0d', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>
-                              🚫 {t}
-                            </span>
-                          ))
-                        ) : (
-                          <span style={{ fontSize: '12px', color: '#6d7175' }}>No pack types blocked</span>
-                        )}
-                        {overrideCount > 0 && (
-                          <span style={{ fontSize: '12px', background: '#fff3cd', color: '#856404', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>
-                            ✏️ {overrideCount} product exception{overrideCount !== 1 ? 's' : ''}
-                          </span>
-                        )}
-                      </div>
-                    </s-stack>
-                    <s-stack direction="inline" gap="tight">
-                      <s-button variant="secondary"
-                        onClick={() => navigate(`/app/catalog-rules?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`)}>
-                        Manage Rules
-                      </s-button>
-                      <s-button variant="secondary"
-                        onClick={() => navigate(`/app/catalog-overrides?catalogId=${encodeURIComponent(catalog.id)}&catalogName=${encodeURIComponent(catalog.title)}`)}>
-                        Product Overrides
-                      </s-button>
-                    </s-stack>
+            catalogs.map((catalog) => (
+              <s-box key={catalog.id} padding="base" borderWidth="base" borderRadius="base" background="subdued">
+                <s-stack direction="inline" gap="base" align="center">
+                  <s-stack direction="block" gap="extraTight" style={{ flex: 1 }}>
+                    <s-text fontWeight="bold">{catalog.title}</s-text>
+                    <s-text tone="subdued">
+                      Pack size visibility for this catalog is set in Shopify, under Catalogs, by excluding
+                      individual variants from it.
+                    </s-text>
                   </s-stack>
-                </s-box>
-              );
-            })
+                </s-stack>
+              </s-box>
+            ))
           )}
         </s-stack>
 
