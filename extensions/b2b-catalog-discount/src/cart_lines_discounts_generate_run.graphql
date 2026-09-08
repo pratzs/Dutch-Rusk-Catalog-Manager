@@ -1,30 +1,35 @@
 query CartInput {
+  # BOGO Bundle config. NOTE: this is the metafield on the DISCOUNT NODE, not
+  # the shop. The app's BOGO page writes both, and the shop copy is only a
+  # mirror -- the Function has always read the discount node, so anything that
+  # changes deals must write here or it has no effect.
+  discount {
+    bogoBundles: metafield(namespace: "custom", key: "bogo_bundles") {
+      value
+    }
+  }
   cart {
     lines {
       id
       quantity
       cost {
+        # After b2b-price-transformer has run this is the RETAIL price. If that
+        # Function stood down (big cart) it is still the catalog price, which is
+        # what `transformRaised` below detects.
         amountPerQuantity {
           amount
-          currencyCode
         }
       }
       merchandise {
         __typename
         ... on ProductVariant {
           id
-          # JSON map of priceListGid → fixedPrice string
-          # Only present for variants with a custom fixed-price override in any catalog
-          catalogFixedPrices: metafield(
-            namespace: "custom"
-            key: "catalog_fixed_prices"
-          ) {
+          # JSON map of priceListGid -> catalog price, written by
+          # api.catalog-price-sync. Pruned to genuine discounts only.
+          catalogFixedPrices: metafield(namespace: "custom", key: "catalog_fixed_prices") {
             value
           }
-          standardRetailPrice: metafield(
-            namespace: "custom"
-            key: "standard_retail_price"
-          ) {
+          standardRetailPrice: metafield(namespace: "custom", key: "standard_retail_price") {
             value
           }
         }
@@ -33,19 +38,10 @@ query CartInput {
     buyerIdentity {
       purchasingCompany {
         company {
-          id
-          # Which Shopify price list this company is on
-          priceListId: metafield(
-            namespace: "custom"
-            key: "catalog_pricelist_id"
-          ) {
+          priceListId: metafield(namespace: "custom", key: "catalog_pricelist_id") {
             value
           }
-          # Blanket discount % for this company's catalog (e.g. "20" = 20% off)
-          discountPct: metafield(
-            namespace: "custom"
-            key: "catalog_discount_pct"
-          ) {
+          discountPct: metafield(namespace: "custom", key: "catalog_discount_pct") {
             value
           }
         }
