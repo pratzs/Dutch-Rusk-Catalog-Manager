@@ -412,10 +412,24 @@
   }
 
   // ── "Back Soon" state ─────────────────────────────────────────────────────
-  function applyBackSoonState(scope) {
-    if (scope.dataset?.cvhBackSoon) return;
-    if (scope.dataset) scope.dataset.cvhBackSoon = "1";
-    LOG(`  → applyBackSoonState on <${scope.tagName}>`);
+  // Why a card is unavailable, which decides what the button says.
+  //   "rules"   every pack size this buyer may order is hidden, so the product
+  //             is not available to them. Saying "Back Soon" here is wrong: the
+  //             stock may well be sitting in the warehouse in a pack size they
+  //             are not set up to buy.
+  //   "unknown" rules could not be fetched. Fail closed so nobody can add a
+  //             pack size they should not have, but this is temporary and gets
+  //             cleared the moment rules arrive.
+  const UNAVAILABLE_LABEL = { rules: "Not available", unknown: "Back Soon" };
+
+  function applyBackSoonState(scope, reason) {
+    const why = reason || "rules";
+    // Already showing this state for the same reason: nothing to do. A DIFFERENT
+    // reason is allowed to relabel, so a card that fell back while rules were
+    // loading gets the right wording once they land.
+    if (scope.dataset?.cvhBackSoon === why) return;
+    if (scope.dataset) scope.dataset.cvhBackSoon = why;
+    LOG(`  → applyBackSoonState on <${scope.tagName}> (${why})`);
 
     scope.querySelectorAll("variant-selects").forEach(el =>
       el.style.setProperty("display", "none", "important")
@@ -456,16 +470,62 @@
     });
 
     const addBtn = scope.querySelector('button[name="add"], button[data-add-to-cart]');
-    if (addBtn && !addBtn.dataset.cvhBackSoon) {
-      addBtn.dataset.cvhBackSoon = "1";
+    if (addBtn) {
+      // Remember what the theme had so this can be undone. Without this the
+      // state latched: one premature or failed check and the card read
+      // unavailable until the shopper reloaded the page.
+      if (addBtn._cvhOrigHTML === undefined) addBtn._cvhOrigHTML = addBtn.innerHTML;
+      if (addBtn._cvhOrigDisabled === undefined) addBtn._cvhOrigDisabled = addBtn.disabled;
+      addBtn.dataset.cvhBackSoon = why;
       addBtn.disabled = true;
       addBtn.style.opacity = "0.7";
       addBtn.style.cursor = "not-allowed";
-      addBtn.innerHTML = "Back Soon";
-      LOG(`  → "Back Soon" button applied`);
-    } else if (!addBtn) {
+      addBtn.innerHTML = UNAVAILABLE_LABEL[why] || UNAVAILABLE_LABEL.rules;
+      LOG(`  → "${addBtn.innerHTML}" button applied (${why})`);
+    } else {
       LOG(`  → applyBackSoonState: no add-to-cart button found in scope`);
     }
+  }
+
+  // Undo applyBackSoonState. Called when a card turns out to be purchasable
+  // after all -- rules arrived late, or the card was still being built when it
+  // was first checked.
+  function clearBackSoonState(scope) {
+    if (!scope.dataset?.cvhBackSoon) return;
+    LOG(`  → clearBackSoonState on <${scope.tagName}> (was ${scope.dataset.cvhBackSoon})`);
+    delete scope.dataset.cvhBackSoon;
+
+    scope.querySelectorAll("variant-selects").forEach(el => el.style.removeProperty("display"));
+    scope.querySelectorAll(
+      'quantity-input, .quantity, [class*="quantity__"], .product-form__quantity'
+    ).forEach(el => el.style.removeProperty("display"));
+    scope.querySelectorAll('.cvh-strikethrough').forEach(el => el.style.removeProperty("display"));
+    scope.querySelectorAll(
+      '.price, .price-item, .price-item--regular, .product__price, .grid-product__price, .price__container, [data-price], .current-price'
+    ).forEach(el => {
+      el.style.removeProperty("opacity");
+      el.style.removeProperty("text-decoration");
+    });
+
+    const addBtn = scope.querySelector('button[name="add"], button[data-add-to-cart]');
+    if (addBtn && addBtn.dataset.cvhBackSoon) {
+      delete addBtn.dataset.cvhBackSoon;
+      if (addBtn._cvhOrigHTML !== undefined) addBtn.innerHTML = addBtn._cvhOrigHTML;
+      // The theme's own sold-out handling may still want it disabled, so put
+      // back exactly what was there rather than force-enabling.
+      if (addBtn._cvhOrigDisabled !== undefined) addBtn.disabled = addBtn._cvhOrigDisabled;
+      addBtn.style.removeProperty("opacity");
+      addBtn.style.removeProperty("cursor");
+    }
+  }
+
+  // Is every variant on this card hidden? Only meaningful once the card has
+  // actually rendered its variant inputs -- asking too early was the other way
+  // a stocked product ended up reading unavailable.
+  function allVariantsHidden(card) {
+    const radios = Array.from(card.querySelectorAll('input[type="radio"]'));
+    if (radios.length === 0) return null; // nothing rendered yet: don't decide
+    return radios.every(r => r.style.display === "none");
   }
 
   // Reads the theme's own live-updating inventory-status pill for a card.
@@ -715,6 +775,42 @@
       // ALL new cards at once (vs one call per product). Cards are unmasked only
       // after rules have been applied, so customers never see or click a variant
       // that should be hidden.
+      // Cards being held closed because their rules could not be fetched.
+      // productId -> card element. Emptied as rules arrive.
+      const unresolved = new Map();
+
+      // Keep asking for the rules of any card that is only closed because we
+      // could not reach the app. This is what stops a momentary blip reading as
+      // "unavailable" until the shopper reloads, which is what used to happen:
+      // the state was applied once and never revisited.
+      const retryUnresolved = async (attempt = 1) => {
+        if (unresolved.size === 0) return;
+        const pending = [...unresolved.keys()];
+        LOG(`retryUnresolved: attempt ${attempt} for ${pending.length} card(s)`);
+        const fresh = await fetchRulesBatch(resolvedLocationId, pending);
+        let fixed = 0;
+        for (const pid of pending) {
+          const card = unresolved.get(pid);
+          if (!card || !card.isConnected) { unresolved.delete(pid); continue; }
+          const rules = fresh[pid];
+          if (!rules || rules._cvh_error) continue; // still unknown, try again later
+          clearBackSoonState(card);
+          applyRulesToContainer(card, rules, `retry:${pid}`);
+          setupCardAvailabilityWatcher(card);
+          const hidden = allVariantsHidden(card);
+          if (hidden === true) applyBackSoonState(card, "rules");
+          card.setAttribute("data-cvh-processed", "1");
+          unresolved.delete(pid);
+          fixed++;
+        }
+        LOG(`retryUnresolved: resolved ${fixed}, still waiting on ${unresolved.size}`);
+        // Back off, but keep trying for a couple of minutes. A card left closed
+        // is a lost sale, so it is worth the few extra requests.
+        if (unresolved.size > 0 && attempt < 6) {
+          setTimeout(() => retryUnresolved(attempt + 1), Math.min(1000 * 2 ** attempt, 30000));
+        }
+      };
+
       const processBatch = async () => {
         const pidElements = Array.from(document.querySelectorAll("[data-product-id]:not([data-cvh-seen])"));
         LOG(`Collection processBatch: found ${pidElements.length} unseen [data-product-id] elements`);
@@ -750,34 +846,60 @@
             const rules = batchRules[normPid] || { hiddenVariantTypes: [], hiddenVariantIds: [], hasOverride: false };
 
             if (rules._cvh_error) {
-              WARN(`  Card ${productId}: API error — applying Back Soon (fail-closed)`);
-              applyBackSoonState(card);
+              // Fail closed so no disallowed pack size can be added, but this is
+              // NOT final: the card is left unprocessed so a later pass can fix
+              // it, and retryUnresolved() below keeps asking.
+              WARN(`  Card ${productId}: rules unavailable — holding closed and retrying`);
+              applyBackSoonState(card, "unknown");
+              // Still mark processed: the server-side CSS mask keys off this and
+              // leaving it unset makes the card look half-built. The button is
+              // disabled, so nothing can be added while we retry.
               card.setAttribute("data-cvh-processed", "1");
               card.removeAttribute("data-cvh-loading");
+              unresolved.set(normPid, card);
               return;
             }
 
             applyRulesToContainer(card, rules, `card:${productId}`);
             setupCardAvailabilityWatcher(card);
 
-            const cardRadios = Array.from(card.querySelectorAll('input[type="radio"]'));
-            if (cardRadios.length > 0 && cardRadios.every(r => r.style.display === "none")) {
-              applyBackSoonState(card);
+            // Rules arrived, so anything held closed while they were missing is
+            // now decided properly.
+            unresolved.delete(normPid);
+
+            const hidden = allVariantsHidden(card);
+            if (hidden === true) {
+              // Every pack size this buyer may order is hidden. That is a
+              // catalog decision, not a stock one.
+              applyBackSoonState(card, "rules");
+            } else if (hidden === false) {
+              // There is something they can buy, so lift any earlier state.
+              clearBackSoonState(card);
             }
+            // hidden === null: this card has no variant inputs at all, which is
+            // normal for a single-variant product. Nothing to decide.
 
             card.setAttribute("data-cvh-processed", "1");
             card.removeAttribute("data-cvh-loading");
           } catch (err) {
-            WARN(`  processBatch error for productId=${productId} — applying Back Soon (fail-closed):`, err);
-            applyBackSoonState(card);
+            WARN(`  processBatch error for productId=${productId} — holding closed and retrying:`, err);
+            applyBackSoonState(card, "unknown");
             card.setAttribute("data-cvh-processed", "1");
             card.removeAttribute("data-cvh-loading");
+            unresolved.set(normPid, card);
           }
         });
       };
 
       await processBatch();
-      new MutationObserver(processBatch).observe(document.body, { childList: true, subtree: true });
+      retryUnresolved();
+
+      // Re-run on DOM changes: new cards from infinite scroll, and cards whose
+      // variant inputs render after we first looked at them.
+      new MutationObserver(async () => {
+        await processBatch();
+        retryUnresolved();
+      }).observe(document.body, { childList: true, subtree: true });
     }
   }
 
