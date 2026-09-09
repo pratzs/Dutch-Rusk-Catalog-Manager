@@ -216,6 +216,51 @@ PRISMA_CLIENT_ENGINE_TYPE=binary
 
 This forces Prisma to use the binary engine mode, which runs the query engine as a separate process and can work via emulation on Windows ARM64.
 
+## B2B access emails (Dutch Rusk launch phases)
+
+Shopify blocks the `companyContactSendWelcomeEmail` mutation for third-party app
+tokens, even with `write_customers` / `write_companies`. The workaround used
+throughout this app is to add an `invite-ready` tag to the customer; a Shopify
+Flow named "Send B2B Access Email Flows" triggers on the tag, calls Flow's own
+built-in "Send B2B access email to company contact" action (which runs under
+Shopify's permissions, not ours), then clears the tag.
+
+| Phase | Route | Trigger |
+| --- | --- | --- |
+| 1, General Catalog | `app/routes/api.send-b2b-access-emails.jsx` | unlocks at a target timestamp (20 Jul 2026) |
+| 2, Key Accounts | `app/routes/api.send-phase2-b2b-access-emails.jsx` | unlocks at a target timestamp (10 Aug 2026) |
+| 3, Night n Day | `app/routes/api.send-phase3-b2b-access-emails.jsx` | on demand, requires `{ "confirm": true }` |
+
+All three authenticate with the `x-cron-secret` header against
+`B2B_EMAIL_CRON_SECRET`, and record every attempt in the `B2BAccessEmailLog`
+Prisma table.
+
+The Phase 3 sender (logic in `app/lib/phase3-access-emails.server.js`) is the one
+to copy for any future phase. It differs from the earlier two in ways that matter:
+
+- **No time gate.** It was written as a catch-up after Phase 3 had already gone
+  live, so it runs on demand and refuses to send unless the request body contains
+  `{ "confirm": true }`. A bare `POST` is a dry run that returns the recipient list.
+- **It skips on Shopify's record, not ours.** Before sending it reads each
+  customer's timeline for an existing `"... sent B2B access email notification to
+  this customer"` event. That catches sends made by hand from Shopify Admin, which
+  `B2BAccessEmailLog` knows nothing about, and makes re-runs safe.
+- **It excludes internal staff records** held on the catalog for testing.
+
+### Two things that look like access signals but are not
+
+- **`Customer.state`** (`DISABLED` / `INVITED` / `ENABLED`) does not tell you
+  whether a B2B buyer can log in. This store uses Shopify's new customer accounts,
+  which authenticate by emailed one-time code, so the legacy field stays
+  `DISABLED` for buyers who order perfectly normally. Measured on 10 Sept 2026:
+  172 of 336 B2B orders came from contacts reading `DISABLED`.
+- **The `invite-ready` tag** is not a record of who was emailed, because the Flow
+  clears it after sending.
+
+The reliable signals are the customer timeline event (did Shopify send it) and
+whether the company has actually placed an order (do they use the portal). There
+is no Flow run history in the Admin API; the timeline event is the way around that.
+
 ## Resources
 
 React Router:
