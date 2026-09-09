@@ -16,11 +16,13 @@
 //   1. vendor, ranked by where that vendor first appears in this collection's
 //      own best-selling order, so the best-selling brand leads and every
 //      product of a brand sits together instead of being scattered.
-//   2. size band within the brand, read from the product's tags: singles,
-//      then share/king size, then blocks, then bulk bags, then anything
-//      untagged. This is the part that puts "47g Mars Salted Caramel" beside
-//      "50g Bounty": same vendor, same band. Alphabetical never could, since
-//      one title starts with a digit and the other with a B.
+//   2. size band within the brand: singles, then share and king size, then
+//      blocks, then sharepacks, then bags smallest first (family bags up to
+//      350g, then the 500g and 800g few, then the 1kg and 2kg bulk bags),
+//      then anything unrecognised. This is the part that puts "47g Mars
+//      Salted Caramel" beside "50g Bounty": same vendor, same band.
+//      Alphabetical never could, since one title starts with a digit and the
+//      other with a B.
 //   3. title, only so the result is stable and repeatable.
 //
 // Product titles are never touched. They come from Ostendo and the admin team
@@ -49,12 +51,25 @@ export const LEAVE_ALONE = ["New Arrivals"];
 // it that way as new products land.
 const HOUSE_VENDORS = ["DutchRusk", "Dutch Rusk"];
 
-// A sub-brand or a brand pratham named directly -> the vendor it should carry.
-// Mars owns Snickers, Twix and Eclipse.
+// A sub-brand -> the vendor it must carry. This table is AUTHORITATIVE: it is
+// applied whatever the product's current vendor is, not only when the product
+// sits under the house vendor. That is deliberate, because the gum and mint
+// lines were all filed under Mars when they are Wrigley's, which is a wrong
+// real vendor rather than a missing one.
+//
+// Mars keeps the chocolate and the candy: Snickers, Twix, Bounty, Maltesers,
+// M&M's and Skittles. Wrigley's takes the gum and mints.
 const VENDOR_ALIASES = {
   snickers: "Mars",
   twix: "Mars",
-  eclipse: "Mars",
+  extra: "Wrigley's",
+  eclipse: "Wrigley's",
+  "5 gum": "Wrigley's",
+  "hubba bubba": "Wrigley's",
+  "juicy fruit": "Wrigley's",
+  pk: "Wrigley's",
+  airwaves: "Wrigley's",
+  orbit: "Wrigley's",
   ajax: "Ajax",
   "bubble tea": "LOL",
   candycove: "Candycove",
@@ -74,14 +89,49 @@ const VENDOR_ALIASES = {
   "my toffee": "My Toffee",
 };
 
-/** Size band within a brand. Lower sorts first; untagged goes last. */
-export function sizeBand(tags) {
+/**
+ * Pack weight in grams, read from the title, or null.
+ *
+ * The FIRST weight in the title is the pack; a trailing "x 12ct" is the case
+ * count, so "Pascall Family Bag Marshmallows 180g x 12ct" is 180g and
+ * "Dragon 2kg Gummy Starfish" is 2000g.
+ */
+export function packGrams(title) {
+  const m = String(title || "").match(/(\d+(?:\.\d+)?)\s*(kg|g)\b/i);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!isFinite(n)) return null;
+  return /kg/i.test(m[2]) ? Math.round(n * 1000) : Math.round(n);
+}
+
+/**
+ * Size band within a brand. Lower sorts first; anything unrecognised goes last.
+ *
+ * Bags are banded by actual weight rather than by tag, because the tags
+ * disagree with reality: 25 products tagged "Bulk Gummies and Lollies" are
+ * 220g family bags, one "Family Bags" is a 1kg, and one "Bulk Bags" is small.
+ * Weight is what "small to large" actually means. Per pratham: bags up to
+ * ~350g are the small family bags (a 350g party mix still counts), and the
+ * 1kg and 2kg ones are the bulk bags. The 500g and 800g few sit between.
+ */
+export function sizeBand(tags, title) {
   const t = (tags || []).map((x) => String(x).toLowerCase());
   const has = (re) => t.some((x) => re.test(x));
+
   if (has(/single bars?\b/)) return 1;
   if (has(/share bar chocolates/)) return 2;
   if (has(/\bblocks?\b/)) return 3;
-  if (has(/family bags|large bags|m&m bags|hi-chew bags|bulk gummies and lollies|sharepacks/)) return 4;
+  if (has(/^sharepacks$/)) return 4;
+
+  const isBag = has(/family bags|large bags|m&m bags|hi-chew bags|bulk gummies and lollies|^1kg$|^2kg$/) ||
+    /\bbag\b|party mix/i.test(String(title || ""));
+  if (isBag) {
+    const g = packGrams(title);
+    if (g === null) return 5;      // a bag with no weight in the title
+    if (g <= 350) return 5;        // family bag, small
+    if (g < 1000) return 6;        // 500g and 800g, between the two
+    return 7;                      // 1kg, 2kg, bulk bag
+  }
   return 9;
 }
 
@@ -99,7 +149,7 @@ export function desiredOrder(productsInBestSellingOrder) {
     .map((p, i) => ({
       p,
       v: vendorRank.get(p.vendor || ""),
-      b: sizeBand(p.tags),
+      b: sizeBand(p.tags, p.title),
       t: String(p.title || "").toLowerCase(),
       i,
     }))
@@ -221,7 +271,7 @@ export function detectVendor(title, lookup) {
   let t = String(title || "").toLowerCase().replace(/[^a-z0-9'&\s]/g, " ").replace(/\s+/g, " ").trim();
   t = t.replace(/^(\d+(?:\.\d+)?\s*(?:g|kg|ml|lt|l|pc|pk)\s+)+/, "");
   for (const item of lookup) {
-    if (item.needle.length < 3) continue;
+    if (item.needle.length < 2) continue;
     const n = item.needle.replace(/[^a-z0-9'&\s]/g, " ").replace(/\s+/g, " ").trim();
     if (t === n || t.startsWith(n + " ")) return item.vendor;
   }
@@ -259,8 +309,26 @@ async function normaliseVendors(gql) {
   for (const [needle, vendor] of Object.entries(VENDOR_ALIASES)) lookup.push({ needle, vendor });
   lookup.sort((a, b) => b.needle.length - a.needle.length);
 
+  // Two different strengths of rule:
+  //
+  //   * the ALIAS table is authoritative, so it applies whatever the product
+  //     currently says. That is how the gum and mint lines get moved off Mars
+  //     and onto Wrigley's: a wrong real vendor, not a missing one.
+  //   * matching against vendors that merely exist elsewhere in the catalogue
+  //     only ever PROMOTES a product off the house vendor, never overrides a
+  //     real brand someone has set deliberately.
+  const aliasLookup = Object.entries(VENDOR_ALIASES)
+    .map(([needle, vendor]) => ({ needle, vendor }))
+    .sort((a, b) => b.needle.length - a.needle.length);
+
   const changes = [];
-  for (const p of products.filter((x) => HOUSE_VENDORS.includes(x.vendor))) {
+  for (const p of products) {
+    const alias = detectVendor(p.title, aliasLookup);
+    if (alias) {
+      if (alias !== p.vendor) changes.push({ id: p.id, title: p.title, from: p.vendor, to: alias });
+      continue;
+    }
+    if (!HOUSE_VENDORS.includes(p.vendor)) continue;
     const want = detectVendor(p.title, lookup);
     if (want && want !== p.vendor) changes.push({ id: p.id, title: p.title, from: p.vendor, to: want });
   }
