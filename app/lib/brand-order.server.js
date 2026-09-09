@@ -87,7 +87,58 @@ const VENDOR_ALIASES = {
   newport: "Newport",
   tncc: "TNCC",
   "my toffee": "My Toffee",
+
+  // Read off the product PHOTOS, not the titles. These 33 sat under the house
+  // vendor with the brand printed on the pack and nothing in the title to give
+  // it away, so no amount of title parsing would have found them. Checked one
+  // image at a time on 9 Sept 2026.
+  //
+  // "Flat Lollipop Monster" is the instructive one: matching brand names
+  // mid-title had earlier turned it into vendor "Monster". The pack shows it is
+  // Florestal.
+  ausome: "Au'some",
+  dusky: "Bluebird",                        // pack is a Bluebird lunch bag multipack
+  "gob licker": "Gob Licker",
+  "gob gob licker": "Gob Licker",           // one title really does start "Gob Gob"
+  "pop ups": "Fun Avenue",
+  stroopies: "Stroopie",
+  terrific: "Terrific",
+  "thumb dippers": "Wow",
+  "thumb suckers": "Wow",
+  mylabels: "My Labels",
+  candles: "Hooray",                        // all four candle lines are Hooray
+  "candy showcase": "Candy Showcase",
+  "lollipops berry pops": "Samito",
+  "choc coated": "The Chocolate Guys",      // the three wrapped liquorice logs
+  "shake and spray": "Screamers",
+  "popping candy with lollipop": "Maokuat",
+  "flat lollipop monster": "Florestal",
+  speculaas: "De Ruiter",
+  zazzy: "Zazzy",
+  "muddy bears": "Muddy Bears",
+  "balloons assorted": "Rabbit Brand",      // NOT the pastel or water balloons
+  "mallow pop": "Relkon",                   // not "Animal Marshmallow Pop", which is unbranded
+  // I read the Woolworths own-label photo as the wrong image on a wholesale
+  // product and left this alone. pratham confirmed it is genuinely a
+  // Woolworths line, so the photo was right and I was wrong.
+  "white chocolate drops": "Woolworths",
 };
+
+// Left under the house vendor on purpose, having looked at every photo:
+//   * Fruit Nut Mix x3, whose label literally reads "DUTCH RUSK LTD,
+//     14 Echodale Place, Nelson"
+//   * all the loose and bulk confectionery shot as piles
+//   * the toy range, eftpos rolls, resealable bags, USB chargers, ponchos,
+//     playing cards, reading glasses, lighter cases, and the plasters, which
+//     carry licence art only and no manufacturer
+//   * the 8 CTC products. "CTC" appears nowhere on any of their packs, which
+//     only show product names like Licky Loot and Magic Potion, so it reads as
+//     a supplier code rather than a brand
+//
+// Not left behind: White Chocolate Drops 200g. Its photo is a Woolworths
+// own-label pack and I assumed that meant the wrong image had been attached to
+// a wholesale product. pratham confirmed it really is a Woolworths line, so it
+// is in the table above.
 
 /**
  * Pack weight in grams, read from the title, or null.
