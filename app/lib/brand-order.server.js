@@ -42,6 +42,38 @@ const MOVE_BATCH = 200;
 // only thing that collection exists to show.
 export const LEAVE_ALONE = ["New Arrivals"];
 
+// Ordering by brand is only as good as the vendor field, and a lot of products
+// arrive filed under the house vendor even though the title names a real brand:
+// Snickers, Twix, Ajax, Bubble Tea, Candycove, Carefree and so on were all
+// sitting under DutchRusk. 69 were corrected by hand on 9 Sept 2026; this keeps
+// it that way as new products land.
+const HOUSE_VENDORS = ["DutchRusk", "Dutch Rusk"];
+
+// A sub-brand or a brand pratham named directly -> the vendor it should carry.
+// Mars owns Snickers, Twix and Eclipse.
+const VENDOR_ALIASES = {
+  snickers: "Mars",
+  twix: "Mars",
+  eclipse: "Mars",
+  ajax: "Ajax",
+  "bubble tea": "LOL",
+  candycove: "Candycove",
+  carefree: "Carefree",
+  libra: "Libra",
+  colgate: "Colgate",
+  palmolive: "Palmolive",
+  dove: "Dove",
+  rexona: "Rexona",
+  surf: "Surf",
+  "o'brien": "O'Brien",
+  juicies: "Juicies",
+  kandos: "Kandos",
+  zess: "Zess",
+  newport: "Newport",
+  tncc: "TNCC",
+  "my toffee": "My Toffee",
+};
+
 /** Size band within a brand. Lower sorts first; untagged goes last. */
 export function sizeBand(tags) {
   const t = (tags || []).map((x) => String(x).toLowerCase());
@@ -174,8 +206,91 @@ async function arrangeCollection(gql, col) {
   return { collection: col.title, products: target.length, changed: true, positionsWrong: wrong };
 }
 
+/**
+ * Which vendor a title says it is, or null.
+ *
+ * The brand must be at the START of the title, optionally after a leading size
+ * token like "44g" or "2kg". Matching a brand anywhere in the title produced
+ * obvious nonsense when tried: "Toy With Candy - Flashing Carousel" became
+ * vendor Carousel, "Flat Lollipop Monster" became Monster, "Toy - Sticky Poo
+ * Rainbow" became Rainbow, "Toy - Tic Tac Toe" became Tic Tac. Anchoring rules
+ * all four out and loses no real case, because the genuine ones all read
+ * "Ajax Spray N Wipe", "Musashi Protein Bar", "44g Snickers Honeycomb".
+ */
+export function detectVendor(title, lookup) {
+  let t = String(title || "").toLowerCase().replace(/[^a-z0-9'&\s]/g, " ").replace(/\s+/g, " ").trim();
+  t = t.replace(/^(\d+(?:\.\d+)?\s*(?:g|kg|ml|lt|l|pc|pk)\s+)+/, "");
+  for (const item of lookup) {
+    if (item.needle.length < 3) continue;
+    const n = item.needle.replace(/[^a-z0-9'&\s]/g, " ").replace(/\s+/g, " ").trim();
+    if (t === n || t.startsWith(n + " ")) return item.vendor;
+  }
+  return null;
+}
+
+/**
+ * Move products off the house vendor and onto the brand their title names.
+ *
+ * Only ever promotes: a product that already carries a real brand is never
+ * touched, and a house-vendor product whose title names nothing recognisable is
+ * left alone. So the worst case for any product is that nothing happens. A
+ * brand is only used if it already exists as a vendor somewhere in the
+ * catalogue, or is in VENDOR_ALIASES, so this cannot invent brands.
+ */
+async function normaliseVendors(gql) {
+  const products = [];
+  let cursor = null;
+  do {
+    const data = await gql(
+      `query($c:String){ products(first:250, after:$c, query:"status:active"){
+        pageInfo{ hasNextPage endCursor }
+        nodes{ id title vendor } } }`,
+      { c: cursor }
+    );
+    products.push(...data.products.nodes);
+    cursor = data.products.pageInfo.hasNextPage ? data.products.pageInfo.endCursor : null;
+  } while (cursor);
+
+  const realVendors = new Set(
+    products.filter((p) => !HOUSE_VENDORS.includes(p.vendor)).map((p) => String(p.vendor || "").trim()).filter(Boolean)
+  );
+  const lookup = [];
+  for (const v of realVendors) lookup.push({ needle: v.toLowerCase(), vendor: v });
+  for (const [needle, vendor] of Object.entries(VENDOR_ALIASES)) lookup.push({ needle, vendor });
+  lookup.sort((a, b) => b.needle.length - a.needle.length);
+
+  const changes = [];
+  for (const p of products.filter((x) => HOUSE_VENDORS.includes(x.vendor))) {
+    const want = detectVendor(p.title, lookup);
+    if (want && want !== p.vendor) changes.push({ id: p.id, title: p.title, from: p.vendor, to: want });
+  }
+
+  let fixed = 0;
+  for (const c of changes) {
+    try {
+      const data = await gql(
+        `mutation($p:ProductUpdateInput!){ productUpdate(product:$p){ product{ id vendor } userErrors{ field message } } }`,
+        { p: { id: c.id, vendor: c.to } }
+      );
+      const errs = data?.productUpdate?.userErrors ?? [];
+      if (errs.length) console.error(`[brand-order] vendor ${c.title}: ${errs.map((e) => e.message).join("; ")}`);
+      else { fixed++; console.log(`[brand-order] vendor ${c.from} -> ${c.to}: ${c.title}`); }
+    } catch (e) {
+      console.error(`[brand-order] vendor ${c.title}: ${e.message}`);
+    }
+  }
+  if (changes.length) console.log(`[brand-order] vendors corrected: ${fixed}/${changes.length}`);
+  return { vendorsCorrected: fixed, vendorCandidates: changes.length };
+}
+
 export async function runBrandOrder(shop, accessToken) {
   const gql = adminGql(shop, accessToken);
+
+  // Vendors first: the ordering below groups by vendor, so a product filed
+  // under the house vendor would otherwise be grouped in the wrong place and
+  // then need a second pass to move.
+  const vendors = await normaliseVendors(gql);
+
   const collections = [];
   let cursor = null;
   do {
@@ -211,5 +326,11 @@ export async function runBrandOrder(shop, accessToken) {
   console.log(
     `[brand-order] ${targets.length} collection(s): ${rearranged.length} rearranged, ${alreadyCorrect} already correct, ${failed.length} failed`
   );
-  return { collections: targets.length, rearranged: rearranged.length, alreadyCorrect, failed };
+  return {
+    collections: targets.length,
+    rearranged: rearranged.length,
+    alreadyCorrect,
+    failed,
+    ...vendors,
+  };
 }
