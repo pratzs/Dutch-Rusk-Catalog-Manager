@@ -8,9 +8,15 @@
 //
 // Two things still route through here:
 //
-//   1. dealsOnly — whether this buyer's catalog has any BOGO deal, which
-//      decides if the "Special Deals" menu item is shown. Shopify cannot
-//      express that, so it stays.
+//   1. dealsOnly — whether this buyer's catalog has any BOGO deal. The
+//      storefront NO LONGER CALLS THIS. The theme decides the "Special Deals"
+//      menu item in Liquid from the shop's deal_location_ids metafield, which
+//      syncDealLocations() rewrites hourly, so the answer is already on the
+//      page and no request is needed. Kept because it is the only way to ask
+//      "is this location entitled?" directly when debugging a report that a
+//      buyer can or cannot see the deals, and because a stale browser session
+//      still running the old extension asset may call it while CDN caches
+//      turn over. Safe either way: nothing on the page reads the reply now.
 //
 //   2. A deliberately empty answer for the OLD storefront script. Browser
 //      sessions that loaded before the variant hider was retired still ask for

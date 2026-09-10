@@ -21,108 +21,31 @@
 // api.catalog-variant-sync is what keeps Shopify's exclusions matching them,
 // including for products published later.
 //
-// Two things Shopify cannot do for us remain:
-//   1. Hide the "Special Deals" menu item from catalogs no deal targets.
-//   2. Show a struck-through retail price for variants with no compare-at
-//      price set, which the theme has nothing to render a "was" price from.
+// One thing Shopify cannot do for us remains: show a struck-through retail
+// price for variants with no compare-at price set, which the theme has nothing
+// to render a "was" price from.
+//
+// The "Special Deals" menu gate used to live here too. It hid the item with CSS
+// and called this app on every page view to decide whether to reveal it, which
+// meant the answer arrived after paint and depended on the app being reachable.
+// The theme decides it in Liquid now, from the shop's deal_location_ids
+// metafield, so an ineligible buyer never has the menu item rendered at all.
+// That removed one app request per page view per buyer, and the rule now lives
+// in exactly one place instead of two. Entitlement is still driven by the
+// Catalog Manager: syncDealLocations() reads which price lists the deals
+// actually target and rewrites that metafield hourly.
 (function () {
   const LOG = (...a) => console.log("[CVH]", ...a);
-  const WARN = (...a) => console.warn("[CVH]", ...a);
 
   const _el = document.getElementById("catalog-variant-hider-data");
   if (!_el) return; // not a B2B customer; the snippet renders nothing
 
-  const APP_URL = _el.dataset.appUrl || "https://dutch-rusk-catalog-manager.onrender.com";
   const LOCATION_ID = _el.dataset.locationId ? decodeURIComponent(_el.dataset.locationId) : null;
   const CUSTOMER_ID = _el.dataset.customerId || null;
   const SHOP = _el.dataset.shop || window.Shopify?.shop || null;
 
   LOG("loaded", { LOCATION_ID, CUSTOMER_ID, SHOP });
 
-  // ── "Special Deals" menu gate ─────────────────────────────────────────────
-  // catalog-hider.liquid hides the menu item for every B2B buyer up front; this
-  // is the only thing that reveals it, and only for a buyer whose catalog an
-  // actual deal targets. Deliberately one-directional: a buyer who cannot get a
-  // deal must never see the link, not even for a frame, and if the app cannot
-  // be reached the item simply stays hidden.
-  //
-  // Cached for half an hour because deal scoping changes rarely, so this is a
-  // few requests per buyer per day rather than one per page view.
-  const DEALS_KEY = "cvh4deals:" + (CUSTOMER_ID || LOCATION_ID || "");
-  const DEALS_TTL_MS = 30 * 60 * 1000;
-
-  // A different buyer must never inherit the previous one's answer.
-  try {
-    const prev = localStorage.getItem("cvh4deals:who");
-    if (prev !== (CUSTOMER_ID || LOCATION_ID || "")) {
-      Object.keys(localStorage)
-        .filter((k) => k.startsWith("cvh4deals:"))
-        .forEach((k) => localStorage.removeItem(k));
-    }
-    localStorage.setItem("cvh4deals:who", CUSTOMER_ID || LOCATION_ID || "");
-  } catch (_) {
-    /* private mode or quota */
-  }
-
-  function revealDeals() {
-    document.documentElement.classList.add("cvh-deals-ok");
-  }
-
-  function dealsCacheRead() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(DEALS_KEY) || "null");
-      return typeof parsed?.eligible === "boolean" ? parsed : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  async function fetchWithRetry(url, attempts = 2) {
-    let lastErr;
-    for (let i = 0; i < attempts; i++) {
-      try {
-        const res = await fetch(url);
-        if (res.ok) return res;
-        lastErr = new Error(`HTTP ${res.status}`);
-      } catch (err) {
-        lastErr = err;
-      }
-      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 250 * (i + 1)));
-    }
-    throw lastErr;
-  }
-
-  async function applyDealsMenuGate() {
-    const cached = dealsCacheRead();
-    // Show it straight away on a repeat visit, before the network call, so an
-    // eligible buyer does not watch the menu item pop in on every page.
-    if (cached?.eligible) revealDeals();
-    if (cached && Date.now() - cached.at < DEALS_TTL_MS) return;
-    if (!SHOP || !LOCATION_ID) return;
-
-    try {
-      const url =
-        `${APP_URL}/api/catalog-rules?dealsOnly=1&shop=${encodeURIComponent(SHOP)}` +
-        `&locationId=${encodeURIComponent(LOCATION_ID)}`;
-      const res = await fetchWithRetry(url);
-      if (!res || !res.ok) return;
-      const data = await res.json();
-      // null means the app could not work it out. Keep the last known answer
-      // rather than flipping the menu on a shrug.
-      if (typeof data?.dealsEligible !== "boolean") return;
-
-      try {
-        localStorage.setItem(DEALS_KEY, JSON.stringify({ eligible: data.dealsEligible, at: Date.now() }));
-      } catch (_) {
-        /* quota */
-      }
-      if (data.dealsEligible) revealDeals();
-      else document.documentElement.classList.remove("cvh-deals-ok");
-      LOG("Special Deals menu:", data.dealsEligible ? "shown" : "hidden (no deals for this catalog)");
-    } catch (e) {
-      WARN("deals menu gate failed, leaving menu hidden:", e && e.message);
-    }
-  }
 
   // ── Struck-through retail price ───────────────────────────────────────────
   // Only for variants with no compare-at price, which is what the theme needs
@@ -175,8 +98,6 @@
       injectStrikethroughPricing(card);
     });
   }
-
-  applyDealsMenuGate();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", applyPricing);
