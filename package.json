@@ -17,7 +17,9 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "cron:deals": "node scripts/deal-entitlement.mjs",
+    "cron:brand-order": "node scripts/brand-order.mjs"
   },
   "type": "module",
   "engines": {

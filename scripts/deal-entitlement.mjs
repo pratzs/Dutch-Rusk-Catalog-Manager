@@ -7,10 +7,19 @@
 // applies within the hour instead of within two days.
 //
 // Writes only when the list has actually changed, so a quiet hour is free.
+//
+// Logs a line the moment it starts. This job silently did nothing for hours
+// while Render reported every run as successful: the cron command was
+// "npx prisma generate && node scripts/...", Render ran it without a shell,
+// so npx took the tail as extra arguments to `prisma generate`, generated the
+// client and exited 0. Prisma's output in the log looked like progress. With a
+// start line, output that stops after Prisma is obviously wrong.
 import { PrismaClient } from "@prisma/client";
 import { adminGql, syncDealLocations } from "../app/lib/brand-order.server.js";
 
 const prisma = new PrismaClient();
+
+console.log("[deal-entitlement] starting");
 
 try {
   const session = await prisma.session.findFirst({
