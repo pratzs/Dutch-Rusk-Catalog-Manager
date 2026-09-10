@@ -312,7 +312,7 @@ export function desiredOrder(productsInBestSellingOrder) {
     .map((k) => k.p);
 }
 
-function adminGql(shop, accessToken) {
+export function adminGql(shop, accessToken) {
   return async (query, variables = {}) => {
     for (let attempt = 0; attempt < 10; attempt++) {
       const res = await fetch(`https://${shop}/admin/api/${API}/graphql.json`, {
@@ -511,6 +511,117 @@ async function normaliseVendors(gql) {
   return { vendorsCorrected: fixed, vendorCandidates: changes.length };
 }
 
+// Category tag -> product type, first match wins, so the order below IS the
+// taxonomy. Narrow categories come before broad ones or "Novelty" would
+// swallow most of the catalogue.
+//
+// Only CATEGORY tags are used. The tag list mixes four different things and
+// three of them must be ignored:
+//   category     Chocolate Blocks, Drinks, Licorice, Chips, Novelty   <- use
+//   brand        Mayceys, Nestle, Whittakers, Riclan, Musashi         <- vendor holds this
+//   operational  hide-shipper, hide-block, Night n Day Misc           <- internal
+//   temporary    New, GoGreenCHC26-Temp                               <- not a category
+const TYPE_RULES = [
+  ["Chocolate Blocks", /^(chocolate blocks|cadbury blocks)$/],
+  ["Chocolate Bars", /single bars?$|share bar chocolates$/],
+  ["Sharepacks", /^sharepacks$/],
+  ["Family Bags", /^(family bags|large bags|m&m bags|hi-chew bags)$/],
+  ["Bulk Gummies and Lollies", /^bulk gummies and lollies$/],
+  ["Bulk Bags", /^(1kg|2kg|1kg bulk|2kg bulk)$/],
+  ["Licorice", /^licorice$/],
+  ["Lollipops", /^lollipops$/],
+  ["Gum", /^(gum|wrigleys)$/],
+  ["Chips", /^chips$/],
+  ["Snacks", /^snacks$/],
+  ["Energy Drinks", /^(energy drinks|musashi energy cans)$/],
+  ["Protein Bars", /^protein bars$/],
+  ["Protein Drinks", /^protein drinks$/],
+  ["Cookies", /^(cookies|arnotts)$/],
+  ["Popcorn", /^popcorn$/],
+  ["Noodles", /^noodles$/],
+  ["Luncheon Meat", /^luncheon meat$/],
+  ["Jerky", /^(jerky|jack links)$/],
+  ["Batteries", /^batteries$/],
+  ["Lighters", /^lighters$/],
+  ["Smoking Accessories", /^smoking accessories$/],
+  ["Charging Cables", /^charging cables$/],
+  ["Air Fresheners", /^air fresheners$/],
+  ["Laundry Detergent", /^laundry detergent$/],
+  ["Seal Bags", /^seal bags$/],
+  ["Chocolates", /^(chocolates|hi-chew sticks)$/],
+  ["Soft Drinks", /^(soda drinks|fruit flavored drinks|drinks)$/],
+  ["Health", /^health$/],
+  ["Toys", /^toys$/],
+  ["Sour", /^sour$/],
+  ["Novelty", /^novelty$/],
+];
+
+/** The product type a product's tags imply, or null. */
+export function typeFromTags(tags) {
+  const t = (tags || []).map((x) => String(x).trim().toLowerCase());
+  for (const [name, re] of TYPE_RULES) {
+    if (t.some((tag) => re.test(tag))) return name;
+  }
+  return null;
+}
+
+/**
+ * Fill product type on products that have none.
+ *
+ * The Shop page browses by category, so a product with no type sorts to the
+ * very end. 1,292 were filled by hand once, but new stock arrives from Ostendo
+ * with no type at all, so without this the Shop page degrades every week.
+ *
+ * ONLY fills blanks. A type someone has set deliberately in the admin is never
+ * overwritten, even if the tags now imply something else, because the person
+ * beats the rule. Products whose tags imply no category are left blank rather
+ * than guessed.
+ */
+async function syncProductTypes(gql) {
+  const products = [];
+  let cursor = null;
+  do {
+    const d = await gql(
+      `query($c:String){ products(first:250, after:$c, query:"status:active"){
+        pageInfo{ hasNextPage endCursor }
+        nodes{ id title tags productType } } }`,
+      { c: cursor }
+    );
+    products.push(...d.products.nodes);
+    cursor = d.products.pageInfo.hasNextPage ? d.products.pageInfo.endCursor : null;
+  } while (cursor);
+
+  const blanks = products.filter((p) => !String(p.productType || "").trim());
+  const todo = [];
+  for (const p of blanks) {
+    const t = typeFromTags(p.tags);
+    if (t) todo.push({ id: p.id, title: p.title, productType: t });
+  }
+
+  if (todo.length === 0) {
+    console.log(`[brand-order] product types: nothing to fill (${blanks.length} blank, none have a category tag)`);
+    return { productTypesFilled: 0, productTypesStillBlank: blanks.length };
+  }
+
+  let done = 0;
+  for (const item of todo) {
+    try {
+      const d = await gql(
+        `mutation($p:ProductUpdateInput!){ productUpdate(product:$p){ product{ id } userErrors{ field message } } }`,
+        { p: { id: item.id, productType: item.productType } }
+      );
+      const errs = d?.productUpdate?.userErrors ?? [];
+      if (errs.length) console.error(`[brand-order] type ${item.title}: ${errs.map((e) => e.message).join("; ")}`);
+      else { done++; console.log(`[brand-order] type -> ${item.productType}: ${item.title}`); }
+    } catch (e) {
+      console.error(`[brand-order] type ${item.title}: ${e.message}`);
+    }
+  }
+  const stillBlank = blanks.length - done;
+  console.log(`[brand-order] product types filled: ${done}, still blank: ${stillBlank}`);
+  return { productTypesFilled: done, productTypesStillBlank: stillBlank };
+}
+
 /**
  * Publish the set of company locations entitled to the BOGO deals, so the theme
  * can gate them server-side.
@@ -525,7 +636,7 @@ async function normaliseVendors(gql) {
  * Computed straight from Shopify rather than from LocationCatalogMap, so it
  * cannot drift from the app's own cache of that mapping.
  */
-async function syncDealLocations(gql) {
+export async function syncDealLocations(gql) {
   // Which price lists the live deals actually target.
   const cfg = await gql(`query{ shop{ metafield(namespace:"custom", key:"bogo_bundles"){ value } } }`);
   const raw = cfg?.shop?.metafield?.value;
@@ -588,6 +699,11 @@ async function syncDealLocations(gql) {
 export async function runBrandOrder(shop, accessToken) {
   const gql = adminGql(shop, accessToken);
 
+  // Category, before the ordering below reads it. The Shop page groups by
+  // product type first, so a new product with no type would sort to the very
+  // end and stay there.
+  const types = await syncProductTypes(gql);
+
   // Who may see the deals. Cheap, and it keeps the theme's gate honest as
   // locations move between catalogs.
   const deals = await syncDealLocations(gql);
@@ -638,6 +754,7 @@ export async function runBrandOrder(shop, accessToken) {
     alreadyCorrect,
     failed,
     ...vendors,
+    ...types,
     ...deals,
   };
 }
