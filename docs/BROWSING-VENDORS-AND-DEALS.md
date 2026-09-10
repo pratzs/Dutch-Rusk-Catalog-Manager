@@ -2,8 +2,9 @@
 
 **Status:** Live
 **Owner:** Pratham (Worthy)
-**Last updated:** 10 September 2026
-**UAT:** `Dutch_Rusk_FULL_Launch_UAT_Tracker_v4.xlsx` — Issues Log BUG-069 to BUG-083, test cases THEME-17 to THEME-22 and CAT-30 to CAT-33
+**Last updated:** 11 September 2026
+**UAT:** `Dutch_Rusk_FULL_Launch_UAT_Tracker_v4.xlsx` — Issues Log BUG-069 to BUG-084, test cases THEME-17 to THEME-22 and CAT-30 to CAT-35
+**Action lists:** `Dutch_Rusk_Open_Items_Action_Lists_20260911.xlsx`, same folder
 
 This covers how product order, product vendors and BOGO deal access work on
 b2b.dutchrusk.co.nz, why each piece sits where it does, and how to check any of
@@ -188,14 +189,17 @@ Product type was blank on **all 1,511** active products. It is now filled on
 existed — ignoring brand tags, operational tags (`hide-shipper`) and temporary
 tags (`New`).
 
-**Known gap, UAT BUG-083:** the scheduled job does *not* yet maintain product
-type. Anything new arriving from Ostendo has no category and sorts to the end
-of the Shop page until someone tags it. The fix is the same pattern as the
-vendor rule and has been offered.
+**Maintained on every run** since 11 September 2026 (BUG-083 closed). The job
+derives the type from the category tags and **only fills blanks** — a type set
+by hand in the admin is never overwritten, even if the tags now imply something
+else, because the person beats the rule. A product whose tags imply no category
+stays blank rather than being guessed.
 
-**Known gap, UAT BUG-082:** 219 live products have no category tag at all.
-Their tags are brand names, operational flags or nothing. That is the admin
-team's tagging; once tagged they are placed on the next run with no code change.
+**Known gap, UAT BUG-082:** 189 live products still have no category tag at all
+(down from 219). Their tags are brand names, operational flags or nothing, so no
+category can be derived without guessing. That is the admin team's tagging;
+once tagged they are placed on the next run with no code change. The list is
+exported for them in the action-lists workbook.
 
 ---
 
@@ -268,17 +272,25 @@ offered; it is a handful of API calls versus ~2.5 minutes for the ordering pass.
 
 ## 6. The scheduled job
 
-| | |
-| --- | --- |
-| Render service | `crn-dagt5q3l550s73ecg44g` — "Collection Brand Order" |
-| Schedule | `0 15 */2 * *` — 03:00 New Zealand, every second day |
-| Command | `npx prisma generate && node scripts/brand-order.mjs` |
-| Logic | `app/lib/brand-order.server.js` |
-| Manual trigger | `POST /api/collection-brand-order` with header `x-cron-secret` |
+There are **two** jobs, split by how often the answer needs to be right.
 
-Order of work in a run: **vendors first**, then the deal allowlist, then the
-collection ordering — because the ordering groups by vendor and would otherwise
-place a mis-filed product in the wrong block and need a second pass.
+| | Ordering pass | Entitlement pass |
+| --- | --- | --- |
+| Render service | `crn-dagt5q3l550s73ecg44g` "Collection Brand Order" | `crn-dahi38eq1p3s73dlbr5g` "Deal Entitlement Sync" |
+| Schedule | `0 15 */2 * *` — 03:00 NZ, every second day | `7 * * * *` — hourly |
+| Command | `npx prisma generate && node scripts/brand-order.mjs` | `npx prisma generate && node scripts/deal-entitlement.mjs` |
+| Takes | ~2.5 min quiet, ~4 min with work | ~14 seconds |
+| Manual trigger | `POST /api/collection-brand-order` with `x-cron-secret` | run the script |
+
+They were one job until 11 September 2026. Deciding who may see a deal is a
+handful of API calls, so keeping it behind a 48-hour pass meant a catalog change
+in the admin could take two days to reach the deal gate. Now it is hourly and
+the heavy ordering stays on 48 hours.
+
+Order of work in an ordering run: **vendors, then product types, then the deal
+allowlist, then the collection ordering** — vendors and types first because the
+ordering groups by both and would otherwise place a product in the wrong block
+and need a second pass.
 
 A collection already in the right order is detected and **written to zero
 times**, so a quiet run takes about 2.5 minutes and changes nothing. The script
@@ -345,11 +357,17 @@ metafield, code simply not running. Test the blocked path, not the deploy.
 
 | UAT | Item | Owner |
 | --- | --- | --- |
-| BUG-081 | 866 of 1,475 company locations have no catalog, so those buyers see no prices and cannot order | Dutch Rusk (Ryan) + Worthy |
-| BUG-082 | 219 live products have no category tag, so they sort to the end of the Shop page | Dutch Rusk admin team |
-| BUG-083 | the scheduled job does not maintain product type, so new products drift to the end of the Shop page | Worthy — fix offered |
+| **BUG-081** | **752 signed-up contacts cannot order.** Their company location has no catalog, so they see no prices, and not one of the 752 has ever placed an order. Very likely a large part of the portal adoption gap. 867 rows exported with contacts, emails and order history. | Dutch Rusk (Ryan) decides, Worthy applies |
+| BUG-047 | 28 live products are not in the General Catalog, so the largest buyer group cannot see them. All are in Metromart, so new lines look to be landing there and not in General. Exported for a per-row decision. | Dutch Rusk decides, Worthy applies |
+| BUG-082 | 189 live products have no category tag (down from 219), so they sort to the end of the Shop page. Exported with the recognised tag list. | Dutch Rusk admin team |
+| BUG-084 | four separate product records all titled "Boomerang Ultra Supa Slim Green x 24ct", all zero stock, so Metromart sees the same dead line four times | Dutch Rusk decides which to keep |
 | — | the old JavaScript deals menu gate in the app extension is now redundant, and hides the item by CSS until the app answers, so an entitled buyer loses the link if the app is briefly unreachable. Removing it needs an extension deploy. | Worthy — fix offered |
 | — | the price-sync cron `crn-d876vsi8qa3s73d1cd90` is suspended | Worthy — decision needed |
+
+Not ours, recorded so it stops being re-investigated: the **sales rep mobile app
+is connected only to Ostendo, not to the storefront**, so any website-versus-
+tablet difference in price or pack size (BUG-044, BUG-046, BUG-053) is an
+Ostendo data question and cannot be reconciled from the Shopify side.
 
 ---
 
@@ -376,3 +394,4 @@ metafield, code simply not running. Test the blocked path, not the deploy.
 | `4f65323` | assign the vendors that only the product photos revealed |
 | `c860600` | order the Shop page by category, brand within each category |
 | `10cc264` | maintain the deal allowlist on every scheduled run |
+| `0ec1fc2` | fill product type on every run, and sync deal entitlement hourly |
