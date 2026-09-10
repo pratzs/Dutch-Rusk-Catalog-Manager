@@ -280,7 +280,7 @@ Dutch Rusk`;
           <tr>
             <td class="mobile-pad" style="padding:24px 20px; text-align:center;">
               <div style="color:#181344; font-size:13px; font-weight:bold; margin-bottom:4px;">Dutch Rusk</div>
-              <div style="color:#666670; font-size:12px; line-height:1.5;">14 Echodale Place, Stoke, Nelson 7011, New Zealand</div>
+              <div style="color:#666670; font-size:12px; line-height:1.5;">8 Cable Street, Sockburn, Christchurch 8042, New Zealand</div>
             </td>
           </tr>
 
