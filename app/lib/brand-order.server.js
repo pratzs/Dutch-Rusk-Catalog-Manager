@@ -174,6 +174,11 @@ export function sizeBand(tags, title) {
   if (has(/\bblocks?\b/)) return 3;
   if (has(/^sharepacks$/)) return 4;
 
+  // Checked before the generic bag rule: these are family-bag sized, so the
+  // weight rule would otherwise place them mid-brand instead of at the end of
+  // it, which is where pratham wants them.
+  if (has(/^m&m bags$/)) return 8;
+
   const isBag = has(/family bags|large bags|m&m bags|hi-chew bags|bulk gummies and lollies|^1kg$|^2kg$/) ||
     /\bbag\b|party mix/i.test(String(title || ""));
   if (isBag) {
@@ -184,6 +189,105 @@ export function sizeBand(tags, title) {
     return 7;                      // 1kg, 2kg, bulk bag
   }
   return 9;
+}
+
+// ── The Shop page ────────────────────────────────────────────────────────────
+// Shop All is the "browse the whole catalogue" page, so it is ordered by
+// CATEGORY first and brand within each category. Every other collection is
+// already one brand or one category, so those stay brand-first.
+//
+// Sequence per pratham: gum, then chocolate by size, then novelty, then bags
+// smallest to largest, then the rest of the confectionery, then savoury food,
+// then drinks, then toys, then the stationery and household tail.
+export const SHOP_ALL_HANDLE = "shop-all";
+
+const CATEGORY_ORDER = [
+  "Gum",
+  "Chocolate Bars",
+  "Chocolate Blocks",
+  "Chocolates",
+  "Novelty",
+  "Family Bags",
+  "Bulk Gummies and Lollies",
+  "Bulk Bags",
+  "Lollipops",
+  "Licorice",
+  "Snacks",
+  "Chips",
+  "Cookies",
+  "Popcorn",
+  "Noodles",
+  "Luncheon Meat",
+  "Soft Drinks",
+  "Energy Drinks",
+  "Protein Drinks",
+  "Protein Bars",
+  "Health",
+  "Toys",
+  "Batteries",
+  "Lighters",
+  "Smoking Accessories",
+  "Charging Cables",
+  "Air Fresheners",
+  "Seal Bags",
+  "Laundry Detergent",
+];
+
+/**
+ * Which bucket a product browses in on the Shop page.
+ *
+ * Two rules here are pratham's, and neither is a rewrite of the stored product
+ * type. The type still says what it says in the admin; this only decides where
+ * the product sits on this one page, so it is reversible by editing this file.
+ *
+ *   * "Sharepacks" is not a bucket of its own. A sharepack belongs with its
+ *     brand, so it browses in the chocolate section and sizeBand puts it at
+ *     the end of that brand's chocolate.
+ *   * "Sour" is a flavour, not a size. A 1kg or 2kg sour bag browses with the
+ *     bulk bags; a small one browses with the novelties.
+ */
+export function shopBucket(product) {
+  const type = String(product.productType || "").trim();
+
+  if (type === "Sharepacks") return CATEGORY_ORDER.indexOf("Chocolate Bars");
+  if (type === "Sour") {
+    const g = packGrams(product.title);
+    return g !== null && g >= 1000
+      ? CATEGORY_ORDER.indexOf("Bulk Bags")
+      : CATEGORY_ORDER.indexOf("Novelty");
+  }
+
+  const i = CATEGORY_ORDER.indexOf(type);
+  // Anything with no category tag browses last. 219 live products are in that
+  // state; the tags are the admin team's to add.
+  return i === -1 ? CATEGORY_ORDER.length : i;
+}
+
+/**
+ * Shop page order: category, then brand within the category, then size, then
+ * title. Brand precedence comes from where that vendor first appears in the
+ * collection's own best-selling order, same as everywhere else.
+ */
+export function desiredOrderForShop(productsInBestSellingOrder) {
+  const vendorRank = new Map();
+  for (const p of productsInBestSellingOrder) {
+    const v = p.vendor || "";
+    if (!vendorRank.has(v)) vendorRank.set(v, vendorRank.size);
+  }
+  return productsInBestSellingOrder
+    .map((p, i) => ({
+      p,
+      c: shopBucket(p),
+      v: vendorRank.get(p.vendor || ""),
+      b: sizeBand(p.tags, p.title),
+      t: String(p.title || "").toLowerCase(),
+      i,
+    }))
+    .sort(
+      (a, b) =>
+        a.c - b.c || a.v - b.v || a.b - b.b || (a.t < b.t ? -1 : a.t > b.t ? 1 : 0) || a.i - b.i
+    )
+    .map((k) => k.p);
 }
 
 /**
@@ -237,10 +341,14 @@ async function productsInOrder(gql, id, sortKey) {
   let cursor = null;
   do {
     const data = await gql(
+      // productType is not optional here. The Shop page orders by category
+      // first, and without this field every product read as "no category",
+      // they all tied, and the sort silently collapsed back to the plain
+      // vendor order. It looked exactly like "already correct".
       `query($id:ID!,$c:String,$k:ProductCollectionSortKeys){
         collection(id:$id){ products(first:100, after:$c, sortKey:$k){
           pageInfo{ hasNextPage endCursor }
-          nodes{ id title vendor tags } } } }`,
+          nodes{ id title vendor tags productType } } } }`,
       { id, c: cursor, k: sortKey }
     );
     const page = data?.collection?.products;
@@ -264,7 +372,8 @@ async function arrangeCollection(gql, col) {
   const bestSelling = await productsInOrder(gql, col.id, "BEST_SELLING");
   if (bestSelling.length < 2) return { collection: col.title, products: bestSelling.length, changed: false };
 
-  const target = desiredOrder(bestSelling).map((p) => p.id);
+  const order = col.handle === SHOP_ALL_HANDLE ? desiredOrderForShop : desiredOrder;
+  const target = order(bestSelling).map((p) => p.id);
   const current = (await productsInOrder(gql, col.id, null)).map((p) => p.id);
 
   let inPlace = current.length === target.length;
