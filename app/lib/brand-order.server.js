@@ -511,8 +511,86 @@ async function normaliseVendors(gql) {
   return { vendorsCorrected: fixed, vendorCandidates: changes.length };
 }
 
+/**
+ * Publish the set of company locations entitled to the BOGO deals, so the theme
+ * can gate them server-side.
+ *
+ * The theme cannot work this out on its own. Shopify refuses to publish a
+ * collection to a company-location catalog, so the deal collections sit on the
+ * Online Store and their URLs are reachable by any signed-in buyer. A Night N
+ * Day buyer was browsing /collections/deal-musashi-10-1. Liquid has no way to
+ * ask which catalog a buyer is on, so the answer is precomputed here and read
+ * from a shop metafield by snippets/deal-access.liquid.
+ *
+ * Computed straight from Shopify rather than from LocationCatalogMap, so it
+ * cannot drift from the app's own cache of that mapping.
+ */
+async function syncDealLocations(gql) {
+  // Which price lists the live deals actually target.
+  const cfg = await gql(`query{ shop{ metafield(namespace:"custom", key:"bogo_bundles"){ value } } }`);
+  const raw = cfg?.shop?.metafield?.value;
+  if (!raw) {
+    console.warn("[brand-order] no bogo_bundles config, leaving the deal allowlist alone");
+    return { dealLocations: null };
+  }
+  let bundles = [];
+  try {
+    const parsed = JSON.parse(raw);
+    bundles = Array.isArray(parsed) ? parsed : parsed.bundles ?? [];
+  } catch (e) {
+    console.error("[brand-order] bogo_bundles is not readable, leaving the deal allowlist alone");
+    return { dealLocations: null };
+  }
+  const targeted = new Set();
+  for (const b of bundles) for (const id of b.catalogIds ?? b.catalogs ?? []) targeted.add(String(id));
+  if (targeted.size === 0) {
+    console.warn("[brand-order] no deal targets any catalog, leaving the deal allowlist alone");
+    return { dealLocations: null };
+  }
+
+  const entitled = [];
+  let cursor = null;
+  do {
+    const d = await gql(
+      `query($c:String){ companyLocations(first:50, after:$c){
+        pageInfo{ hasNextPage endCursor }
+        nodes{ id catalogs(first:20){ nodes{ ... on CompanyLocationCatalog { priceList{ id } } } } } } }`,
+      { c: cursor }
+    );
+    for (const n of d.companyLocations.nodes) {
+      const lists = ((n.catalogs && n.catalogs.nodes) || []).map((c) => c?.priceList?.id).filter(Boolean);
+      if (lists.some((id) => targeted.has(String(id)))) entitled.push(String(n.id).split("/").pop());
+    }
+    cursor = d.companyLocations.pageInfo.hasNextPage ? d.companyLocations.pageInfo.endCursor : null;
+  } while (cursor);
+
+  // Comma-wrapped so Liquid's `contains ",123,"` cannot match a partial id.
+  const value = "," + entitled.join(",") + ",";
+  const current = await gql(`query{ shop{ id metafield(namespace:"custom", key:"deal_location_ids"){ value } } }`);
+  if (current?.shop?.metafield?.value === value) {
+    console.log(`[brand-order] deal allowlist unchanged (${entitled.length} locations)`);
+    return { dealLocations: entitled.length };
+  }
+
+  const set = await gql(
+    `mutation($m:[MetafieldsSetInput!]!){ metafieldsSet(metafields:$m){ userErrors{ field message } } }`,
+    { m: [{ ownerId: current.shop.id, namespace: "custom", key: "deal_location_ids", type: "multi_line_text_field", value }] }
+  );
+  const errs = set?.metafieldsSet?.userErrors ?? [];
+  if (errs.length) {
+    console.error("[brand-order] could not write the deal allowlist:", JSON.stringify(errs));
+    return { dealLocations: null };
+  }
+  console.log(`[brand-order] deal allowlist updated: ${entitled.length} entitled location(s)`);
+  return { dealLocations: entitled.length };
+}
+
 export async function runBrandOrder(shop, accessToken) {
   const gql = adminGql(shop, accessToken);
+
+  // Who may see the deals. Cheap, and it keeps the theme's gate honest as
+  // locations move between catalogs.
+  const deals = await syncDealLocations(gql);
 
   // Vendors first: the ordering below groups by vendor, so a product filed
   // under the house vendor would otherwise be grouped in the wrong place and
@@ -560,5 +638,6 @@ export async function runBrandOrder(shop, accessToken) {
     alreadyCorrect,
     failed,
     ...vendors,
+    ...deals,
   };
 }
