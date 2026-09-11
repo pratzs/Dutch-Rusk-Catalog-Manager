@@ -102,11 +102,34 @@ size, then title, because it is the browse-the-whole-catalogue page:
 ```
 Gum → Chocolate Bars → Chocolate Blocks → Chocolates → Novelty →
 Family Bags → Bulk Gummies and Lollies → Bulk Bags → Lollipops → Licorice →
-Snacks → Chips → Cookies → Popcorn → Noodles → Luncheon Meat →
-Soft Drinks → Energy Drinks → Protein Drinks → Protein Bars → Health →
-Toys → Batteries → Lighters → Smoking Accessories → Charging Cables →
-Air Fresheners → Seal Bags → Laundry Detergent → (no category tag)
+Snacks → Chips → Cookies → Popcorn → Noodles → Luncheon Meat → Grocery →
+Soft Drinks → Energy Drinks → Protein Drinks → Beer → Protein Bars →
+Health → Personal Care → Toys → Batteries → Lighters →
+Smoking Accessories → Charging Cables → Air Fresheners → Seal Bags →
+Cleaning → Laundry Detergent → Miscellaneous
 ```
+
+**Every live product now carries a category.** 1,505 of 1,505 as at 11 September
+2026. It used to be 189 short, and those 189 all browsed last no matter what this
+sequence said, because `shopBucket()` sends an unrecognised type to the end.
+
+Five of the categories above are new, added on 11 September because nothing in
+the original 29 could hold those products honestly — you cannot file toothpaste
+under Novelty or beer under Soft Drinks:
+
+| Category | Products | Where it sits and why |
+| --- | --- | --- |
+| Grocery | 4 | savoury pantry lines, with the savoury food and before the drinks |
+| Beer | 4 | last of the drinks, so it is easy to lift out if it ever has to be restricted to particular catalogs |
+| Personal Care | 22 | next to Health, but separate so 22 hygiene lines do not swamp a category meant for Nurofen and Strepsils |
+| Cleaning | 4 | surface and dish cleaners, beside the laundry powder |
+| Miscellaneous | 13 | balloons, ponchos, keychains, eftpos rolls, charcoal — the stationery / miscellaneous / others slot |
+
+A product arriving from Ostendo with a recognised category **tag** is filled in
+automatically by the scheduled job. One arriving with no usable tag still needs a
+category set by hand: the job fills blanks from tags and will not guess. That is
+how 12 products created on 10–11 September ended up needing a manual pass even
+after the main 189 were done.
 
 Three of those are ordering rules only and do **not** rewrite the stored
 product type, so they are reversible by editing `CATEGORY_ORDER` and
