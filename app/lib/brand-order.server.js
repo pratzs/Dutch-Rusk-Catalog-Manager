@@ -218,11 +218,21 @@ const CATEGORY_ORDER = [
   "Popcorn",
   "Noodles",
   "Luncheon Meat",
+  // Savoury pantry lines - spreads, pickles, stock powder. Sits with the other
+  // savoury food and before the drinks, which is the order pratham asked for.
+  "Grocery",
   "Soft Drinks",
   "Energy Drinks",
   "Protein Drinks",
+  // Alcohol last of the drinks, so it is easy to lift out if it ever has to be
+  // restricted to particular catalogs.
+  "Beer",
   "Protein Bars",
   "Health",
+  // Toothpaste, soap, deodorant, feminine hygiene. Next to Health, which holds
+  // the medicinal lines, but kept separate so 22 hygiene products do not swamp
+  // a category meant for Nurofen and Strepsils.
+  "Personal Care",
   "Toys",
   "Batteries",
   "Lighters",
@@ -230,7 +240,12 @@ const CATEGORY_ORDER = [
   "Charging Cables",
   "Air Fresheners",
   "Seal Bags",
+  // Surface and dish cleaners, next to the laundry powder.
+  "Cleaning",
   "Laundry Detergent",
+  // Non-food sundries with no other home: balloons, ponchos, keychains, eftpos
+  // rolls, charcoal. The stationery / miscellaneous / others slot at the end.
+  "Miscellaneous",
 ];
 
 /**
