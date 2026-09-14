@@ -18,6 +18,24 @@ async function metafieldsSet(adminOrFetch, metafields) {
   }
 }
 
+/**
+ * Turn { "gid://shopify/PriceList/34326708537": "12.34", ... } into
+ * "|34326708537:12.34|...|", the form both pricing Functions read.
+ *
+ * Delimited on both ends so a lookup can search for "|<id>:" and never match
+ * the tail of a longer id. A variant with no genuine discount on any catalog
+ * gets a bare "|" rather than "", because Shopify rejects an empty metafield
+ * value; both Functions read it as "no special price here", which is the same
+ * thing they do for a variant that has no value at all.
+ */
+function buildCompactPrices(mapByPriceListGid) {
+  const parts = [];
+  for (const gid of Object.keys(mapByPriceListGid)) {
+    parts.push(gid.slice(gid.lastIndexOf("/") + 1) + ":" + mapByPriceListGid[gid]);
+  }
+  return parts.length ? "|" + parts.join("|") + "|" : "|";
+}
+
 async function fetchAllPriceLists(admin) {
   const lists = [];
   let cursor = null;
@@ -182,8 +200,23 @@ async function runSync(admin, shop, options = {}) {
             }
           }
 
+          // The same prices again, as the compact string both Functions
+          // actually read: "|34326708537:12.34|34326872377:9.10|", keyed by the
+          // numeric part of the price list id.
+          //
+          // Why a second copy rather than a format change: the Functions read
+          // this on EVERY cart line and pay for every byte and every parse. The
+          // JSON map costs a JSON.parse per line and carries the full
+          // "gid://shopify/PriceList/" prefix on every entry; this costs one
+          // indexOf and about half the bytes. catalog_fixed_prices is still
+          // written because the (currently inert) b2b-catalog-discount function
+          // reads it, and because keeping it means this sync can be rolled back
+          // without a data migration.
+          const compact = buildCompactPrices(merged);
+
           metafieldsToWrite.push(
             { ownerId: variantId, namespace: "custom", key: "catalog_fixed_prices", type: "json", value: JSON.stringify(merged) },
+            { ownerId: variantId, namespace: "custom", key: "catalog_prices_v2", type: "single_line_text_field", value: compact },
             { ownerId: variantId, namespace: "custom", key: "standard_retail_price", type: "number_decimal", value: String(standardPrice) }
           );
         }

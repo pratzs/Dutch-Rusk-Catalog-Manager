@@ -6,25 +6,21 @@ query RunInput {
           priceListId: metafield(namespace: "custom", key: "catalog_pricelist_id") {
             value
           }
-          discountPct: metafield(namespace: "custom", key: "catalog_discount_pct") {
-            value
-          }
         }
       }
     }
     lines {
       id
-      quantity
-      cost {
-        amountPerQuantity {
-          amount
-        }
-      }
       merchandise {
         __typename
         ... on ProductVariant {
           id
-          fixedPrices: metafield(namespace: "custom", key: "catalog_fixed_prices") {
+          # Compact "|priceListId:price|..." string written by
+          # api.catalog-price-sync, read with indexOf instead of JSON.parse.
+          # Must stay in step with extensions/b2b-custom-prices, which reads the
+          # same metafield -- the two Functions have to agree on every line or
+          # one raises a price the other cannot bring back down.
+          catPrices: metafield(namespace: "custom", key: "catalog_prices_v2") {
             value
           }
           standardRetail: metafield(namespace: "custom", key: "standard_retail_price") {

@@ -1,6 +1,10 @@
 query RunInput {
+  # Deal config, on the DISCOUNT NODE (not the shop -- the shop copy is not
+  # resolved at runtime for this target). "bogo_fn" is the squeezed copy written
+  # by app/routes/app.bogo.jsx: bare numeric ids and one-letter keys, 1.5KB
+  # instead of 3.9KB. It rides on EVERY cart, so those bytes are cart lines.
   discountNode {
-    bogoBundles: metafield(namespace: "custom", key: "bogo_bundles") {
+    bogoBundles: metafield(namespace: "custom", key: "bogo_fn") {
       value
     }
   }
@@ -9,9 +13,6 @@ query RunInput {
       purchasingCompany {
         company {
           priceListId: metafield(namespace: "custom", key: "catalog_pricelist_id") {
-            value
-          }
-          discountPct: metafield(namespace: "custom", key: "catalog_discount_pct") {
             value
           }
         }
@@ -29,10 +30,19 @@ query RunInput {
         __typename
         ... on ProductVariant {
           id
-          fixedPrices: metafield(namespace: "custom", key: "catalog_fixed_prices") {
-            value
-          }
-          standardRetail: metafield(namespace: "custom", key: "standard_retail_price") {
+          # Compact "|priceListId:price|..." string written by
+          # api.catalog-price-sync. Replaces the catalog_fixed_prices JSON map:
+          # same information, roughly half the bytes, and read with indexOf
+          # rather than a JSON.parse on every cart line.
+          #
+          # Everything asked for here is paid for on EVERY line, so nothing goes
+          # in this query that the Function does not actually read. The old
+          # standardRetail and discountPct fields fed a fallback that calculated
+          # a price from a blanket company percentage -- no company on this shop
+          # has ever had one set (checked: 0 of 1,481), and the fallback could
+          # only ever fire on a line the transformer had left alone, where a
+          # further discount would have been a double discount anyway.
+          catPrices: metafield(namespace: "custom", key: "catalog_prices_v2") {
             value
           }
         }

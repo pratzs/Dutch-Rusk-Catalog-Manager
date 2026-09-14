@@ -3,6 +3,7 @@ import { useLoaderData, useFetcher } from "react-router";
 
 const METAFIELD_NAMESPACE = "custom";
 const METAFIELD_KEY = "bogo_bundles";
+const FUNCTION_METAFIELD_KEY = "bogo_fn";
 
 export async function loader({ request }) {
   const { authenticate } = await import("../shopify.server");
@@ -241,25 +242,52 @@ async function deleteDealCollection(admin, bundleId) {
   );
 }
 
-// Fields the Function actually reads. Everything else on a bundle (id, label,
-// brand, productIds, collectionHandle) is for the admin UI and the theme badge.
-//
-// This matters for more than tidiness: this config is part of the Function's
-// input on EVERY cart, and in that runtime the cost of parsing JSON scales with
-// the number of keys. The full config is 7.4KB and 47 keys; this is 3.9KB and
-// 22. The Function shares an 11M instruction budget with the cart transform,
-// and at the top of the allowed cart size only about 9% of it was spare, so
-// halving this parse is real headroom rather than a micro-optimisation.
-//
-// Keep this list in step with the Functions. Both currently read exactly:
-// buyQty, getQty, variantIds, catalogIds, overridePct.
-const FUNCTION_FIELDS = ["buyQty", "getQty", "variantIds", "catalogIds", "overridePct"];
+// The shape the CURRENTLY LIVE Function reads, kept so that deploying the app
+// ahead of the Functions does not switch deals off in between. Delete once the
+// new Functions are live and bogo_fn is the only consumer.
+const LEGACY_FUNCTION_FIELDS = ["buyQty", "getQty", "variantIds", "catalogIds", "overridePct"];
 
-function forFunction(bundle) {
+function forLegacyFunction(bundle) {
   const out = {};
-  for (const field of FUNCTION_FIELDS) {
+  for (const field of LEGACY_FUNCTION_FIELDS) {
     if (bundle?.[field] !== undefined) out[field] = bundle[field];
   }
+  return out;
+}
+
+// Only what the Function reads. Everything else on a bundle (id, label, brand,
+// productIds, collectionHandle) is for the admin UI and the theme badge.
+//
+/** "gid://shopify/ProductVariant/123" -> "123" */
+function bareId(gid) {
+  return typeof gid === "string" ? gid.slice(gid.lastIndexOf("/") + 1) : gid;
+}
+
+/**
+ * The copy the Function reads, squeezed as small as it will go.
+ *
+ * This config is part of the Function's INPUT, which means it is sent on every
+ * single cart, and input bytes cost instructions against an 11M budget that big
+ * carts genuinely run out of. In full form it was 3,947 bytes, about 3,300 of
+ * which was the "gid://shopify/ProductVariant/" prefix repeated across 75 deal
+ * variants. Dropping the prefixes and shortening the keys takes it to roughly
+ * 1,300 bytes, which buys back cart lines.
+ *
+ *   b = buyQty, g = getQty, o = overridePct, c = catalog ids, v = variant ids
+ *
+ * Both id lists are bare numerics; the Function compares them against the
+ * numeric tail of the gids it receives. The SHOP copy of this metafield keeps
+ * the full, readable form, because the theme's deal badge Liquid reads that one.
+ */
+function forFunction(bundle) {
+  const out = {};
+  if (bundle?.buyQty !== undefined) out.b = bundle.buyQty;
+  if (bundle?.getQty !== undefined) out.g = bundle.getQty;
+  if (bundle?.overridePct !== undefined && bundle.overridePct !== null && bundle.overridePct !== "") {
+    out.o = bundle.overridePct;
+  }
+  if (Array.isArray(bundle?.catalogIds) && bundle.catalogIds.length) out.c = bundle.catalogIds.map(bareId);
+  if (Array.isArray(bundle?.variantIds)) out.v = bundle.variantIds.map(bareId);
   return out;
 }
 
@@ -286,6 +314,17 @@ async function saveBundles(admin, shopId, bundles) {
       ownerId: pricingDiscountId,
       namespace: METAFIELD_NAMESPACE,
       key: METAFIELD_KEY,
+      type: "json",
+      value: JSON.stringify(bundles.map(forLegacyFunction)),
+    });
+    // The compact copy lives on its own key rather than replacing the one
+    // above, so the app can be deployed before the Functions without the live
+    // Function suddenly reading a shape it does not understand and quietly
+    // dropping every deal.
+    metafields.push({
+      ownerId: pricingDiscountId,
+      namespace: METAFIELD_NAMESPACE,
+      key: FUNCTION_METAFIELD_KEY,
       type: "json",
       value: JSON.stringify(bundles.map(forFunction)),
     });

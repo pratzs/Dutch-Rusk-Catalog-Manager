@@ -13,11 +13,12 @@ import { run } from "../src/run.js";
 
 const PL = "gid://shopify/PriceList/111";
 const OTHER_PL = "gid://shopify/PriceList/999";
+const shortPl = (gid) => gid.slice(gid.lastIndexOf("/") + 1);
 
 /** Build one cart line. `retail` is the price AFTER the cart transform raised it. */
 function line(id, variantId, quantity, retail, catalog, { standardRetail = retail } = {}) {
-  const fixed = {};
-  if (catalog !== null) fixed[PL] = String(catalog);
+  // custom.catalog_prices_v2 shape: "|priceListId:price|"
+  const compact = catalog === null ? "" : `|${shortPl(PL)}:${catalog}|`;
   return {
     id: `gid://shopify/CartLine/${id}`,
     quantity,
@@ -25,15 +26,30 @@ function line(id, variantId, quantity, retail, catalog, { standardRetail = retai
     merchandise: {
       __typename: "ProductVariant",
       id: `gid://shopify/ProductVariant/${variantId}`,
-      fixedPrices: { value: JSON.stringify(fixed) },
-      standardRetail: { value: String(standardRetail) },
+      catPrices: { value: compact },
     },
   };
 }
 
+/**
+ * The Function reads a squeezed copy of the deal config, not the readable one
+ * the admin edits. This mirrors forFunction() in app/routes/app.bogo.jsx --
+ * keep the two in step, because a mismatch here means deals silently stop
+ * applying at checkout while every test still passes.
+ */
+function forFunction(bundle) {
+  const out = {};
+  if (bundle.buyQty !== undefined) out.b = bundle.buyQty;
+  if (bundle.getQty !== undefined) out.g = bundle.getQty;
+  if (bundle.overridePct !== undefined) out.o = bundle.overridePct;
+  if (bundle.catalogIds) out.c = bundle.catalogIds.map(shortPl);
+  if (bundle.variantIds) out.v = bundle.variantIds.map(shortPl);
+  return out;
+}
+
 function input(lines, { priceListId = PL, discountPct = "0", bundles = null } = {}) {
   return {
-    discountNode: bundles ? { bogoBundles: { value: JSON.stringify(bundles) } } : {},
+    discountNode: bundles ? { bogoBundles: { value: JSON.stringify(bundles.map(forFunction)) } } : {},
     cart: {
       buyerIdentity: priceListId
         ? { purchasingCompany: { company: { priceListId: { value: priceListId }, discountPct: { value: discountPct } } } }

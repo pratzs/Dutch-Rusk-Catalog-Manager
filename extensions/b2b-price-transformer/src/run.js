@@ -1,6 +1,6 @@
 // @ts-check
 //
-// ACTIVE. Registered as gid://shopify/CartTransform/162660665.
+// ACTIVE. Registered as a cart transform against this app's Function id.
 //
 // This Function raises each B2B line to its retail price so the paired product
 // discount ("B2B Wholesale Custom Pricing") can take it back down to the
@@ -11,7 +11,7 @@
 //
 // It was briefly removed on 2026-09-07 in favour of Shopify's native catalog
 // pricing, which has no cart-size ceiling. That priced correctly but produced
-// orders with no discount lines at all, which is not acceptable — the discount
+// orders with no discount lines at all, which is not acceptable -- the discount
 // rows are a requirement, not a side effect. Reverted the same day.
 //
 // The cost of keeping this design is the ceiling below. Read the guard comment
@@ -30,53 +30,52 @@ const NO_CHANGES = {
   operations: [],
 };
 
-/**
- * @param {RunInput} input
- * @returns {FunctionRunResult}
- */
 // Above this many cart lines this Function stands down completely.
 //
 // Raising prices here is only safe if the paired product discount ("B2B
 // Wholesale Custom Pricing") is certain to run afterwards and bring them back
 // to the catalog price. It isn't, on a big enough cart -- and when it doesn't,
 // this Function has already raised every line to retail and the buyer pays it.
-// That is what happened to #1409 (47 lines), #1850 (48) and #1884 (59):
-// $1,632 above catalog.
+// That is what happened to #1409 (47 lines), #1850 (48) and #1884 (59).
 //
-// The binding limit is INSTRUCTIONS, not input size. Input is capped at 125KB
-// and never came close (largest cart tested: 47KB). Measured with the real
-// Shopify function runner against the actual wasm, against the 11M budget.
-//
-// WORST CASE -- 45 lines drawn from the 200 largest live price maps (up to
-// 553B each, vs a 47B median), every line matching a BOGO bundle, quantity 22
-// so all five deals activate and allocate:
-//
-//     40 lines   9.25M   (16% headroom)
-//     45 lines  10.04M   ( 9% headroom)   <-- guard set here
-//     50 lines  10.93M   (0.6% headroom)  <-- effectively at the limit
-//     55 lines  11.73M   OVER, Function killed
-//
-// A typical cart is far lighter -- order #1884's own 45 lines measure 8.81M --
-// so 9% worst-case headroom is really ~20% in practice. 50 was rejected: 0.6%
-// is not a margin, and when this Function is killed the buyer pays FULL RETAIL
-// because the transform has already raised the prices (that is what happened
-// to #1409, #1850 and #1884: $1,632 above catalog).
-//
-// The per-line cost is dominated by JSON.parse of the price map, so the way to
-// raise this number is to shrink that map, NOT to nudge the guard up. Shortening
-// the map keys (dropping the "gid://shopify/PriceList/" prefix, 48 bytes/entry
-// down to 21) would roughly halve it and support ~70 lines, but it needs a
-// coordinated change to both Functions and the sync, so it is not done here.
-//
-// Standing down inverts the failure: the line keeps Shopify's own catalog
-// price, which is correct. A cart above this still shows a struck-through "was"
-// price -- sections/main-cart.liquid falls back to item.variant.compare_at_price
-// -- it just loses the explicit "B2B Wholesale Price" discount row.
+// The binding limit is INSTRUCTIONS, not input size. The discount Function is
+// the one that runs out first, so its cost sets this guard, not this Function's
+// own (much cheaper) one. Worst case = lines drawn from the largest live price
+// strings, every line matching a BOGO bundle, quantities set so all five deals
+// activate.
 //
 // DO NOT raise without re-measuring: `shopify app function run --input <cart>`
 // inside extensions/b2b-custom-prices prints Instructions against the limit.
-const MAX_LINES_TO_TRANSFORM = 45;
+// Adding a customer catalog makes every price string longer and erodes the
+// headroom, so re-measure when one is onboarded.
+//
+// Measured 2026-09-14 against the rebuilt Functions, worst case, 11M budget
+// (lines drawn from the heaviest live price strings, deals past 65 skipped):
+//
+//     65 lines   8.46M   (23% headroom)
+//     70 lines   9.08M   (17% headroom)
+//     75 lines   9.70M   (12% headroom)  <-- guard set here
+//     80 lines  10.33M   ( 6% headroom)
+//     85 lines  10.96M   OVER in all but name
+//
+// 75 rather than 80 because they cover exactly the same orders -- no order on
+// this store has ever had between 73 and 81 lines -- and 75 leaves twice the
+// margin. Each new customer catalog lengthens every price string and eats into
+// it, so the slack is what lets catalogs be onboarded without this becoming
+// unsafe again.
+//
+// Real carts are lighter than the worst case: the heaviest real orders on the
+// store measure #1904 (65 lines) 8.39M, #1374 (72) 9.23M, #1986 (82) 10.62M.
+//
+// Coverage: 377 of the 380 B2B orders placed since 1 June 2026 are 75 lines or
+// fewer (99.2%). At the old guard of 45 it was 362 (95.3%). The two that still
+// miss out are #1986 (82 lines) and #1397 (104).
+const MAX_LINES_TO_TRANSFORM = 75;
 
+/**
+ * @param {RunInput} input
+ * @returns {FunctionRunResult}
+ */
 export function run(input) {
   const company = input.cart.buyerIdentity?.purchasingCompany?.company;
   const priceListId = company?.priceListId?.value;
@@ -85,42 +84,42 @@ export function run(input) {
     return NO_CHANGES;
   }
 
-  if (input.cart.lines.length > MAX_LINES_TO_TRANSFORM) {
+  const cartLines = input.cart.lines;
+  if (cartLines.length > MAX_LINES_TO_TRANSFORM) {
     return NO_CHANGES;
   }
 
+  // Lookup key into the compact price string, built once per run. See the
+  // matching comment in extensions/b2b-custom-prices/src/run.js -- both
+  // Functions read custom.catalog_prices_v2 and must agree line for line.
+  const needle = "|" + priceListId.slice(priceListId.lastIndexOf("/") + 1) + ":";
+
   const operations = [];
 
-  for (const line of input.cart.lines) {
+  for (let i = 0; i < cartLines.length; i++) {
+    const line = cartLines[i];
     const variant = line.merchandise;
     if (variant.__typename !== "ProductVariant") continue;
 
     const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
 
-    let targetWholesalePrice = null;
-
     // ── GATHER TRUTH ────────────────────────────────────────────────────────
-    // We strictly use the map synced from the Shopify Catalog Price Lists.
-    const fixedPricesRaw = variant.fixedPrices?.value;
-    if (fixedPricesRaw) {
-      try {
-        const fixedPricesMap = JSON.parse(fixedPricesRaw);
-        const fixedPrice = fixedPricesMap[priceListId];
-        if (fixedPrice !== undefined && fixedPrice !== null) {
-          targetWholesalePrice = parseFloat(fixedPrice);
-        }
-      } catch (e) {
-        // malformed fixedPrices JSON — no wholesale target this run
+    // We strictly use the prices synced from the Shopify Catalog Price Lists.
+    let targetWholesalePrice = NaN;
+    const raw = variant.catPrices?.value;
+    if (raw) {
+      const at = raw.indexOf(needle);
+      if (at >= 0) {
+        const from = at + needle.length;
+        targetWholesalePrice = parseFloat(raw.slice(from, from + 12));
       }
     }
 
-    const finalWholesale = targetWholesalePrice;
-    
     // ── GUARANTEED PRECISION ────────────────────────────────────────────────
-    // We ONLY RAISE the price if we are 100% CERTAIN we have a wholesale 
-    // target to discount back down to. This prevents customers from 
+    // We ONLY RAISE the price if we are 100% CERTAIN we have a wholesale
+    // target to discount back down to. This prevents customers from
     // accidentally paying full retail if the sync is delayed.
-    if (finalWholesale !== null && standardRetail > finalWholesale) {
+    if (targetWholesalePrice === targetWholesalePrice && standardRetail > targetWholesalePrice) {
       operations.push({
         update: {
           cartLineId: line.id,
@@ -128,9 +127,9 @@ export function run(input) {
             adjustment: {
               fixedPricePerUnit: {
                 amount: standardRetail.toFixed(2),
-              }
-            }
-          }
+              },
+            },
+          },
         },
       });
     }
