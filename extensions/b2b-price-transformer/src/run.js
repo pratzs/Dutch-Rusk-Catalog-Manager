@@ -49,28 +49,36 @@ const NO_CHANGES = {
 // Adding a customer catalog makes every price string longer and erodes the
 // headroom, so re-measure when one is onboarded.
 //
-// Measured 2026-09-14 against the rebuilt Functions, worst case, 11M budget
-// (lines drawn from the heaviest live price strings, deals past 65 skipped):
+// Measured 2026-09-15 against an honest worst case: lines drawn from the
+// heaviest live price strings, EVERY line discounted, and every line a
+// DIFFERENT per-unit saving so no two discount rows can share an entry.
 //
-//     65 lines   8.46M   (23% headroom)
-//     70 lines   9.08M   (17% headroom)
-//     75 lines   9.70M   (12% headroom)  <-- guard set here
-//     80 lines  10.33M   ( 6% headroom)
-//     85 lines  10.96M   OVER in all but name
+//     75 lines   9.74M   (11.5% headroom)
+//     80 lines  10.37M   ( 5.7% headroom)  <-- guard set here
+//     85 lines  11.00M   (no headroom at all)
+//     90 lines  11.63M   OVER, Function killed
 //
-// 75 rather than 80 because they cover exactly the same orders -- no order on
-// this store has ever had between 73 and 81 lines -- and 75 leaves twice the
-// margin. Each new customer catalog lengthens every price string and eats into
-// it, so the slack is what lets catalogs be onboarded without this becoming
-// unsafe again.
+// 80 is the practical end of this architecture. Per-line cost is ~0.125M and is
+// structural -- it barely moves with the length of the data -- so 11M / 0.125M
+// puts the arithmetic ceiling near 88 lines at zero margin.
 //
-// Real carts are lighter than the worst case: the heaviest real orders on the
-// store measure #1904 (65 lines) 8.39M, #1374 (72) 9.23M, #1986 (82) 10.62M.
+// Real carts are cheaper than this bound (order #1986's real 82 lines measure
+// 10.62M and would fit) but the guard cannot be set on the average case: going
+// over bills the buyer FULL RETAIL.
 //
-// Coverage: 377 of the 380 B2B orders placed since 1 June 2026 are 75 lines or
-// fewer (99.2%). At the old guard of 45 it was 362 (95.3%). The two that still
+// Two things were measured and rejected rather than shipped, both recorded in
+// docs/B2B-PRICING.md so they are not retried:
+//   - shortening the catalog keys inside the price string: 0.3%, not 1M
+//   - grouping discount rows by amount: helps real carts, but costs MORE on a
+//     cart where no two savings match, which is the case the guard must hold
+//
+// Coverage: 378 of the 380 B2B orders placed since 1 June 2026 are 80 lines or
+// fewer (99.5%). At the old guard of 45 it was 362 (95.3%). The two that still
 // miss out are #1986 (82 lines) and #1397 (104).
-const MAX_LINES_TO_TRANSFORM = 75;
+//
+// DO NOT raise without re-measuring: `shopify app function run --input <cart>`
+// inside extensions/b2b-custom-prices prints Instructions against the limit.
+const MAX_LINES_TO_TRANSFORM = 80;
 
 /**
  * @param {RunInput} input

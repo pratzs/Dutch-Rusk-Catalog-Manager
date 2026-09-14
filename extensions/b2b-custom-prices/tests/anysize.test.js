@@ -64,8 +64,8 @@ function finalPrice(lineCount, { discountRuns }) {
 
 describe("no cart size can be overcharged", () => {
   // Keep in step with MAX_LINES_TO_TRANSFORM in b2b-price-transformer.
-  const GUARD = 75;
-  const sizes = [1, 5, 20, 40, 45, 46, 47, 48, 59, 65, 66, 74, 75, 76, 82, 100, 104, 150, 250];
+  const GUARD = 80;
+  const sizes = [1, 5, 20, 40, 45, 46, 47, 48, 59, 65, 66, 79, 80, 81, 82, 100, 104, 150, 250];
 
   test("with the discount Function working, every size lands on catalog price", () => {
     for (const n of sizes) {
@@ -113,8 +113,8 @@ describe("no cart size can be overcharged", () => {
   });
 
   test("the transform stands down above its line guard", () => {
-    expect(transformRun(buildCart(75)).operations.length).toBe(75);
-    expect(transformRun(buildCart(76)).operations).toEqual([]);
+    expect(transformRun(buildCart(80)).operations.length).toBe(80);
+    expect(transformRun(buildCart(81)).operations).toEqual([]);
     expect(transformRun(buildCart(104)).operations).toEqual([]);
   });
 });

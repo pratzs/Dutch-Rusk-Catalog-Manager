@@ -77,22 +77,28 @@ transform raised, and the transform's guard has always stood down below this
 size, so a cart that big gets no deal today either **and** no discount rows.
 Skipping the deal maths is what pays for it to get the rows.
 
-**`MAX_LINES_TO_TRANSFORM` = 75** (`b2b-price-transformer/src/run.js`). Worst
-case with deals skipped: 65 lines 8.46M, 70 lines 9.08M, **75 lines 9.70M (12%
-headroom)**, 80 lines 10.33M (6%), 85 lines 10.96M (over in all but name). The
-cart transform's own cost at 75 is 7.05M of its separate budget.
+**`MAX_LINES_TO_TRANSFORM` = 80** (`b2b-price-transformer/src/run.js`).
 
-75 rather than 80 because they cover exactly the same orders — no order on this
-store has ever had between 73 and 81 lines — and 75 leaves twice the margin.
-That slack is what lets new customer catalogs be onboarded without this becoming
-unsafe again.
+Measured 2026-09-15 against an honest worst case: lines drawn from the heaviest
+live price strings, EVERY line discounted, and every line a DIFFERENT per-unit
+saving so no two discount rows can share an entry.
 
-Real carts are lighter than the worst case: #1993 (51 lines) 8.00M, #1904 (65)
-8.39M, #1374 (72) 9.23M, #1986 (82) 10.62M.
+| lines | instructions | headroom |
+| --- | --- | --- |
+| 75 | 9.74M | 11.5% |
+| **80** | **10.37M** | **5.7%** |
+| 85 | 11.00M | none |
+| 90 | 11.63M | over |
 
-Coverage: **377 of the 380 B2B orders placed since 1 June 2026 are 75 lines or
-fewer (99.2%)**. At the old guard of 45 it was 362 (95.3%). Median B2B order is
-13 lines. The two that still miss out are #1986 (82 lines) and #1397 (104).
+80 is the end of this architecture as it stands. Per-line cost is ~0.125M and is
+structural, so 11M / 0.125M puts the arithmetic ceiling near 88 lines at zero
+margin. Real carts are cheaper than this bound (#1986's real 82 lines measure
+10.62M and would fit) but the guard cannot be set on the average case, because
+going over bills the buyer FULL RETAIL.
+
+Coverage: 378 of the 380 B2B orders placed since 1 June 2026 are 80 lines or
+fewer (99.5%). At the old guard of 45 it was 362 (95.3%). The two that still miss
+out are #1986 (82 lines) and #1397 (104).
 
 ## There is a structural ceiling, and it is not far above the guard
 
