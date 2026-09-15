@@ -14,10 +14,6 @@
 // orders with no discount lines at all, which is not acceptable -- the discount
 // rows are a requirement, not a side effect. Reverted the same day.
 //
-// The cost of keeping this design is the ceiling below. Read the guard comment
-// before touching it: the limit is real, measured, and it is what caused
-// #1409, #1850 and #1884 to bill full retail.
-//
 /**
  * @typedef {import("../generated/api").RunInput} RunInput
  * @typedef {import("../generated/api").FunctionRunResult} FunctionRunResult
@@ -30,55 +26,34 @@ const NO_CHANGES = {
   operations: [],
 };
 
-// Above this many cart lines this Function stands down completely.
+// Above this many cart lines BOTH Functions stand down, and they must use the
+// same number.
 //
-// Raising prices here is only safe if the paired product discount ("B2B
-// Wholesale Custom Pricing") is certain to run afterwards and bring them back
-// to the catalog price. It isn't, on a big enough cart -- and when it doesn't,
-// this Function has already raised every line to retail and the buyer pays it.
-// That is what happened to #1409 (47 lines), #1850 (48) and #1884 (59).
+// Raising prices here is only safe if the paired product discount is certain to
+// run afterwards and bring them back down. It isn't, on a big enough cart -- and
+// when it doesn't, this Function has already raised every line to retail and the
+// buyer pays it. That is what happened to #1409, #1850 and #1884.
 //
-// The binding limit is INSTRUCTIONS, not input size. The discount Function is
-// the one that runs out first, so its cost sets this guard, not this Function's
-// own (much cheaper) one. Worst case = lines drawn from the largest live price
-// strings, every line matching a BOGO bundle, quantities set so all five deals
-// activate.
+// The discount Function no longer receives the line cost, so it cannot work out
+// for itself whether this one raised a line. Instead both read the same cart and
+// apply the same limit to the same line count, which is deterministic. Keep the
+// two constants identical: see MAX_LINES_TO_TRANSFORM in
+// extensions/b2b-custom-prices/src/run.js.
 //
-// DO NOT raise without re-measuring: `shopify app function run --input <cart>`
-// inside extensions/b2b-custom-prices prints Instructions against the limit.
-// Adding a customer catalog makes every price string longer and erodes the
-// headroom, so re-measure when one is onboarded.
+// Measured against an honest worst case (heaviest live data, every line
+// discounted, every line a different saving so no two discount rows can share an
+// entry), 11M budget:
 //
-// Measured 2026-09-15 against an honest worst case: lines drawn from the
-// heaviest live price strings, EVERY line discounted, and every line a
-// DIFFERENT per-unit saving so no two discount rows can share an entry.
+//                      this Function   the discount Function (binding)
+//     100 lines        7.57M                9.06M
+//     110 lines        8.31M                9.93M   <-- guard, ~10% headroom
+//     115 lines        8.68M               10.36M   (5.8%, too thin)
 //
-//     75 lines   9.74M   (11.5% headroom)
-//     80 lines  10.37M   ( 5.7% headroom)  <-- guard set here
-//     85 lines  11.00M   (no headroom at all)
-//     90 lines  11.63M   OVER, Function killed
-//
-// 80 is the practical end of this architecture. Per-line cost is ~0.125M and is
-// structural -- it barely moves with the length of the data -- so 11M / 0.125M
-// puts the arithmetic ceiling near 88 lines at zero margin.
-//
-// Real carts are cheaper than this bound (order #1986's real 82 lines measure
-// 10.62M and would fit) but the guard cannot be set on the average case: going
-// over bills the buyer FULL RETAIL.
-//
-// Two things were measured and rejected rather than shipped, both recorded in
-// docs/B2B-PRICING.md so they are not retried:
-//   - shortening the catalog keys inside the price string: 0.3%, not 1M
-//   - grouping discount rows by amount: helps real carts, but costs MORE on a
-//     cart where no two savings match, which is the case the guard must hold
-//
-// Coverage: 378 of the 380 B2B orders placed since 1 June 2026 are 80 lines or
-// fewer (99.5%). At the old guard of 45 it was 362 (95.3%). The two that still
-// miss out are #1986 (82 lines) and #1397 (104).
-//
-// DO NOT raise without re-measuring: `shopify app function run --input <cart>`
-// inside extensions/b2b-custom-prices prints Instructions against the limit.
-const MAX_LINES_TO_TRANSFORM = 80;
+// The DISCOUNT Function is the binding side, not this one. Its output also has
+// to fit a 19.53KB cap: 14.98KB at 110 lines. DO NOT raise without re-measuring
+// BOTH, against a cart where every line has a DIFFERENT saving so no two
+// discount rows can share an entry.
+const MAX_LINES_TO_TRANSFORM = 110;
 
 /**
  * @param {RunInput} input
@@ -97,50 +72,43 @@ export function run(input) {
     return NO_CHANGES;
   }
 
-  // Lookup key into the compact price string, built once per run. See the
-  // matching comment in extensions/b2b-custom-prices/src/run.js -- both
-  // Functions read custom.catalog_prices_v2 and must agree line for line.
+  // Lookup key into custom.catalog_savings. Every entry in that string is
+  // preceded by "|", so this cannot match the tail of a longer price list id.
   const needle = "|" + priceListId.slice(priceListId.lastIndexOf("/") + 1) + ":";
 
   const operations = [];
 
   for (let i = 0; i < cartLines.length; i++) {
     const line = cartLines[i];
-    const variant = line.merchandise;
-    if (variant.__typename !== "ProductVariant") continue;
+    const raw = line.merchandise.catSavings?.value;
+    // No value at all means this is not a ProductVariant, or the sync has not
+    // reached it yet. Either way there is nothing to raise to.
+    if (!raw) continue;
 
-    const standardRetail = parseFloat(variant.standardRetail?.value ?? "0");
+    const at = raw.indexOf(needle);
+    if (at < 0) continue; // this catalog has no special price for the variant
 
-    // ── GATHER TRUTH ────────────────────────────────────────────────────────
-    // We strictly use the prices synced from the Shopify Catalog Price Lists.
-    let targetWholesalePrice = NaN;
-    const raw = variant.catPrices?.value;
-    if (raw) {
-      const at = raw.indexOf(needle);
-      if (at >= 0) {
-        const from = at + needle.length;
-        targetWholesalePrice = parseFloat(raw.slice(from, from + 12));
-      }
-    }
+    // Only raise when there is a genuine saving to hand back. Without this a
+    // buyer could be left paying retail if the data were ever wrong.
+    const saving = parseFloat(raw.slice(at + needle.length, at + needle.length + 12));
+    if (!(saving > 0)) continue;
 
-    // ── GUARANTEED PRECISION ────────────────────────────────────────────────
-    // We ONLY RAISE the price if we are 100% CERTAIN we have a wholesale
-    // target to discount back down to. This prevents customers from
-    // accidentally paying full retail if the sync is delayed.
-    if (targetWholesalePrice === targetWholesalePrice && standardRetail > targetWholesalePrice) {
-      operations.push({
-        update: {
-          cartLineId: line.id,
-          price: {
-            adjustment: {
-              fixedPricePerUnit: {
-                amount: standardRetail.toFixed(2),
-              },
+    // Retail is the leading number of the string; parseFloat stops at the "|".
+    const retail = parseFloat(raw);
+    if (!(retail > 0)) continue;
+
+    operations.push({
+      update: {
+        cartLineId: line.id,
+        price: {
+          adjustment: {
+            fixedPricePerUnit: {
+              amount: retail.toFixed(2),
             },
           },
         },
-      });
-    }
+      },
+    });
   }
 
   return { operations };

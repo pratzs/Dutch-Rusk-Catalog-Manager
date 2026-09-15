@@ -24,9 +24,7 @@ function buildCart(lineCount, { catalog = 15.0, retail = 20.0 } = {}) {
       merchandise: {
         __typename: "ProductVariant",
         id: `gid://shopify/ProductVariant/${1000 + i}`,
-        catPrices: { value: `|${shortPl(PL)}:${catalog}|` },
-        // only the transform reads this; it raises the line TO retail
-        standardRetail: { value: String(retail) },
+        catSavings: { value: `${retail.toFixed(2)}|${shortPl(PL)}:${(retail - catalog).toFixed(2)}|` },
       },
     });
   }
@@ -64,8 +62,8 @@ function finalPrice(lineCount, { discountRuns }) {
 
 describe("no cart size can be overcharged", () => {
   // Keep in step with MAX_LINES_TO_TRANSFORM in b2b-price-transformer.
-  const GUARD = 80;
-  const sizes = [1, 5, 20, 40, 45, 46, 47, 48, 59, 65, 66, 79, 80, 81, 82, 100, 104, 150, 250];
+  const GUARD = 110;
+  const sizes = [1, 5, 20, 40, 45, 48, 59, 65, 66, 80, 82, 100, 104, 109, 110, 111, 150, 250];
 
   test("with the discount Function working, every size lands on catalog price", () => {
     for (const n of sizes) {
@@ -113,8 +111,8 @@ describe("no cart size can be overcharged", () => {
   });
 
   test("the transform stands down above its line guard", () => {
-    expect(transformRun(buildCart(80)).operations.length).toBe(80);
-    expect(transformRun(buildCart(81)).operations).toEqual([]);
-    expect(transformRun(buildCart(104)).operations).toEqual([]);
+    expect(transformRun(buildCart(110)).operations.length).toBe(110);
+    expect(transformRun(buildCart(111)).operations).toEqual([]);
+    expect(transformRun(buildCart(150)).operations).toEqual([]);
   });
 });

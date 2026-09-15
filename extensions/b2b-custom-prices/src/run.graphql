@@ -1,8 +1,6 @@
 query RunInput {
-  # Deal config, on the DISCOUNT NODE (not the shop -- the shop copy is not
-  # resolved at runtime for this target). "bogo_fn" is the squeezed copy written
-  # by app/routes/app.bogo.jsx: bare numeric ids and one-letter keys, 1.5KB
-  # instead of 3.9KB. It rides on EVERY cart, so those bytes are cart lines.
+  # Deal config, on the DISCOUNT NODE (the shop copy is not resolved at runtime
+  # for this target). Squeezed copy written by app/routes/app.bogo.jsx.
   discountNode {
     bogoBundles: metafield(namespace: "custom", key: "bogo_fn") {
       value
@@ -21,27 +19,19 @@ query RunInput {
     lines {
       id
       quantity
-      cost {
-        amountPerQuantity {
-          amount
-        }
-      }
       merchandise {
         ... on ProductVariant {
-          id
-          # Compact "|priceListId:price|..." string written by
-          # api.catalog-price-sync. Replaces the catalog_fixed_prices JSON map:
-          # same information, roughly half the bytes, and read with indexOf
-          # rather than a JSON.parse on every cart line.
+          # Everything this Function needs about the variant, in one field:
           #
-          # Everything asked for here is paid for on EVERY line, so nothing goes
-          # in this query that the Function does not actually read. The old
-          # standardRetail and discountPct fields fed a fallback that calculated
-          # a price from a blanket company percentage -- no company on this shop
-          # has ever had one set (checked: 0 of 1,481), and the fallback could
-          # only ever fire on a line the transformer had left alone, where a
-          # further discount would have been a double discount anyway.
-          catPrices: metafield(namespace: "custom", key: "catalog_prices_v2") {
+          #   27.75|34326937913:5.25|34326774073:4.25|#dragon-2kg-5-1|
+          #   ^retail  ^price list : saving off retail      ^deals
+          #
+          # THREE fields per cart line and no more. Every field in this query is
+          # charged on every line whether the code reads it or not -- measured,
+          # not assumed -- so `cost`, `merchandise.id` and `__typename` were all
+          # removed and the information folded into this one string. That is what
+          # took the cart limit from 80 lines to 115.
+          catSavings: metafield(namespace: "custom", key: "catalog_savings") {
             value
           }
         }

@@ -12,18 +12,17 @@ query RunInput {
     lines {
       id
       merchandise {
-        __typename
         ... on ProductVariant {
-          id
-          # Compact "|priceListId:price|..." string written by
-          # api.catalog-price-sync, read with indexOf instead of JSON.parse.
-          # Must stay in step with extensions/b2b-custom-prices, which reads the
-          # same metafield -- the two Functions have to agree on every line or
-          # one raises a price the other cannot bring back down.
-          catPrices: metafield(namespace: "custom", key: "catalog_prices_v2") {
-            value
-          }
-          standardRetail: metafield(namespace: "custom", key: "standard_retail_price") {
+          # Everything this Function needs about the variant, in one field:
+          #
+          #   27.75|34326937913:5.25|34326774073:4.25|#dragon-2kg-5-1|
+          #   ^retail  ^price list : saving off retail      ^deals
+          #
+          # Written by api.catalog-price-sync. Only TWO fields per cart line are
+          # asked for here, because every field in this query is charged on every
+          # line whether the code reads it or not. That is what pays for the line
+          # limit below.
+          catSavings: metafield(namespace: "custom", key: "catalog_savings") {
             value
           }
         }

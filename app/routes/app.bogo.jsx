@@ -273,7 +273,11 @@ function bareId(gid) {
  * variants. Dropping the prefixes and shortening the keys takes it to roughly
  * 1,300 bytes, which buys back cart lines.
  *
- *   b = buyQty, g = getQty, o = overridePct, c = catalog ids, v = variant ids
+ *   i = deal id, b = buyQty, g = getQty, o = overridePct, c = catalog ids,
+ *
+ * Variant ids are deliberately NOT here any more. Deal membership travels on
+ * each variant inside custom.catalog_savings, so sending 75 ids on every cart
+ * was pure weight: this config went from 1,492 bytes to 296.
  *
  * Both id lists are bare numerics; the Function compares them against the
  * numeric tail of the gids it receives. The SHOP copy of this metafield keeps
@@ -281,12 +285,21 @@ function bareId(gid) {
  */
 function forFunction(bundle) {
   const out = {};
+  // The id has to travel now. The discount Function no longer receives the
+  // variant id it used to match deals on, so membership is written onto each
+  // variant as these ids by api.catalog-price-sync, and matched back here.
+  if (bundle?.id !== undefined) out.i = bundle.id;
   if (bundle?.buyQty !== undefined) out.b = bundle.buyQty;
   if (bundle?.getQty !== undefined) out.g = bundle.getQty;
   if (bundle?.overridePct !== undefined && bundle.overridePct !== null && bundle.overridePct !== "") {
     out.o = bundle.overridePct;
   }
   if (Array.isArray(bundle?.catalogIds) && bundle.catalogIds.length) out.c = bundle.catalogIds.map(bareId);
+  // Variant ids are no longer used by the Function -- deal membership travels
+  // on each variant inside custom.catalog_savings. They are still written so
+  // that saving this page during a rollout cannot break the previous Function,
+  // which still matches on them. Safe to drop once the new Functions are live
+  // everywhere; worth about 1.2KB on every cart.
   if (Array.isArray(bundle?.variantIds)) out.v = bundle.variantIds.map(bareId);
   return out;
 }

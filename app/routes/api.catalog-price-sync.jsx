@@ -36,6 +36,59 @@ function buildCompactPrices(mapByPriceListGid) {
   return parts.length ? "|" + parts.join("|") + "|" : "|";
 }
 
+/**
+ * Everything the two pricing Functions need about one variant, in one string.
+ *
+ *     27.75|34326937913:5.25|34326774073:4.25|#dragon-2kg-5-1|
+ *     ^retail  ^price list : saving off retail        ^deals it belongs to
+ *
+ * Why one string rather than the several fields the Functions used to ask for:
+ * every field in a Function input query is charged on EVERY cart line, whether
+ * or not the code reads it. Measured, dropping a single unused field was worth
+ * 0.4M of an 11M budget. Folding retail, the saving and deal membership into one
+ * field takes the discount Function from five per-line fields to three and the
+ * transform to two, which is what lifts the cart-size limit from 80 to 115.
+ *
+ * The saving is stored rather than the catalog price so the discount Function
+ * never needs the line cost: the amount it takes off IS the saving.
+ *
+ * Delimiters: retail first, then every entry preceded by "|", so a lookup for
+ * "|<priceListId>:" cannot match the tail of a longer id, and "|#" cannot
+ * collide with a price list id. A variant with no discount anywhere and no deal
+ * still gets "<retail>|", because Shopify rejects an empty metafield value.
+ */
+function buildSavings(retailPrice, savingsByPriceListId, dealIds) {
+  let out = retailPrice.toFixed(2) + "|";
+  for (const plId of Object.keys(savingsByPriceListId)) {
+    out += plId + ":" + savingsByPriceListId[plId] + "|";
+  }
+  if (dealIds && dealIds.length) out += "#" + dealIds.join(",") + "|";
+  return out;
+}
+
+/**
+ * variant gid -> the ids of the live deals it belongs to, read from the same
+ * shop metafield the BOGO admin page writes. Deal membership has to travel with
+ * the variant now, because the discount Function no longer receives the variant
+ * id it used to match on.
+ */
+async function fetchDealMembership(admin) {
+  const byVariant = {};
+  try {
+    const { data } = await gql(admin, `query { shop { metafield(namespace: "custom", key: "bogo_bundles") { value } } }`);
+    const bundles = JSON.parse(data?.shop?.metafield?.value ?? "[]");
+    for (const b of Array.isArray(bundles) ? bundles : []) {
+      if (!b?.id || !Array.isArray(b.variantIds)) continue;
+      for (const vid of b.variantIds) (byVariant[vid] ??= []).push(b.id);
+    }
+  } catch (e) {
+    // A malformed or missing config must not wipe every marker, so this throws
+    // rather than quietly writing "no deals" across the whole catalogue.
+    throw new Error(`could not read bogo_bundles, refusing to write deal markers: ${e.message}`);
+  }
+  return byVariant;
+}
+
 async function fetchAllPriceLists(admin) {
   const lists = [];
   let cursor = null;
@@ -149,6 +202,7 @@ async function runSync(admin, shop, options = {}) {
       for (const pl of toSync) { for (const id of Object.keys(allOverridesByList[pl.id] ?? {})) affectedVariantIds.add(id); }
       if (specificVariantIds) { for (const id of specificVariantIds) affectedVariantIds.add(id); }
 
+      const dealsByVariant = await fetchDealMembership(admin);
       const variantIdArray = [...affectedVariantIds];
       log(`Updating ${variantIdArray.length} variants...`);
 
@@ -214,9 +268,19 @@ async function runSync(admin, shop, options = {}) {
           // without a data migration.
           const compact = buildCompactPrices(merged);
 
+          // The same prices expressed as SAVINGS off retail, which is what the
+          // rewritten Functions read. See buildSavings above for why.
+          const savings = {};
+          for (const plGid of Object.keys(merged)) {
+            const saving = standardPrice - parseFloat(merged[plGid]);
+            if (saving > 0.005) savings[plGid.slice(plGid.lastIndexOf("/") + 1)] = saving.toFixed(2);
+          }
+          const savingsValue = buildSavings(standardPrice, savings, dealsByVariant[variantId]);
+
           metafieldsToWrite.push(
             { ownerId: variantId, namespace: "custom", key: "catalog_fixed_prices", type: "json", value: JSON.stringify(merged) },
             { ownerId: variantId, namespace: "custom", key: "catalog_prices_v2", type: "single_line_text_field", value: compact },
+            { ownerId: variantId, namespace: "custom", key: "catalog_savings", type: "single_line_text_field", value: savingsValue },
             { ownerId: variantId, namespace: "custom", key: "standard_retail_price", type: "number_decimal", value: String(standardPrice) }
           );
         }

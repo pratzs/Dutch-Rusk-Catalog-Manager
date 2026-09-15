@@ -16,9 +16,14 @@ const OTHER_PL = "gid://shopify/PriceList/999";
 const shortPl = (gid) => gid.slice(gid.lastIndexOf("/") + 1);
 
 /** Build one cart line. `retail` is the price AFTER the cart transform raised it. */
-function line(id, variantId, quantity, retail, catalog, { standardRetail = retail } = {}) {
-  // custom.catalog_prices_v2 shape: "|priceListId:price|"
-  const compact = catalog === null ? "" : `|${shortPl(PL)}:${catalog}|`;
+function line(id, variantId, quantity, retail, catalog, { standardRetail = retail, deals = [] } = {}) {
+  // custom.catalog_savings shape: "<retail>|<priceListId>:<saving off retail>|"
+  // plus "#dealId,dealId|" when the variant is on a deal.
+  const savingOff = catalog === null ? null : +(retail - catalog).toFixed(2);
+  const compact =
+    `${Number(standardRetail).toFixed(2)}|` +
+    (savingOff !== null && savingOff > 0 ? `${shortPl(PL)}:${savingOff}|` : "") +
+    (deals.length ? `#${deals.join(",")}|` : "");
   return {
     id: `gid://shopify/CartLine/${id}`,
     quantity,
@@ -26,7 +31,7 @@ function line(id, variantId, quantity, retail, catalog, { standardRetail = retai
     merchandise: {
       __typename: "ProductVariant",
       id: `gid://shopify/ProductVariant/${variantId}`,
-      catPrices: { value: compact },
+      catSavings: { value: compact },
     },
   };
 }
@@ -39,6 +44,7 @@ function line(id, variantId, quantity, retail, catalog, { standardRetail = retai
  */
 function forFunction(bundle) {
   const out = {};
+  if (bundle.id !== undefined) out.i = bundle.id;
   if (bundle.buyQty !== undefined) out.b = bundle.buyQty;
   if (bundle.getQty !== undefined) out.g = bundle.getQty;
   if (bundle.overridePct !== undefined) out.o = bundle.overridePct;
@@ -48,13 +54,29 @@ function forFunction(bundle) {
 }
 
 function input(lines, { priceListId = PL, discountPct = "0", bundles = null } = {}) {
+  // Deal membership travels ON the variant now, as ids inside catalog_savings,
+  // because the Function no longer receives the variant id. api.catalog-price-sync
+  // writes those markers from the bundles' variantIds; this mirrors it so each
+  // test can keep declaring bundles the readable way.
+  const tagged = lines.map((l) => {
+    const ids = (bundles ?? [])
+      .filter((b) => (b.variantIds ?? []).includes(l.merchandise.id))
+      .map((b) => b.id);
+    if (!ids.length) return l;
+    const v = l.merchandise.catSavings.value.replace(/#[^|]*\|$/, "");
+    return {
+      ...l,
+      merchandise: { ...l.merchandise, catSavings: { value: `${v}#${ids.join(",")}|` } },
+    };
+  });
+
   return {
     discountNode: bundles ? { bogoBundles: { value: JSON.stringify(bundles.map(forFunction)) } } : {},
     cart: {
       buyerIdentity: priceListId
         ? { purchasingCompany: { company: { priceListId: { value: priceListId }, discountPct: { value: discountPct } } } }
         : {},
-      lines,
+      lines: tagged,
     },
   };
 }
@@ -245,9 +267,19 @@ describe("a deal must not discount a line the transform did not raise", () => {
     expect(out[L(1)]).toEqual([{ qty: 7, unit: 15.0, message: "(undiscounted)" }]);
   });
 
-  test("no catalog price known: the deal still applies to the plain price", () => {
+  test("no catalog discount for this buyer: no deal either, nothing is invented", () => {
+    // Changed deliberately on 16 Sept 2026. The Function no longer receives the
+    // line cost, so it can no longer tell a raised line from an unraised one
+    // per line. It now keys off the same thing the transform does: whether this
+    // buyer's catalog actually discounts the variant.
+    //
+    // A deal product the buyer gets no catalog discount on therefore gets no
+    // deal. No deal variant is in that position today (checked live: 0 of 75),
+    // and erring this way can only ever under-apply a promotion. The opposite
+    // error discounts an already-correct price twice, which is what cost about
+    // $38 on order #1913.
     const lines = [line(1, "A", 7, 20.0, null)];
     const out = pricePerUnit(run(input(lines, { bundles })), lines);
-    expect(out[L(1)].some((t) => t.unit === 0)).toBe(true);
+    expect(out[L(1)]).toEqual([{ qty: 7, unit: 20.0, message: "(undiscounted)" }]);
   });
 });
