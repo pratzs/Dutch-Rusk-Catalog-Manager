@@ -1,4 +1,4 @@
-import prisma from "../db.server";
+import prisma from "../db.server.js";
 
 /**
  * An offline admin access token that is actually valid right now.
@@ -25,7 +25,7 @@ import prisma from "../db.server";
  * @returns {Promise<{ shop: string, accessToken: string, admin: any }>}
  */
 export async function getAdminToken(shop) {
-  const { unauthenticated } = await import("../shopify.server");
+  const { unauthenticated } = await import("../shopify.server.js");
 
   let domain = shop ?? process.env.SHOP_DOMAIN ?? null;
   if (!domain) {
