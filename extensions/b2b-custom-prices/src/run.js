@@ -127,8 +127,14 @@ export function run(input) {
 
   for (let i = 0; i < n; i++) {
     const cartLine = cartLines[i];
+    // No __typename here on purpose. Asking for it cost ~0.4M instructions on
+    // an 80-line cart -- every field in the input query is paid for on every
+    // line, whether or not the code reads it (checked: skipping the READ saves
+    // nothing, the field has to leave the QUERY). A line whose merchandise is
+    // not a ProductVariant simply has no catPrices, so it finds no catalog
+    // price and no discount is emitted for it, which is the same outcome the
+    // old typename check produced.
     const variant = cartLine.merchandise;
-    if (variant.__typename !== "ProductVariant") continue;
 
     // This is the price AFTER the cart transform raised it, i.e. retail --
     // unless the transform stood down, in which case it is already the

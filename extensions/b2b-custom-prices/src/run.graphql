@@ -27,7 +27,6 @@ query RunInput {
         }
       }
       merchandise {
-        __typename
         ... on ProductVariant {
           id
           # Compact "|priceListId:price|..." string written by

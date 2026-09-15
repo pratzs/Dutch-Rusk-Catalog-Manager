@@ -83,12 +83,23 @@ Measured 2026-09-15 against an honest worst case: lines drawn from the heaviest
 live price strings, EVERY line discounted, and every line a DIFFERENT per-unit
 saving so no two discount rows can share an entry.
 
-| lines | instructions | headroom |
+| lines | with `__typename` | without it (current) |
 | --- | --- | --- |
-| 75 | 9.74M | 11.5% |
-| **80** | **10.37M** | **5.7%** |
-| 85 | 11.00M | none |
-| 90 | 11.63M | over |
+| 75 | 9.74M | 9.37M |
+| **80** | 10.37M (5.7%) | **9.98M (9.3% headroom)** |
+| 85 | 11.00M (none) | 10.58M (3.8%) |
+| 90 | 11.63M (over) | 11.15M (over) |
+
+**Every field in the input query is paid for on every cart line, whether or not
+the code reads it.** Dropping `__typename` alone was worth ~0.4M at 80 lines.
+Skipping only the *read* saves nothing — measured: the field has to leave the
+QUERY. That is the single most useful thing to know when this needs more room.
+
+The remaining per-line field that could go is `merchandise.id`, worth another
+~0.36M (85 lines would reach 10.22M, 7.1% headroom). It is only there for BOGO
+variant matching, so removing it means moving deal membership into the price
+string the Function already reads, plus a partial re-sync when deals change.
+That work buys 80 -> 85 and nothing more.
 
 80 is the end of this architecture as it stands. Per-line cost is ~0.125M and is
 structural, so 11M / 0.125M puts the arithmetic ceiling near 88 lines at zero
