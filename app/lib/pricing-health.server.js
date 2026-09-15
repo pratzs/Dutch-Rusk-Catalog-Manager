@@ -26,12 +26,11 @@ const EXPECTED_FUNCTION_ID =
 const WHOLESALE_DISCOUNT_TITLE = "B2B Wholesale Custom Pricing";
 
 async function adminClient() {
-  const { default: prisma } = await import("../db.server");
-  const session = await prisma.session.findFirst({
-    where: { isOnline: false, accessToken: { not: "" } },
-    orderBy: { id: "desc" },
-  });
-  if (!session?.accessToken) throw new Error("no offline session available");
+  // The stored offline token expires hourly, so reading it straight from
+  // Prisma made this check fail every night -- silently, on the one thing
+  // that is supposed to notice pricing breaking. See admin-token.server.js.
+  const { getAdminToken } = await import("./admin-token.server");
+  const session = await getAdminToken();
 
   return async function gql(query, variables = {}) {
     const res = await fetch(`https://${session.shop}/admin/api/${ADMIN_API_VERSION}/graphql.json`, {

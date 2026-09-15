@@ -8,24 +8,17 @@
 //
 // Needs DATABASE_URL, so it can read the shop's offline access token from the
 // same Session table the app uses.
-import { PrismaClient } from "@prisma/client";
 import { runBrandOrder } from "../app/lib/brand-order.server.js";
-
-const prisma = new PrismaClient();
+import { getAdminToken } from "../app/lib/admin-token.server.js";
 
 try {
-  const session = await prisma.session.findFirst({
-    where: { isOnline: false, accessToken: { not: "" } },
-    orderBy: { id: "desc" },
-  });
-  if (!session) {
-    console.error("[brand-order] no offline session in the database, nothing to do");
-    process.exit(1);
-  }
+  // Never read the token straight from Prisma: it expires hourly. See
+  // app/lib/admin-token.server.js.
+  const { shop, accessToken } = await getAdminToken();
 
   const started = Date.now();
-  console.log(`[brand-order] starting for ${session.shop}`);
-  const result = await runBrandOrder(session.shop, session.accessToken);
+  console.log(`[brand-order] starting for ${shop}`);
+  const result = await runBrandOrder(shop, accessToken);
   const mins = ((Date.now() - started) / 60000).toFixed(1);
 
   console.log(
@@ -42,6 +35,4 @@ try {
 } catch (err) {
   console.error("[brand-order] fatal:", err);
   process.exit(1);
-} finally {
-  await prisma.$disconnect();
 }

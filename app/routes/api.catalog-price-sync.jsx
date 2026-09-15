@@ -283,11 +283,17 @@ export async function action({ request }) {
   const body = await request.json().catch(() => ({}));
   let admin, shop;
   if (incomingSecret && incomingSecret === cronSecret) {
-    const { default: prisma } = await import("../db.server");
-    const session = await prisma.session.findFirst({ where: { isOnline: false, accessToken: { not: "" } }, orderBy: { id: "desc" } });
-    if (!session) return Response.json({ error: "No session" }, { status: 500 });
-    shop = session.shop;
-    admin = { graphql: async (query, { variables } = {}) => { const r = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, { method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken }, body: JSON.stringify({ query, variables }) }); return { json: () => r.json() }; } };
+    // The offline token expires hourly, so it must be fetched through the
+    // helper rather than read out of Prisma -- otherwise this runs fine by day
+    // and fails every night. See app/lib/admin-token.server.js.
+    const { getAdminToken } = await import("../lib/admin-token.server");
+    let token;
+    try {
+      ({ shop, accessToken: token } = await getAdminToken());
+    } catch (e) {
+      return Response.json({ error: `No admin token: ${e.message}` }, { status: 500 });
+    }
+    admin = { graphql: async (query, { variables } = {}) => { const r = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, { method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token }, body: JSON.stringify({ query, variables }) }); return { json: () => r.json() }; } };
   } else {
     const auth = await authenticate.admin(request);
     admin = auth.admin;

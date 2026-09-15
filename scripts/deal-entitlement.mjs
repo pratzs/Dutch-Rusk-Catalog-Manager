@@ -14,25 +14,19 @@
 // so npx took the tail as extra arguments to `prisma generate`, generated the
 // client and exited 0. Prisma's output in the log looked like progress. With a
 // start line, output that stops after Prisma is obviously wrong.
-import { PrismaClient } from "@prisma/client";
 import { adminGql, syncDealLocations } from "../app/lib/brand-order.server.js";
+import { getAdminToken } from "../app/lib/admin-token.server.js";
 
-const prisma = new PrismaClient();
 
 console.log("[deal-entitlement] starting");
 
 try {
-  const session = await prisma.session.findFirst({
-    where: { isOnline: false, accessToken: { not: "" } },
-    orderBy: { id: "desc" },
-  });
-  if (!session) {
-    console.error("[deal-entitlement] no offline session in the database, nothing to do");
-    process.exit(1);
-  }
+  // Never read the token straight from Prisma: it expires hourly. See
+  // app/lib/admin-token.server.js for what that used to do to this job.
+  const { shop, accessToken } = await getAdminToken();
 
   const started = Date.now();
-  const result = await syncDealLocations(adminGql(session.shop, session.accessToken));
+  const result = await syncDealLocations(adminGql(shop, accessToken));
   const secs = ((Date.now() - started) / 1000).toFixed(1);
 
   if (result.dealLocations === null) {
@@ -45,6 +39,4 @@ try {
 } catch (err) {
   console.error("[deal-entitlement] fatal:", err);
   process.exit(1);
-} finally {
-  await prisma.$disconnect();
 }
