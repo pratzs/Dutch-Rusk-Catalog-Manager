@@ -77,39 +77,76 @@ transform raised, and the transform's guard has always stood down below this
 size, so a cart that big gets no deal today either **and** no discount rows.
 Skipping the deal maths is what pays for it to get the rows.
 
-**`MAX_LINES_TO_TRANSFORM` = 80** (`b2b-price-transformer/src/run.js`).
+**`MAX_LINES_TO_TRANSFORM` = 110**, in BOTH Functions, and they must match.
 
-Measured 2026-09-15 against an honest worst case: lines drawn from the heaviest
-live price strings, EVERY line discounted, and every line a DIFFERENT per-unit
-saving so no two discount rows can share an entry.
+The discount Function no longer receives the line cost, so it cannot work out for
+itself whether the transform raised a line. Both read the same cart and apply the
+same limit to the same line count instead, which is deterministic.
 
-| lines | with `__typename` | without it (current) |
-| --- | --- | --- |
-| 75 | 9.74M | 9.37M |
-| **80** | 10.37M (5.7%) | **9.98M (9.3% headroom)** |
-| 85 | 11.00M (none) | 10.58M (3.8%) |
-| 90 | 11.63M (over) | 11.15M (over) |
+Measured 2026-09-16 against an honest worst case: heaviest live data, every line
+discounted, and every line a DIFFERENT saving so no two discount rows can share
+an entry.
 
-**Every field in the input query is paid for on every cart line, whether or not
-the code reads it.** Dropping `__typename` alone was worth ~0.4M at 80 lines.
-Skipping only the *read* saves nothing — measured: the field has to leave the
-QUERY. That is the single most useful thing to know when this needs more room.
+| products | transform | discount (binding) | output (cap 19.53KB) |
+| --- | --- | --- | --- |
+| 105 | 7.94M | 9.50M | 14.29KB |
+| **110** | **8.31M** | **9.94M** | **14.98KB** |
+| 115 | 8.68M | 10.36M | 15.66KB |
 
-The remaining per-line field that could go is `merchandise.id`, worth another
-~0.36M (85 lines would reach 10.22M, 7.1% headroom). It is only there for BOGO
-variant matching, so removing it means moving deal membership into the price
-string the Function already reads, plus a partial re-sync when deals change.
-That work buys 80 -> 85 and nothing more.
+110 leaves about 10% headroom on the binding side. **#1397 at 104 products is the
+largest order this store has ever taken**, so 110 covers all of them.
 
-80 is the end of this architecture as it stands. Per-line cost is ~0.125M and is
-structural, so 11M / 0.125M puts the arithmetic ceiling near 88 lines at zero
-margin. Real carts are cheaper than this bound (#1986's real 82 lines measure
-10.62M and would fit) but the guard cannot be set on the average case, because
-going over bills the buyer FULL RETAIL.
+The deals path, which is the expensive one, measures 8.42M at its own 65-product
+threshold.
 
-Coverage: 378 of the 380 B2B orders placed since 1 June 2026 are 80 lines or
-fewer (99.5%). At the old guard of 45 it was 362 (95.3%). The two that still miss
-out are #1986 (82 lines) and #1397 (104).
+## How it got from 80 to 110: fewer FIELDS, not fewer bytes
+
+**Every field in a Function's input query is charged on EVERY cart line, whether
+or not the code reads it.** Skipping only the read saves nothing; the field has
+to leave the query. That was measured twice and is the single most useful fact
+in this document.
+
+So each variant now carries one string, `custom.catalog_savings`:
+
+```
+27.75|34326937913:5.25|34326774073:4.25|#dragon-2kg-5-1|
+^retail  ^price list : saving off retail      ^deals it is on
+```
+
+- The **saving** is stored rather than the catalog price, which is what lets the
+  discount Function drop the line cost entirely: the amount it takes off IS the
+  saving.
+- **Deal membership** rides in the same string because the Function no longer
+  receives the variant id it used to match on. `api.catalog-price-sync` writes
+  those markers from the same config the BOGO admin page writes, so **editing a
+  deal needs a sync to follow it**.
+
+That takes the discount Function from five fields per line to three, and the
+transform to two. Per-line cost fell from 0.125M to 0.076M.
+
+Two things found while building it:
+
+- **Above `MAX_LINES_FOR_DEALS` no deal can apply**, so allocating the per-line
+  arrays the deal logic needs was pure waste on exactly the big carts the guard
+  exists for. A single-pass fast path saves ~1.7M at 115 products.
+- **Deal money is computed in whole cents.** The override lands on an exact half
+  cent for some prices (13.85 at 10% is 1.385) and comparing floats there rounded
+  the opposite way to the old code on 3 of 440 real orders, worth 3 to 4 cents
+  each. Integers cannot drift.
+
+A deal now applies only where the buyer's catalog actually discounts the variant.
+That is the same protection the old per-line check gave, and erring this way can
+only under-apply a promotion, never overcharge.
+
+## How this was proven before it went live
+
+- 23 unit tests pinning every money rule as a final per-unit price
+- **All 440 real B2B orders replayed through both generations end to end: 440 of
+  440 priced identically, no order total moved by a cent, 2 orders gained
+  discount rows, none lost any**
+- **2,701 of 2,701** discounted variants verified: retail, every saving and every
+  deal marker agreeing exactly with the live price data, before the Functions
+  were deployed
 
 ## There is a structural ceiling, and it is not far above the guard
 
