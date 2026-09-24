@@ -586,18 +586,7 @@ export const action = async ({ request }) => {
           orderName,
           customerName,
           companyName,
-          lineItems: lineItems.map((li) => {
-            const details = detailsByVariantId[String(li.variant_id)] || {};
-            const originalPrice = parseFloat(details.originalPrice ?? "0");
-            return {
-              title: li.title,
-              sku: li.sku,
-              quantity: li.quantity,
-              price: li.price,
-              originalPrice: originalPrice > parseFloat(li.price ?? "0") ? originalPrice : null,
-              imageUrl: details.imageUrl || null,
-            };
-          }),
+          lineItems: (await import("../lib/rep-line-items.server")).repEmailLineItems(lineItems, detailsByVariantId),
           subtotal: order.subtotal_price ?? order.total_price,
           currency: order.currency,
           poNumber: order.po_number,

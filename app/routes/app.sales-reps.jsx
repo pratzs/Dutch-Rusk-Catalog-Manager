@@ -77,7 +77,7 @@ export async function action({ request }) {
                   sku
                   quantity
                   originalUnitPriceSet { shopMoney { amount currencyCode } }
-                  discountedUnitPriceSet { shopMoney { amount currencyCode } }
+                  discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount currencyCode } }
                   image { url }
                 }
               }
@@ -108,7 +108,7 @@ export async function action({ request }) {
           title: li.title,
           sku: li.sku,
           quantity: li.quantity,
-          price: li.discountedUnitPriceSet?.shopMoney?.amount,
+          price: li.discountedUnitPriceAfterAllDiscountsSet?.shopMoney?.amount,
           originalPrice: li.originalUnitPriceSet?.shopMoney?.amount,
           imageUrl: li.image?.url || null,
         })),
