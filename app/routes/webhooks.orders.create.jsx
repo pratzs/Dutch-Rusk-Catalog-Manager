@@ -353,6 +353,12 @@ export const action = async ({ request }) => {
   }
 
   try {
+    // The discount notes run in their own function so that bailing out of
+    // them (no saving on the order, or a webhook retry) only ends THIS step.
+    // They used to `return new Response()` from the whole handler, which
+    // silently skipped the sales rep email below for every order without a
+    // catalog saving. That is how #2242 (25 Sept) went out with no rep email.
+    await (async () => {
     // ── Step 1: Fetch retail price (compareAtPrice or metafield) for each variant ──
     const variantRes = await admin.graphql(
       `query GetVariantRetailPrices($ids: [ID!]!) {
@@ -434,7 +440,7 @@ export const action = async ({ request }) => {
 
     // Nothing to do — no B2B catalog discounts on this order
     if (discountNotes.length === 0) {
-      return new Response("OK", { status: 200 });
+      return;
     }
 
     const orderId = `gid://shopify/Order/${order.id}`;
@@ -460,7 +466,7 @@ export const action = async ({ request }) => {
 
     if (alreadyProcessed) {
       console.log(`[orders/create] ${orderName}: already has B2B discount notes, skipping (likely a webhook retry).`);
-      return new Response("OK", { status: 200 });
+      return;
     }
 
     // ── Step 4: Write order note attributes (informational only) ───────────
@@ -500,6 +506,7 @@ export const action = async ({ request }) => {
       console.log(`[orders/create] ${orderName}: wrote ${discountNotes.length} B2B discount note(s).`);
     }
 
+    })();
   } catch (err) {
     // Log but always return 200 — a non-200 causes Shopify to retry 19 times
     console.error(`[orders/create] Unhandled error for order ${order?.id}:`, err);
