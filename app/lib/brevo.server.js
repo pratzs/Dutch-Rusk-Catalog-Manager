@@ -160,6 +160,9 @@ export async function sendSalesRepOrderNotification({
   const noteText = note?.trim() || "None";
 
   const fmt = (n) => `${currency ?? ""} ${Number(n ?? 0).toFixed(2)}`.trim();
+  // In the HTML, NZD shows as "$226.80" like the order screen. "NZD 226.80"
+  // wrapped onto two lines in the narrow price column.
+  const money = (n) => (!currency || currency === "NZD" ? `${Number(n ?? 0).toFixed(2)}` : `${currency}&nbsp;${Number(n ?? 0).toFixed(2)}`);
   const greetName = repName || "there";
   const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0668/0861/1129/files/Dutch_Rusk.jpg?v=1785119365";
 
@@ -188,8 +191,8 @@ Dutch Rusk`;
     .map((li) => {
       const hasSaving = li.originalPrice && Number(li.originalPrice) > Number(li.price ?? 0);
       const priceHtml = hasSaving
-        ? `<span style="color:#8c8c8c; text-decoration:line-through; font-weight:normal; font-size:12px; display:block;">${fmt(li.originalPrice)}</span>${fmt(li.price)}`
-        : fmt(li.price);
+        ? `<span style="color:#8c8c8c; text-decoration:line-through; font-weight:normal; font-size:12px; display:block;">${money(li.originalPrice)}</span>${money(li.price)}`
+        : money(li.price);
       return `
                 <tr>
                   <td style="padding:12px 0; border-bottom:1px solid #E8E8EC;" width="56">
@@ -283,7 +286,7 @@ Dutch Rusk`;
                     <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-top:4px;">
                       <tr>
                         <td style="padding:16px 0; text-align:right; font-size:15px; color:#181344;">
-                          <strong>Subtotal: ${fmt(subtotal)}</strong>
+                          <strong>Subtotal: ${money(subtotal)}</strong>
                         </td>
                       </tr>
                     </table>

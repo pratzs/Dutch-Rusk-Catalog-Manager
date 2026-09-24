@@ -563,6 +563,7 @@ export const action = async ({ request }) => {
                 ... on ProductVariant {
                   id
                   image { url }
+                  product { featuredImage { url } }
                   compareAtPrice
                   standardRetail: metafield(namespace: "custom", key: "standard_retail_price") { value }
                 }
@@ -573,7 +574,9 @@ export const action = async ({ request }) => {
           for (const node of detailsJson?.data?.nodes ?? []) {
             if (node?.id) {
               detailsByVariantId[node.id.split("/").pop()] = {
-                imageUrl: node.image?.url ?? null,
+                // Most pack sizes have no image of their own; the photo is on
+                // the product. Without this fallback every line showed the logo.
+                imageUrl: node.image?.url ?? node.product?.featuredImage?.url ?? null,
                 originalPrice: node.standardRetail?.value ?? node.compareAtPrice ?? null,
               };
             }
