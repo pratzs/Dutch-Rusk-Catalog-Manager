@@ -600,6 +600,8 @@ export const action = async ({ request }) => {
           }),
           subtotal: order.subtotal_price ?? order.total_price,
           currency: order.currency,
+          poNumber: order.po_number,
+          note: order.note,
         });
 
         await graphqlJson(

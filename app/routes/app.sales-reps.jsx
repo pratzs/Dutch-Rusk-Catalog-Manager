@@ -68,6 +68,8 @@ export async function action({ request }) {
             nodes {
               id
               name
+              poNumber
+              note
               customer { firstName lastName email }
               lineItems(first: 20) {
                 nodes {
@@ -112,6 +114,8 @@ export async function action({ request }) {
         })),
         subtotal: order.subtotalPriceSet?.shopMoney?.amount,
         currency,
+        poNumber: order.poNumber,
+        note: order.note,
       });
       return { ok: `Sent. Used your real order ${order.name} (${companyName}) as the test data, check ${testEmail}.` };
     } catch (e) {

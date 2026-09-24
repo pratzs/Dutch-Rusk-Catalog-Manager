@@ -135,7 +135,7 @@ Dutch Rusk Team`;
 // the full onboarding template (no hero banner or feature grid) since this
 // is a transactional order alert, not a campaign.
 export async function sendSalesRepOrderNotification({
-  repEmail, repName, orderName, customerName, companyName, lineItems, subtotal, currency,
+  repEmail, repName, orderName, customerName, companyName, lineItems, subtotal, currency, poNumber, note,
 }) {
   const templateId = process.env.BREVO_TEMPLATE_SALES_REP_ORDER;
   const to = { email: repEmail, name: repName || repEmail };
@@ -147,8 +147,17 @@ export async function sendSalesRepOrderNotification({
     line_items: lineItems, // [{ title, sku, quantity, price, originalPrice, imageUrl }]
     subtotal,
     currency,
+    po_number: poNumber || "",
+    note: note || "",
   };
   if (templateId) return sendTemplate({ templateId, to, params, tags: ["dr_sales_rep_order"] });
+
+  // PO number and notes are typed by the customer at checkout, so they are
+  // escaped before going into the HTML. Both rows always show, so a rep can
+  // tell "no PO given" apart from the email having left it out.
+  const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const poText = poNumber?.trim() || "Not given";
+  const noteText = note?.trim() || "None";
 
   const fmt = (n) => `${currency ?? ""} ${Number(n ?? 0).toFixed(2)}`.trim();
   const greetName = repName || "there";
@@ -165,6 +174,8 @@ Good news, ${companyName} just placed an order.
 
 Order: ${orderName}
 Placed by: ${customerName}
+PO number: ${poText}
+Notes: ${noteText}
 
 ${lineItems.map((li) => `  ${li.quantity} x ${li.title}${li.sku ? ` (${li.sku})` : ""}, ${priceLine(li)}`).join("\n")}
 
@@ -246,6 +257,21 @@ Dutch Rusk`;
                     <p style="margin:0; font-size:14px; color:#666670;">
                       Order <strong style="color:#181344;">${orderName}</strong>, placed by ${customerName}
                     </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="mobile-pad" style="padding:16px 40px 0 40px;">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#F4F3F8; border-radius:8px;">
+                      <tr>
+                        <td style="padding:14px 16px 6px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">PO number</td>
+                        <td style="padding:14px 16px 6px 0; font-size:14px; color:${poNumber?.trim() ? "#181344; font-weight:bold" : "#8c8c8c"};" valign="top">${esc(poText)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:6px 16px 14px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">Notes</td>
+                        <td style="padding:6px 16px 14px 0; font-size:14px; line-height:1.5; color:${note?.trim() ? "#333333" : "#8c8c8c"};" valign="top">${esc(noteText).replace(/\r?\n/g, "<br>")}</td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
 
