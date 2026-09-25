@@ -162,7 +162,7 @@ export async function sendSalesRepOrderNotification({
   const fmt = (n) => `${currency ?? ""} ${Number(n ?? 0).toFixed(2)}`.trim();
   // In the HTML, NZD shows as "$226.80" like the order screen. "NZD 226.80"
   // wrapped onto two lines in the narrow price column.
-  const money = (n) => (!currency || currency === "NZD" ? `${Number(n ?? 0).toFixed(2)}` : `${currency}&nbsp;${Number(n ?? 0).toFixed(2)}`);
+  const money = (n) => (!currency || currency === "NZD" ? `$${Number(n ?? 0).toFixed(2)}` : `${currency}&nbsp;${Number(n ?? 0).toFixed(2)}`);
   const greetName = repName || "there";
   const PLACEHOLDER_IMG = "https://cdn.shopify.com/s/files/1/0668/0861/1129/files/Dutch_Rusk.jpg?v=1785119365";
 
