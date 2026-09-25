@@ -246,3 +246,20 @@ model SalesRep {
   @@unique([shop, repCode])
   @@index([shop])
 }
+// One shared cart per store (company location), so a staff member and their
+// manager on different devices see the same cart. Kept here rather than in a
+// Shopify metafield because a metafield read lags a write by a second or two,
+// and "add it, then refresh" has to work straight away. `version` makes every
+// save conditional on the version the device last saw. See
+// app/lib/shared-cart.server.js.
+model SharedCart {
+  id          String   @id @default(cuid())
+  shop        String
+  locationGid String
+  version     Int      @default(0)
+  lines       Json
+  updatedBy   String?
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, locationGid])
+}

@@ -2,12 +2,18 @@
 // manager see the same cart on different devices.
 //
 // Shopify keeps the online store cart in the browser, not the account, so the
-// same login on two devices has two carts. This keeps one copy of the cart on
-// the company location (metafield custom.shared_cart_state) and the theme
-// syncs each browser's cart with it through the app proxy.
+// same login on two devices has two carts. This keeps one copy of the store's
+// cart in our database (SharedCart) and the theme syncs each browser's cart
+// with it through the app proxy.
+//
+// Why the database and not a metafield: a metafield read lags a write by a
+// second or two (measured in the pilot, 25 Sept 2026), and "add it, then ask
+// the manager to refresh" has to work straight away. Postgres returns what was
+// just written, and a save is a single conditional UPDATE on `version`, so two
+// devices saving at once cannot overwrite each other.
 //
 // Nobody is affected unless the feature is switched on for them:
-//   - shop metafield custom.shared_cart_mode: "all" turns it on everywhere,
+//   - shop metafield custom.shared_cart_mode = "all" turns it on everywhere,
 //     anything else (or unset) means pilot only
 //   - company location metafield custom.shared_cart_enabled = true puts that
 //     store in the pilot
@@ -16,7 +22,6 @@
 import { getAdminToken } from "./admin-token.server.js";
 
 export const NS = "custom";
-export const STATE_KEY = "shared_cart_state";
 export const ENABLED_KEY = "shared_cart_enabled";
 export const MODE_KEY = "shared_cart_mode";
 
@@ -24,7 +29,7 @@ const MAX_LINES = 250;
 const MAX_QTY = 9999;
 const MAX_PROPS = 20;
 
-// ── Pure helpers (tested in tests/shared-cart.test.js) ──────────────────────
+// ── Pure helpers (tested in __tests__/shared-cart.test.js) ──────────────────
 
 /**
  * Clean untrusted cart lines from the browser. Anything malformed is dropped,
@@ -60,7 +65,7 @@ export function lineKey(line) {
 /**
  * Merge two carts when both devices changed since they last agreed. Keeps
  * every line from either side and takes the larger quantity where both have
- * it, so nothing anyone added is lost.
+ * it, so nothing anyone added is lost and nothing is ever doubled.
  */
 export function mergeLines(a, b) {
   const byKey = new Map();
@@ -89,23 +94,18 @@ export function emptyState() {
   return { v: 0, lines: [], at: null, by: null };
 }
 
-function parseState(value) {
-  try {
-    const s = JSON.parse(value);
-    return { v: Number(s.v) || 0, lines: sanitizeLines(s.lines), at: s.at || null, by: s.by || null };
-  } catch {
-    return emptyState();
-  }
+function toState(row) {
+  if (!row) return emptyState();
+  return { v: row.version, lines: sanitizeLines(row.lines), at: row.updatedAt?.toISOString?.() ?? null, by: row.updatedBy ?? null };
 }
 
-// ── Shopify I/O ─────────────────────────────────────────────────────────────
+// ── Which store, and is it switched on ──────────────────────────────────────
 
-async function gql(admin, query, variables) {
-  const res = await admin.graphql(query, { variables });
-  const json = await res.json();
-  if (json.errors?.length) throw new Error(`GraphQL: ${JSON.stringify(json.errors).slice(0, 300)}`);
-  return json.data;
-}
+// Devices poll every few seconds, so the customer-to-location lookup (an
+// Admin API call) is cached briefly. A store switched on or off takes effect
+// within a minute.
+const LOCATION_TTL_MS = 60_000;
+const locationCache = new Map();
 
 /**
  * The company location this customer is buying for, and whether the shared
@@ -114,9 +114,12 @@ async function gql(admin, query, variables) {
  * one (`requestedLocationId`) and it must be one of theirs.
  */
 export async function resolveLocation({ shop, customerId, requestedLocationId }) {
+  const cacheKey = `${shop}|${customerId}|${requestedLocationId ?? ""}`;
+  const hit = locationCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < LOCATION_TTL_MS) return hit.value;
+
   const { admin } = await getAdminToken(shop);
-  const data = await gql(
-    admin,
+  const res = await admin.graphql(
     `query SharedCartLocation($id: ID!) {
       shop { mode: metafield(namespace: "${NS}", key: "${MODE_KEY}") { value } }
       customer(id: $id) {
@@ -132,8 +135,11 @@ export async function resolveLocation({ shop, customerId, requestedLocationId })
         }
       }
     }`,
-    { id: `gid://shopify/Customer/${customerId}` }
+    { variables: { id: `gid://shopify/Customer/${customerId}` } }
   );
+  const json = await res.json();
+  if (json.errors?.length) throw new Error(`GraphQL: ${JSON.stringify(json.errors).slice(0, 300)}`);
+  const data = json.data;
   const locations = (data.customer?.companyContactProfiles ?? [])
     .flatMap((p) => p.roleAssignments.nodes.map((r) => r.companyLocation))
     .filter(Boolean);
@@ -143,51 +149,53 @@ export async function resolveLocation({ shop, customerId, requestedLocationId })
   } else if (locations.length === 1) {
     location = locations[0];
   }
-  if (!location) return { admin, location: null, enabled: false };
-  const enabled = data.shop?.mode?.value === "all" || location.enabled?.value === "true";
-  return { admin, location, enabled };
+  const enabled = Boolean(location) && (data.shop?.mode?.value === "all" || location.enabled?.value === "true");
+  const value = { location, enabled };
+  locationCache.set(cacheKey, { at: Date.now(), value });
+  return value;
 }
 
-export async function readState(admin, locationGid) {
-  const data = await gql(
-    admin,
-    `query SharedCartState($id: ID!) {
-      companyLocation(id: $id) {
-        state: metafield(namespace: "${NS}", key: "${STATE_KEY}") { value compareDigest }
-      }
-    }`,
-    { id: locationGid }
-  );
-  const mf = data.companyLocation?.state;
-  return { state: mf?.value ? parseState(mf.value) : emptyState(), digest: mf?.compareDigest ?? null };
+// ── Storage ─────────────────────────────────────────────────────────────────
+
+async function db() {
+  return (await import("../db.server.js")).default;
+}
+
+export async function readState(shop, locationGid) {
+  const prisma = await db();
+  const row = await prisma.sharedCart.findUnique({ where: { shop_locationGid: { shop, locationGid } } });
+  return toState(row);
 }
 
 /**
- * Write the next version, guarded by compareDigest so two devices saving at
- * the same moment cannot silently overwrite each other. Returns
- * { ok: true, state } or { ok: false, conflict: true } when someone else won.
+ * Save the next version, only if the store is still on `baseVersion`.
+ * Returns { ok: true, state } or { ok: false, state } with the current state
+ * when another device saved first.
  */
-export async function writeState(admin, locationGid, { lines, by }, digest, currentVersion) {
-  const next = { v: currentVersion + 1, lines, at: new Date().toISOString(), by: by ?? null };
-  const input = { ownerId: locationGid, namespace: NS, key: STATE_KEY, type: "json", value: JSON.stringify(next) };
-  if (digest) input.compareDigest = digest;
-  const data = await gql(
-    admin,
-    `mutation SharedCartWrite($mf: [MetafieldsSetInput!]!) {
-      metafieldsSet(metafields: $mf) { userErrors { field message code } }
-    }`,
-    { mf: [input] }
-  );
-  const errs = data.metafieldsSet?.userErrors ?? [];
-  if (errs.some((e) => e.code === "STALE_OBJECT" || /digest|stale/i.test(e.message))) return { ok: false, conflict: true };
-  if (errs.length) throw new Error(`metafieldsSet: ${JSON.stringify(errs)}`);
-  return { ok: true, state: next };
+export async function writeState(shop, locationGid, { lines, by }, baseVersion) {
+  const prisma = await db();
+  if (baseVersion === 0) {
+    try {
+      const row = await prisma.sharedCart.create({ data: { shop, locationGid, version: 1, lines, updatedBy: by ?? null } });
+      return { ok: true, state: toState(row) };
+    } catch (err) {
+      // P2002: the row already exists, so someone else saved first. Fall
+      // through to the conditional update, which will report the conflict.
+      if (err?.code !== "P2002") throw err;
+    }
+  }
+  const { count } = await prisma.sharedCart.updateMany({
+    where: { shop, locationGid, version: baseVersion },
+    data: { version: { increment: 1 }, lines, updatedBy: by ?? null },
+  });
+  const state = await readState(shop, locationGid);
+  return { ok: count === 1, state };
 }
 
 /** Called from orders/create: empty the store's shared cart once it has been ordered. */
-export async function clearAfterOrder({ admin, locationGid, orderCreatedAt, orderName }) {
-  const { state, digest } = await readState(admin, locationGid);
+export async function clearAfterOrder({ shop, locationGid, orderCreatedAt, orderName }) {
+  const state = await readState(shop, locationGid);
   if (!shouldClearAfterOrder(state, orderCreatedAt)) return false;
-  const res = await writeState(admin, locationGid, { lines: [], by: `order ${orderName}` }, digest, state.v);
+  const res = await writeState(shop, locationGid, { lines: [], by: `order ${orderName}` }, state.v);
   return res.ok;
 }

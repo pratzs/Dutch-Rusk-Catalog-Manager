@@ -641,7 +641,7 @@ export const action = async ({ request }) => {
     if (locationId) {
       const { clearAfterOrder } = await import("../lib/shared-cart.server");
       const locationGid = String(locationId).startsWith("gid://") ? String(locationId) : `gid://shopify/CompanyLocation/${locationId}`;
-      const cleared = await clearAfterOrder({ admin, locationGid, orderCreatedAt: order.created_at, orderName });
+      const cleared = await clearAfterOrder({ shop, locationGid, orderCreatedAt: order.created_at, orderName });
       if (cleared) console.log(`[orders/create] ${orderName}: cleared the store's shared cart.`);
     }
   } catch (err) {
