@@ -52,7 +52,14 @@ export const action = async ({ request }) => {
     if (!body || !Number.isInteger(body.baseVersion)) return json({ error: "bad_request" }, 400);
     const lines = sanitizeLines(body.lines);
 
-    const { state, digest } = await readState(ctx.admin, ctx.location.id);
+    // Shopify can take a second or two to return a value that was just
+    // written. A browser quoting a version NEWER than what we read means our
+    // read is stale, not that the browser is wrong, so read again first.
+    let { state, digest } = await readState(ctx.admin, ctx.location.id);
+    for (let i = 0; i < 4 && body.baseVersion > state.v; i++) {
+      await new Promise((r) => setTimeout(r, 700));
+      ({ state, digest } = await readState(ctx.admin, ctx.location.id));
+    }
     if (body.baseVersion !== state.v) return json({ conflict: true, ...state }, 409);
 
     const res = await writeState(ctx.admin, ctx.location.id, { lines, by: `customer ${ctx.customerId}` }, digest, state.v);
