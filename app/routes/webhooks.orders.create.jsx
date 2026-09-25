@@ -630,5 +630,23 @@ export const action = async ({ request }) => {
     console.error(`[orders/create] Sales rep notification failed for order ${order?.id}:`, err);
   }
 
+  // ── Shared cart ──────────────────────────────────────────────────────────
+  // The store's shared cart (see app/lib/shared-cart.server.js) is emptied
+  // once it has been ordered, or the other device would bring the ordered
+  // items straight back. Only when nobody edited it after the order was
+  // placed, and a no-op for stores that have never used it. Last, in its own
+  // try/catch, so it can never affect anything above.
+  try {
+    const locationId = order?.purchasing_entity?.company_location?.id ?? order?.company_location_id ?? null;
+    if (locationId) {
+      const { clearAfterOrder } = await import("../lib/shared-cart.server");
+      const locationGid = String(locationId).startsWith("gid://") ? String(locationId) : `gid://shopify/CompanyLocation/${locationId}`;
+      const cleared = await clearAfterOrder({ admin, locationGid, orderCreatedAt: order.created_at, orderName });
+      if (cleared) console.log(`[orders/create] ${orderName}: cleared the store's shared cart.`);
+    }
+  } catch (err) {
+    console.error(`[orders/create] ${orderName}: shared cart clear failed —`, err?.message ?? err);
+  }
+
   return new Response("OK", { status: 200 });
 };
