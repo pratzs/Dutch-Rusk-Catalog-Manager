@@ -1,0 +1,4 @@
+{
+  "name": "Wholesale accounts only",
+  "description": "Blocks website checkout for buyers without a company. POS sales and customers tagged wholesale-checkout-exempt are never blocked."
+}

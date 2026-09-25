@@ -1,0 +1,33 @@
+{
+  "payload": {
+    "export": "cart-validations-generate-run",
+    "target": "cart.validations.generate.run",
+    "input": {
+      "buyerJourney": {
+        "step": "CHECKOUT_INTERACTION"
+      },
+      "cart": {
+        "retailLocation": null,
+        "buyerIdentity": {
+          "purchasingCompany": {
+            "company": {
+              "id": "gid://shopify/Company/1"
+            }
+          },
+          "customer": {
+            "exempt": false
+          }
+        }
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "validationAdd": {
+            "errors": []
+          }
+        }
+      ]
+    }
+  }
+}

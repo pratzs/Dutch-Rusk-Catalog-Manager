@@ -1,0 +1,20 @@
+query CartValidationsGenerateRunInput {
+  buyerJourney {
+    step
+  }
+  cart {
+    retailLocation {
+      id
+    }
+    buyerIdentity {
+      purchasingCompany {
+        company {
+          id
+        }
+      }
+      customer {
+        exempt: hasAnyTag(tags: ["wholesale-checkout-exempt"])
+      }
+    }
+  }
+}

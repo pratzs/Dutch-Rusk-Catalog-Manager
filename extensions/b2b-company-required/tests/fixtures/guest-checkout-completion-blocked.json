@@ -1,0 +1,32 @@
+{
+  "payload": {
+    "export": "cart-validations-generate-run",
+    "target": "cart.validations.generate.run",
+    "input": {
+      "buyerJourney": {
+        "step": "CHECKOUT_COMPLETION"
+      },
+      "cart": {
+        "retailLocation": null,
+        "buyerIdentity": {
+          "purchasingCompany": null,
+          "customer": null
+        }
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "validationAdd": {
+            "errors": [
+              {
+                "message": "Ordering is for Dutch Rusk wholesale accounts. Please log in with your business account, or contact admin@dutchrusk.co.nz or 03 547 7809 to set one up.",
+                "target": "$.cart"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
