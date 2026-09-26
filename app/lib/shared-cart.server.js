@@ -90,6 +90,16 @@ export function shouldClearAfterOrder(state, orderCreatedAt) {
   return edited <= ordered;
 }
 
+/**
+ * Only an order placed through the online store checkout came from a shared
+ * cart. A draft order a rep keys in for the same store must never empty the
+ * cart the customer is building (drafts #2221 and #2241 were placed while
+ * customers could have had carts open).
+ */
+export function isStorefrontOrder(order) {
+  return order?.source_name === "web";
+}
+
 export function emptyState() {
   return { v: 0, lines: [], at: null, by: null };
 }

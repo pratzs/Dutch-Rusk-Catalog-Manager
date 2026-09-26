@@ -634,12 +634,13 @@ export const action = async ({ request }) => {
   // The store's shared cart (see app/lib/shared-cart.server.js) is emptied
   // once it has been ordered, or the other device would bring the ordered
   // items straight back. Only when nobody edited it after the order was
-  // placed, and a no-op for stores that have never used it. Last, in its own
+  // placed, only for online store orders (never a rep's draft order), and a
+  // no-op for stores that have never used it. Last, in its own
   // try/catch, so it can never affect anything above.
   try {
     const locationId = order?.purchasing_entity?.company_location?.id ?? order?.company_location_id ?? null;
-    if (locationId) {
-      const { clearAfterOrder } = await import("../lib/shared-cart.server");
+    const { clearAfterOrder, isStorefrontOrder } = await import("../lib/shared-cart.server");
+    if (locationId && isStorefrontOrder(order)) {
       const locationGid = String(locationId).startsWith("gid://") ? String(locationId) : `gid://shopify/CompanyLocation/${locationId}`;
       const cleared = await clearAfterOrder({ shop, locationGid, orderCreatedAt: order.created_at, orderName });
       if (cleared) console.log(`[orders/create] ${orderName}: cleared the store's shared cart.`);

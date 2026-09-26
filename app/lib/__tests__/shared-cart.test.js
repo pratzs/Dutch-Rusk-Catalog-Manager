@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../admin-token.server.js", () => ({ getAdminToken: vi.fn() }));
 
-const { sanitizeLines, lineKey, mergeLines, shouldClearAfterOrder } = await import("../shared-cart.server.js");
+const { sanitizeLines, lineKey, mergeLines, shouldClearAfterOrder, isStorefrontOrder } = await import("../shared-cart.server.js");
 
 describe("sanitizeLines", () => {
   it("keeps well formed lines", () => {
@@ -71,5 +71,17 @@ describe("shouldClearAfterOrder", () => {
     expect(shouldClearAfterOrder({ lines: [], at: "2026-09-25T01:00:00Z" }, order)).toBe(false);
     expect(shouldClearAfterOrder(null, order)).toBe(false);
     expect(shouldClearAfterOrder({ lines: [{ id: 1, q: 1 }], at: "not a date" }, order)).toBe(false);
+  });
+});
+
+describe("isStorefrontOrder", () => {
+  it("clears only for online store checkouts", () => {
+    expect(isStorefrontOrder({ source_name: "web" })).toBe(true);
+  });
+  it("never for a rep's draft order or anything else", () => {
+    expect(isStorefrontOrder({ source_name: "shopify_draft_order" })).toBe(false);
+    expect(isStorefrontOrder({ source_name: "pos" })).toBe(false);
+    expect(isStorefrontOrder({})).toBe(false);
+    expect(isStorefrontOrder(null)).toBe(false);
   });
 });
