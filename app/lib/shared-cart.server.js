@@ -1,10 +1,15 @@
-// Shared cart per store (company location), so a staff member and their
-// manager see the same cart on different devices.
+// Shared cart per login and store, so a staff member and their manager on
+// the same login see the same cart on different devices.
 //
 // Shopify keeps the online store cart in the browser, not the account, so the
 // same login on two devices has two carts. This keeps one copy of the store's
 // cart in our database (SharedCart) and the theme syncs each browser's cart
 // with it through the app proxy.
+//
+// The key is the company location AND the customer (cartKey). Two different
+// logins at the same store keep separate carts: a bar and a kitchen ordering
+// separately must never see each other's lines. SharedCart.locationGid holds
+// that key.
 //
 // Why the database and not a metafield: a metafield read lags a write by a
 // second or two (measured in the pilot, 25 Sept 2026), and "add it, then ask
@@ -98,6 +103,13 @@ export function shouldClearAfterOrder(state, orderCreatedAt) {
  */
 export function isStorefrontOrder(order) {
   return order?.source_name === "web";
+}
+
+/** Which shared cart: one per customer login per company location. */
+export function cartKey(locationGid, customerId) {
+  const id = String(customerId ?? "").replace("gid://shopify/Customer/", "");
+  if (!locationGid || !/^\d+$/.test(id)) return null;
+  return `${locationGid}|customer/${id}`;
 }
 
 export function emptyState() {
@@ -212,7 +224,8 @@ function announce(shop, locationGid, state) {
 }
 
 /** Called from orders/create: empty the store's shared cart once it has been ordered. */
-export async function clearAfterOrder({ shop, locationGid, orderCreatedAt, orderName }) {
+export async function clearAfterOrder({ shop, key, orderCreatedAt, orderName }) {
+  const locationGid = key;
   const state = await readState(shop, locationGid);
   if (!shouldClearAfterOrder(state, orderCreatedAt)) return false;
   const res = await writeState(shop, locationGid, { lines: [], by: `order ${orderName}` }, state.v);

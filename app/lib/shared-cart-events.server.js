@@ -5,9 +5,10 @@
 // The stream is served straight from this app (not through Shopify's app
 // proxy, which does not stream), so the device first gets a signed,
 // short-lived token through the proxy, where Shopify has already proved who
-// the customer is. The token names one shop and one company location, nothing
-// else. Messages carry that store's new cart (version and lines), which is
-// exactly what the proxied GET would return to the same device.
+// the customer is. The token names one shop and one shared cart (a cartKey:
+// company location plus customer, see shared-cart.server.js), nothing else.
+// "locationGid" below is that key. Messages carry that cart's new version
+// and lines, exactly what the proxied GET would return to the same device.
 //
 // Connections are kept in memory. The app runs as a single instance on
 // Render; if it is ever scaled out this needs a shared channel (Postgres

@@ -631,19 +631,21 @@ export const action = async ({ request }) => {
   }
 
   // ── Shared cart ──────────────────────────────────────────────────────────
-  // The store's shared cart (see app/lib/shared-cart.server.js) is emptied
-  // once it has been ordered, or the other device would bring the ordered
-  // items straight back. Only when nobody edited it after the order was
-  // placed, only for online store orders (never a rep's draft order), and a
-  // no-op for stores that have never used it. Last, in its own
-  // try/catch, so it can never affect anything above.
+  // The customer's shared cart for this store (see
+  // app/lib/shared-cart.server.js) is emptied once it has been ordered, or
+  // their other device would bring the ordered items straight back. Only
+  // when nobody edited it after the order was placed, only for online store
+  // orders (never a rep's draft order), and a no-op for anyone who has never
+  // used it. Last, in its own try/catch, so it can never affect anything
+  // above.
   try {
     const locationId = order?.purchasing_entity?.company_location?.id ?? order?.company_location_id ?? null;
-    const { clearAfterOrder, isStorefrontOrder } = await import("../lib/shared-cart.server");
-    if (locationId && isStorefrontOrder(order)) {
+    const { clearAfterOrder, isStorefrontOrder, cartKey } = await import("../lib/shared-cart.server");
+    if (locationId && order?.customer?.id && isStorefrontOrder(order)) {
       const locationGid = String(locationId).startsWith("gid://") ? String(locationId) : `gid://shopify/CompanyLocation/${locationId}`;
-      const cleared = await clearAfterOrder({ shop, locationGid, orderCreatedAt: order.created_at, orderName });
-      if (cleared) console.log(`[orders/create] ${orderName}: cleared the store's shared cart.`);
+      const key = cartKey(locationGid, order.customer.id);
+      const cleared = key && (await clearAfterOrder({ shop, key, orderCreatedAt: order.created_at, orderName }));
+      if (cleared) console.log(`[orders/create] ${orderName}: cleared the customer's shared cart.`);
     }
   } catch (err) {
     console.error(`[orders/create] ${orderName}: shared cart clear failed —`, err?.message ?? err);

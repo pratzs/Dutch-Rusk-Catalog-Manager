@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../admin-token.server.js", () => ({ getAdminToken: vi.fn() }));
 
-const { sanitizeLines, lineKey, mergeLines, shouldClearAfterOrder, isStorefrontOrder } = await import("../shared-cart.server.js");
+const { sanitizeLines, lineKey, mergeLines, shouldClearAfterOrder, isStorefrontOrder, cartKey } = await import("../shared-cart.server.js");
 
 describe("sanitizeLines", () => {
   it("keeps well formed lines", () => {
@@ -83,5 +83,24 @@ describe("isStorefrontOrder", () => {
     expect(isStorefrontOrder({ source_name: "pos" })).toBe(false);
     expect(isStorefrontOrder({})).toBe(false);
     expect(isStorefrontOrder(null)).toBe(false);
+  });
+});
+
+describe("cartKey", () => {
+  it("is one cart per login per store", () => {
+    const loc = "gid://shopify/CompanyLocation/18246762809";
+    expect(cartKey(loc, "9340090286393")).toBe(loc + "|customer/9340090286393");
+    expect(cartKey(loc, 9340090286393)).toBe(loc + "|customer/9340090286393");
+    expect(cartKey(loc, "gid://shopify/Customer/9340090286393")).toBe(loc + "|customer/9340090286393");
+  });
+  it("keeps two logins at the same store apart", () => {
+    const loc = "gid://shopify/CompanyLocation/1";
+    expect(cartKey(loc, "2")).not.toBe(cartKey(loc, "3"));
+  });
+  it("refuses anything it cannot name exactly", () => {
+    expect(cartKey(null, "2")).toBe(null);
+    expect(cartKey("gid://shopify/CompanyLocation/1", "")).toBe(null);
+    expect(cartKey("gid://shopify/CompanyLocation/1", "abc")).toBe(null);
+    expect(cartKey("gid://shopify/CompanyLocation/1", undefined)).toBe(null);
   });
 });
