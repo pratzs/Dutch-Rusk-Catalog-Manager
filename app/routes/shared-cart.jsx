@@ -39,6 +39,13 @@ export const loader = async ({ request }) => {
     const state = await readState(ctx.shop, ctx.location.id);
     const known = ctx.url.searchParams.get("known");
     if (known !== null && Number(known) === state.v) return json({ enabled: true, v: state.v, unchanged: true });
+    // ?stream=1: also hand out a signed token for the live stream. Only here,
+    // where Shopify has proved who the customer is and which store it is.
+    if (ctx.url.searchParams.get("stream") === "1") {
+      const { makeStreamToken } = await import("../lib/shared-cart-events.server.js");
+      const streamUrl = `${process.env.SHOPIFY_APP_URL}/shared-cart-stream?t=${encodeURIComponent(makeStreamToken(ctx.shop, ctx.location.id))}`;
+      return json({ enabled: true, ...state, streamUrl });
+    }
     return json({ enabled: true, ...state });
   } catch (err) {
     console.error("[shared-cart] GET failed:", err?.message ?? err);
