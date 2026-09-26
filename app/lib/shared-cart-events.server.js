@@ -6,8 +6,8 @@
 // proxy, which does not stream), so the device first gets a signed,
 // short-lived token through the proxy, where Shopify has already proved who
 // the customer is. The token names one shop and one company location, nothing
-// else, and only says "your store's cart changed to version N": the cart
-// itself is still fetched through the proxy.
+// else. Messages carry that store's new cart (version and lines), which is
+// exactly what the proxied GET would return to the same device.
 //
 // Connections are kept in memory. The app runs as a single instance on
 // Render; if it is ever scaled out this needs a shared channel (Postgres
@@ -62,12 +62,12 @@ export function subscribe(key, send) {
   };
 }
 
-/** Tell every open device on this store that the cart is now version v. */
-export function publish(shop, locationGid, v) {
+/** Send every open device on this store its new cart ({ v, lines }). */
+export function publish(shop, locationGid, msg) {
   const set = channels.get(channelKey(shop, locationGid));
   if (!set) return 0;
   for (const send of set) {
-    try { send(v); } catch { /* a dead connection is cleaned up on close */ }
+    try { send(msg); } catch { /* a dead connection is cleaned up on close */ }
   }
   return set.size;
 }

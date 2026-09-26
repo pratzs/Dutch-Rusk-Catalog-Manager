@@ -3,8 +3,9 @@
 // Served straight from the app (not the app proxy, which cannot stream). The
 // token comes from the proxied /apps/dr-account/shared-cart?stream=1 call, so
 // Shopify has already verified the customer and their store before one is
-// issued. Sends only "the cart is now version N"; the cart itself is always
-// fetched through the proxy. See app/lib/shared-cart-events.server.js.
+// issued. Each message is the store's new cart version and its lines, so the
+// device can apply it without another round trip.
+// See app/lib/shared-cart-events.server.js.
 
 import { readStreamToken, subscribe, channelKey } from "../lib/shared-cart-events.server.js";
 
@@ -24,7 +25,7 @@ export const loader = async ({ request }) => {
     start(controller) {
       const write = (text) => controller.enqueue(encoder.encode(text));
       write(": connected\n\nretry: 3000\n\n");
-      unsubscribe = subscribe(channelKey(who.shop, who.locationGid), (v) => write(`data: ${JSON.stringify({ v })}\n\n`));
+      unsubscribe = subscribe(channelKey(who.shop, who.locationGid), (msg) => write(`data: ${JSON.stringify(msg)}\n\n`));
       // Keeps proxies from closing an idle connection.
       ping = setInterval(() => { try { write(": ping\n\n"); } catch { /* closed */ } }, 25000);
       request.signal.addEventListener("abort", () => {

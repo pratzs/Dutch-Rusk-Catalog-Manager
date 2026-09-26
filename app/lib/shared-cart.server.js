@@ -177,7 +177,7 @@ export async function writeState(shop, locationGid, { lines, by }, baseVersion) 
   if (baseVersion === 0) {
     try {
       const row = await prisma.sharedCart.create({ data: { shop, locationGid, version: 1, lines, updatedBy: by ?? null } });
-      announce(shop, locationGid, row.version);
+      announce(shop, locationGid, toState(row));
       return { ok: true, state: toState(row) };
     } catch (err) {
       // P2002: the row already exists, so someone else saved first. Fall
@@ -190,14 +190,14 @@ export async function writeState(shop, locationGid, { lines, by }, baseVersion) 
     data: { version: { increment: 1 }, lines, updatedBy: by ?? null },
   });
   const state = await readState(shop, locationGid);
-  if (count === 1) announce(shop, locationGid, state.v);
+  if (count === 1) announce(shop, locationGid, state);
   return { ok: count === 1, state };
 }
 
 /** Tell the store's open devices straight away. Never allowed to fail a save. */
-function announce(shop, locationGid, v) {
+function announce(shop, locationGid, state) {
   import("./shared-cart-events.server.js")
-    .then((m) => m.publish(shop, locationGid, v))
+    .then((m) => m.publish(shop, locationGid, { v: state.v, lines: state.lines }))
     .catch((err) => console.error("[shared-cart] publish failed:", err?.message ?? err));
 }
 
