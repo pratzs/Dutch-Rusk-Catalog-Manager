@@ -1,7 +1,8 @@
 # Shared cart and store switcher
 
-Built 25 and 26 Sept 2026 from two pieces of customer feedback. **Both are live
-for every company customer since 26 Sept 2026.**
+Built 25 and 26 Sept 2026 from two pieces of customer feedback. **The shared
+cart is live for every company customer since 26 Sept 2026. The store switcher
+was removed on 28 Sept 2026** (section 2 says why and what replaces it).
 
 1. A staff member and their manager use the **same login** on different
    devices and want to see the same cart ("add it, then ask the manager to
@@ -77,6 +78,12 @@ and each browser syncs with it.
    compares its own cart with the last agreed one, so a change it never saw
    a request for still gets saved (found live on 26 Sept: a cart clear the
    observer missed sat unsynced until the next cart action).
+7. Each device remembers whose cart it holds (localStorage `drusk_sc_owner`).
+   Shopify leaves the cart in the browser after logout, so when a different
+   login or store signs in on that device, the browser cart belongs to
+   someone else: the device takes the new login's own saved cart and never
+   merges the leftover lines in (found 28 Sept: store A's items would have
+   landed in store B's cart, and on B's other devices).
 
 The stream token is signed with the app secret, lasts 12 hours, and names one
 shop and one cart. It is only issued through the app proxy, where Shopify has
@@ -124,59 +131,37 @@ next to the app would save a few hundred milliseconds per save.
   shared channel (Postgres LISTEN/NOTIFY); the 4-second checks keep working
   meanwhile.
 - The first time two devices that already had different carts join, their
-  carts are combined (nothing is thrown away).
+  carts are combined (nothing is thrown away). This only applies to a device
+  with no previous login recorded; a device that last held another login's
+  cart takes the new login's saved cart instead.
+- Logged-out visitors do not see the "You have ... in cart" badges (guest
+  safety net in `layout/theme.liquid`), even though Shopify keeps the
+  previous login's cart in the browser.
 - `SharedCart.locationGid` holds the cart key
   `gid://shopify/CompanyLocation/<id>|customer/<id>`, not a bare location.
 
-## 2. Store switcher
+## 2. Store switcher (removed 28 Sept 2026)
 
-`snippets/drusk-store-switcher.liquid` in the theme repo, plus a "Log in to
-another store" link in `snippets/header-drawer.liquid` (phone menu, under
-Account) and `sections/announcement-bar.liquid` (desktop top bar, next to
-Account).
+Live 26 to 28 Sept, then removed at Pratham's request after live testing.
 
-### What the customer sees
+**Why it could not work well:** each store is its own Shopify customer with its
+own login email, shared by that store's staff, and Ostendo maps orders to the
+store by Shopify customer ID. So stores must stay separate customers. Shopify
+holds one login per browser and sends a code on every sign in, so moving to
+another store's login always meant logging out and entering a code. Two
+logins for the same store also looked identical in the list. Customers found
+it confusing.
 
-1. **First time:** "Log in to another store" in the menu or top bar. It logs
-   out, opens sign in, and returns to the same page after the emailed code.
-2. **After that:** a small "Store: <name>" button at the bottom right of every
-   page. Tap it, pick the store (its email is filled in), enter the code.
-3. The x next to a store forgets it on that device.
+**Ruled out:** giving one login access to several stores (Shopify's own store
+picker, `url_to_set_as_current`). No code needed, but the orders would land
+on the wrong customer for Ostendo, and a store login shared by staff would
+give those staff access to the other stores.
 
-Each store keeps its own login, prices, cart and orders. Nothing is merged.
+**What was removed:** `snippets/drusk-store-switcher.liquid` and its two
+renders in `layout/theme.liquid`, and the "Switch store" links in
+`snippets/header-drawer.liquid` and `sections/announcement-bar.liquid`
+(theme commit 8b1a762). Old localStorage keys `drusk_accounts` and
+`drusk_switch` may remain on devices; nothing reads them.
 
-### How it works
-
-- Remembers, on this device only, each company store login used here (email
-  and store name in localStorage `drusk_accounts`, never a password, at most
-  10).
-- A login with no company (sent to /pages/wholesale-account) is never
-  remembered as a store. It still gets the button, labelled "Signed in:", when
-  the device remembers a store, so someone who switched to an account that is
-  not set up can switch back.
-- A switch writes `drusk_switch` (email, return page, time) then logs out.
-  The head part of the snippet sees it on the next guest page and sends them
-  to `/customer_authentication/login?return_to=...&login_hint=<email>`. A
-  switch older than 3 minutes is ignored.
-- Without JavaScript the menu link is a plain log out link.
-- Bottom right because the PushOwl bell and its pop-ups use the bottom left.
-
-### The code on every switch
-
-Shopify sends a code on every sign in to its own login and there is no
-setting to skip it. The only way to switch without a code is to move the
-whole store's login to our own identity provider (the OIDC login designed in
-July 2026 and built into this app, never switched on). That changes every
-customer's login at once and makes our app a single point of failure for
-sign in, so it is a separate project, not a tweak.
-
-### How it was proven (26 Sept 2026)
-
-- 20 logic checks (first and second store, same email in different case,
-  a login with no company, 10-store cap, the menu link with one store
-  remembered, corrupted saved data, the step after logout, abandoned switches).
-- Live: switched from Worthy Oceania to a login with no company and back with
-  one tap each, email filled in both times; the button showed on the setup
-  page; the menu and top bar links checked on phone and desktop; guests see
-  none of it. A full switch between two company stores was not run, because
-  no second company login was available for testing.
+**What can replace it:** our own sign-in (the parked OIDC login in this app)
+with Shopify single sign-on. See `docs/OWN-LOGIN-AND-STORE-SWITCH-PLAN.md`.
