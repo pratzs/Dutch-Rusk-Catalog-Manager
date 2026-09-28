@@ -32,6 +32,14 @@ export async function rememberedStores(request, shop) {
   return ids.map((id) => users.find((u) => u.id === id)).filter(Boolean);
 }
 
+/** This device's list without one store (sign-in with "remember" unticked). */
+export function deviceCookieWithout(request, userId) {
+  const ids = readDeviceUserIds(request).filter((x) => x !== userId);
+  if (!ids.length) return clearDeviceCookie();
+  const val = signCookiePayload({ ids, exp: Math.floor(Date.now() / 1000) + DEVICE_TTL_SEC });
+  return `${DEVICE_COOKIE}=${val}; Path=/oidc; Max-Age=${DEVICE_TTL_SEC}; HttpOnly; Secure; SameSite=Lax`;
+}
+
 export function deviceCookieWith(request, userId) {
   const ids = [userId, ...readDeviceUserIds(request).filter((x) => x !== userId)].slice(0, MAX_STORES);
   const val = signCookiePayload({ ids, exp: Math.floor(Date.now() / 1000) + DEVICE_TTL_SEC });

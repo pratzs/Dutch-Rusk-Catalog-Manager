@@ -51,6 +51,9 @@ html,body{margin:0}
 .dra-storebtn__go{grid-area:go;font-size:15px;font-weight:700;color:#181344;white-space:nowrap}
 .dra-or{display:flex;align-items:center;gap:12px;margin:20px 0;color:#666670;font-size:14px}
 .dra-or::before,.dra-or::after{content:"";flex:1;height:1px;background:#E8E8EC}
+.dra-remember{display:flex;gap:10px;align-items:flex-start;margin:0 0 18px;font-size:15px;color:#333;cursor:pointer}
+.dra-remember input{width:20px;height:20px;margin:2px 0 0;accent-color:#181344;flex:none}
+.dra-remember small{display:block;font-size:13px;color:#666670;margin-top:2px}
 .dra-help{width:100%;max-width:440px;margin:20px 0 0;text-align:center;font-size:14px;line-height:1.6;color:#666670}
 .dra-help a{color:#181344;font-weight:600}
 @media (max-width:480px){.dra-page{padding:20px 12px}.dra-card{padding:24px 20px}.dra-h1{font-size:23px}}

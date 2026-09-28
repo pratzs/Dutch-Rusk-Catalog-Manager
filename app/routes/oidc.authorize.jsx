@@ -79,7 +79,10 @@ async function silentSignIn(request, oidcReq) {
   await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
   const { recordAudit } = await import("../lib/b2b-auth.server");
   await recordAudit({ shop, username: user.username, email: user.email, result: "sso_silent", ip: null, userAgent: request.headers.get("user-agent") || null });
-  return redirect(await issueAuthCode({ user, oidcReq }));
+  // Renew this device's memory on every use, so a store used daily never
+  // falls back to a code 30 days after the last typed sign-in.
+  const { deviceCookieWith } = await import("../lib/oidc-device.server");
+  return redirect(await issueAuthCode({ user, oidcReq }), { headers: { "set-cookie": deviceCookieWith(request, user.id) } });
 }
 
 export const loader = async ({ request }) => {

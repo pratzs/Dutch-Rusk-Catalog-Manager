@@ -34,8 +34,17 @@ export const loader = async ({ request }) => {
   if (!oidcReq) return { expired: true, storefront: storefrontUrl() };
   const { rememberedStores } = await import("../lib/oidc-device.server");
   const remembered = (await rememberedStores(request, shopDomain())).map((u) => ({ id: u.id, store: u.storeDisplayName, email: u.email }));
+  // A switch link names the store (login_hint). If this device cannot switch
+  // silently, say which store they are signing in to.
+  let hintStore = null;
+  if (oidcReq.loginHint) {
+    const { default: prisma } = await import("../db.server");
+    const u = await prisma.b2BUser.findFirst({ where: { shop: shopDomain(), email: String(oidcReq.loginHint).trim().toLowerCase() } });
+    hintStore = u ? u.storeDisplayName : null;
+  }
   return {
     expired: false,
+    hintStore,
     remembered,
     r,
     step: url.searchParams.get("step") || "email",
@@ -53,12 +62,24 @@ async function issueAuthCode(args) {
 
 // After a successful sign-in: the short pending cookie as before, plus this
 // device's list of verified stores (for silent switching later).
-async function signedInHeaders(request, user, writeOidcSessionCookie) {
-  const { deviceCookieWith } = await import("../lib/oidc-device.server");
+// "Remember this store on this device" (ticked by default) decides whether
+// this device may switch back to the store later without a code. Unticked
+// on a shared computer, the store is also taken off this device's list.
+async function signedInHeaders(request, user, writeOidcSessionCookie, remember = true) {
+  const { deviceCookieWith, deviceCookieWithout } = await import("../lib/oidc-device.server");
   const h = new Headers();
   h.append("set-cookie", writeOidcSessionCookie({ userId: user.id, companyLocationGid: user.companyLocationGid }));
-  h.append("set-cookie", deviceCookieWith(request, user.id));
+  h.append("set-cookie", remember ? deviceCookieWith(request, user.id) : deviceCookieWithout(request, user.id));
   return h;
+}
+
+function RememberBox() {
+  return (
+    <label className="dra-remember">
+      <input type="checkbox" name="remember" value="1" defaultChecked />
+      <span>Remember this store on this device<small>Switch back without a code next time. Untick on a shared computer.</small></span>
+    </label>
+  );
 }
 
 
@@ -95,6 +116,7 @@ export const action = async ({ request }) => {
   const userAgent = request.headers.get("user-agent") || null;
   const mode = String(form.get("mode") || "");
   const email = String(form.get("email") || "").trim().toLowerCase();
+  const remember = form.get("remember") === "1";
   const since = new Date(Date.now() - 15 * 60 * 1000);
 
   const sendCode = async (user, purpose = "login") => {
@@ -142,7 +164,7 @@ export const action = async ({ request }) => {
     await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     await auth.recordAudit({ shop, username: user.username, email: user.email, result: "remembered", ip, userAgent });
     const callback = await issueAuthCode({ user, oidcReq });
-    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie) });
+    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie, true) });
   }
 
   if (mode === "forget_device") {
@@ -172,7 +194,7 @@ export const action = async ({ request }) => {
     await prisma.oidcRefreshToken.updateMany({ where: { b2bUserId: user.id, usedAt: null }, data: { usedAt: new Date() } });
     await auth.recordAudit({ shop, username: user.username, email, result: purpose === "reset" ? "password_reset" : "password_set", ip, userAgent });
     const callback = await issueAuthCode({ user, oidcReq });
-    const headers = await signedInHeaders(request, user, writeOidcSessionCookie);
+    const headers = await signedInHeaders(request, user, writeOidcSessionCookie, remember);
     headers.append("set-cookie", clearGrant);
     return redirect(callback, { headers });
   }
@@ -198,7 +220,7 @@ export const action = async ({ request }) => {
     await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     await auth.recordAudit({ shop, username: user.username, email, result: "ok", ip, userAgent });
     const callback = await issueAuthCode({ user, oidcReq });
-    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie) });
+    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie, remember) });
   }
 
   if (mode === "otp_verify") {
@@ -225,7 +247,7 @@ export const action = async ({ request }) => {
     await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     await auth.recordAudit({ shop, username: user.username, email, result: "otp_verified", ip, userAgent });
     const callback = await issueAuthCode({ user, oidcReq });
-    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie) });
+    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie, remember) });
   }
 
   return { error: "Something went wrong. Please enter your email again.", step: "email", email };
@@ -278,6 +300,7 @@ export default function DrSignIn() {
             <label className="dra-label" htmlFor="password2">Type it again</label>
             <input id="password2" name="password2" type="password" className="dra-input" minLength={8} autoComplete="new-password" required />
           </div>
+          <RememberBox />
           <SubmitButton name="mode" value="set_password" busyText="Saving and signing you in...">Save password and sign in</SubmitButton>
         </Form>
       </DrAuthPage>
@@ -300,6 +323,7 @@ export default function DrSignIn() {
             <input id="code" name="code" className="dra-input dra-input--code" inputMode="numeric" autoComplete="one-time-code" required autoFocus onInput={keepDigits} />
             <p className="dra-hint">The code works for 10 minutes.</p>
           </div>
+          <RememberBox />
           <SubmitButton name="mode" value="otp_verify" busyText={purpose === "login" ? "Signing you in..." : "Checking..."}>{purpose === "login" ? "Sign in" : "Next: choose a password"}</SubmitButton>
         </Form>
         <div className="dra-links">
@@ -330,6 +354,7 @@ export default function DrSignIn() {
             {/* eslint-disable-next-line jsx-a11y/no-autofocus -- the only field on this screen */}
             <input id="password" name="password" type="password" className="dra-input" autoComplete="current-password" required autoFocus />
           </div>
+          <RememberBox />
           <SubmitButton name="mode" value="password" busyText="Signing you in...">Sign in</SubmitButton>
         </Form>
         <div className="dra-links">
@@ -352,7 +377,7 @@ export default function DrSignIn() {
 
   const remembered = data.remembered || [];
   return (
-    <DrAuthPage title="Sign in to Dutch Rusk" intro={remembered.length ? "Choose a store you've used on this device, or sign in with another email." : "Wholesale ordering for Dutch Rusk customers. Use the email address for your store."}>
+    <DrAuthPage title={data.hintStore && !act?.error ? `Sign in to ${data.hintStore}` : "Sign in to Dutch Rusk"} intro={data.hintStore && !act?.error ? "This device needs a quick check for this store first. We'll email a 6-digit code, then it switches without one next time." : remembered.length ? "Choose a store you've used on this device, or sign in with another email." : "Wholesale ordering for Dutch Rusk customers. Use the email address for your store."}>
       <Note kind="error">{act?.error}</Note>
       {remembered.length ? (
         <>
