@@ -421,3 +421,6 @@ export default function DrSignIn() {
     </DrAuthPage>
   );
 }
+
+// Branded error page instead of React Router's raw one.
+export { DrAuthErrorBoundary as ErrorBoundary } from "../components/DrAuth";

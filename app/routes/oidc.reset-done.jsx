@@ -15,3 +15,6 @@ export default function Done() {
     </DrAuthPage>
   );
 }
+
+// Branded error page instead of React Router's raw one.
+export { DrAuthErrorBoundary as ErrorBoundary } from "../components/DrAuth";

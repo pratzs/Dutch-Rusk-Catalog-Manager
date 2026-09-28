@@ -7,6 +7,9 @@ import { writeTargetLocationMetafield } from "../lib/storefront-preselect.server
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function jsonError(status, error, description) {
+  // Say why in the log: a bare "POST /oidc/token 400" can't be told apart
+  // from a customer's failed sign-in. Never logs the code or token itself.
+  console.warn(`[oidc.token] ${new Date().toISOString()} refused ${status} ${error}: ${description}`);
   return new Response(JSON.stringify({ error, error_description: description }), {
     status,
     headers: {

@@ -51,6 +51,7 @@ function errorRedirect(redirectUri, error, desc, state) {
 }
 
 function jsonError(error, desc) {
+  console.warn(`[oidc.authorize] ${new Date().toISOString()} refused ${error}: ${desc}`);
   return new Response(JSON.stringify({ error, error_description: desc }), {
     status: 400,
     headers: { "content-type": "application/json" },
@@ -76,9 +77,14 @@ async function silentSignIn(request, oidcReq) {
     where: { shop, email, id: { in: ids }, status: { not: "disabled" } },
   });
   if (!user) return null;
-  await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+  // Bookkeeping in the background: only the lookup above has to finish
+  // before the switch carries on (it waited on three round trips, 825 ms
+  // from far away on 28 Sept).
   const { recordAudit } = await import("../lib/b2b-auth.server");
-  await recordAudit({ shop, username: user.username, email: user.email, result: "sso_silent", ip: null, userAgent: request.headers.get("user-agent") || null });
+  Promise.all([
+    prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }),
+    recordAudit({ shop, username: user.username, email: user.email, result: "sso_silent", ip: null, userAgent: request.headers.get("user-agent") || null }),
+  ]).catch((err) => console.error("[oidc.authorize] silent sign-in bookkeeping failed:", err?.message ?? err));
   // Renew this device's memory on every use, so a store used daily never
   // falls back to a code 30 days after the last typed sign-in.
   const { deviceCookieWith } = await import("../lib/oidc-device.server");
@@ -98,7 +104,14 @@ export const loader = async ({ request }) => {
   if (!parsed.ok) {
     return errorRedirect(url.searchParams.get("redirect_uri"), parsed.error, parsed.desc, url.searchParams.get("state"));
   }
-  const silent = parsed.payload.loginHint ? await silentSignIn(request, parsed.payload) : null;
+  // A failed silent sign-in (database unreachable, say) falls back to the
+  // normal sign-in page rather than an error page.
+  const silent = parsed.payload.loginHint
+    ? await silentSignIn(request, parsed.payload).catch((err) => {
+        console.error("[oidc.authorize] silent sign-in failed, showing the sign-in page:", err?.message ?? err);
+        return null;
+      })
+    : null;
   if (silent) return silent;
   if (parsed.payload.prompt.split(/\s+/).includes("none")) {
     return errorRedirect(parsed.payload.redirectUri, "login_required", "sign in needed", parsed.payload.state);

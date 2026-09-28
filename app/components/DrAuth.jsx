@@ -3,7 +3,7 @@
 // off-white page, navy buttons, and the same help line at the bottom.
 // Tokens follow the Dutch Rusk master email template.
 
-import { useNavigation } from "react-router";
+import { isRouteErrorResponse, useNavigation, useRouteError } from "react-router";
 
 export const DR_PHONE = "03 547 7809"; // non-breaking spaces: never split across lines
 export const DR_EMAIL = "admin@dutchrusk.co.nz";
@@ -83,6 +83,34 @@ export function Note({ kind = "info", children }) {
     <div className={`dra-note dra-note--${kind}`} role={kind === "error" ? "alert" : "status"}>
       {children}
     </div>
+  );
+}
+
+// Error page for every sign-in screen. Without it React Router shows its
+// raw "Application Error" and a stack trace (seen 29 Sept when the phone
+// lost its connection mid sign-in). Never shows technical detail.
+export function DrAuthErrorBoundary() {
+  const error = useRouteError();
+  const offline = error instanceof TypeError || /fetch|network|load failed/i.test(String(error?.message || ""));
+  const notFound = isRouteErrorResponse(error) && error.status === 404;
+  if (!notFound) console.error("[oidc] page error:", error);
+  const title = offline ? "We couldn't connect" : notFound ? "Page not found" : "Something went wrong";
+  const intro = offline
+    ? "Your device couldn't reach the sign-in page. Check your internet connection, then try again."
+    : notFound
+      ? "This sign-in link doesn't work any more. Go back to the shop and sign in again."
+      : "Sorry, sign-in hit a problem on our side. Please try again in a moment.";
+  return (
+    <DrAuthPage title={title} intro={intro}>
+      {notFound ? null : (
+        <button type="button" className="dra-btn dra-btn--primary" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+      )}
+      <a className={`dra-btn dra-btn--${notFound ? "primary" : "secondary"}`} href={storefrontUrl()}>
+        Back to the shop
+      </a>
+    </DrAuthPage>
   );
 }
 
