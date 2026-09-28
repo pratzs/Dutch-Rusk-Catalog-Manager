@@ -6,6 +6,17 @@ import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { startPricingHealthTimer } from "./lib/pricing-health.server";
 
+// Our own sign-in (only where it is configured): keep the database connection
+// and signing key warm, at start-up and every 4 minutes. The first sign-in
+// after a quiet spell took 1.8 s cold against about 0.2 s warm, and Shopify's
+// token exchange gives up after a few seconds.
+if (process.env.OIDC_CLIENT_ID && !globalThis.__drOidcWarm) {
+  globalThis.__drOidcWarm = true;
+  const warm = () => import("./lib/oidc.server").then((m) => m.warmOidc()).catch((err) => console.error("[oidc] warm-up failed:", err?.message ?? err));
+  setTimeout(warm, 3000);
+  setInterval(warm, 4 * 60 * 1000).unref?.();
+}
+
 // Watch the B2B pricing pair (cart transform + wholesale discount) and put it
 // back if either half drops. Started here so it runs once per server process.
 // See lib/pricing-health.server.js for why this matters and how to disable it.

@@ -1,8 +1,12 @@
 import { Form, useActionData, useLoaderData, redirect } from "react-router";
+import { DrAuthPage, Note, SubmitButton, DR_PHONE, storefrontUrl } from "../components/DrAuth";
 
-function shopFromOidcRequest(_reqPayload) {
-  // clientId in Shopify's OIDC flow is store-specific (registered per shop).
-  // For phase 1 we run against one shop; SHOP_DOMAIN env pin the *.myshopify.com host.
+// Dutch Rusk sign-in (our own identity provider). Every store signs in with
+// its store email: either a 6-digit code emailed to it, or a password.
+// Screens: email -> (code | password) -> back to Shopify.
+
+function shopDomain() {
+  // One shop per deployment; SHOP_DOMAIN pins the *.myshopify.com host.
   return process.env.SHOP_DOMAIN || "dutchrusk.myshopify.com";
 }
 
@@ -15,279 +19,380 @@ function clientIp(request) {
   );
 }
 
+const OTP_SENDS_PER_15_MIN = 5;
+const CODE_FAILS_PER_15_MIN = 8;
+
+// Sign-in pages are never cached: a stored copy could show an old page or an old sign-in.
+export const headers = () => ({ "Cache-Control": "no-store" });
+export const meta = () => [{ title: "Sign in | Dutch Rusk" }, { name: "robots", content: "noindex" }];
+
 export const loader = async ({ request }) => {
   const { readOidcRequestPayload } = await import("../lib/oidc-request.server");
-  const oidcReq = readOidcRequestPayload(request);
-  if (!oidcReq) {
-    return new Response("OIDC session missing or expired. Please start the login flow again from your Dutch Rusk storefront.", {
-      status: 400,
-      headers: { "content-type": "text/plain" },
-    });
-  }
   const url = new URL(request.url);
-  const otpEmail = url.searchParams.get("otp_email") || "";
-  const otpUserId = url.searchParams.get("otp_uid") || "";
-  const preselect = url.searchParams.get("email") || oidcReq.loginHint || "";
-  const error = url.searchParams.get("error") || null;
+  const r = url.searchParams.get("r") || "";
+  const oidcReq = readOidcRequestPayload(request, r);
+  if (!oidcReq) return { expired: true, storefront: storefrontUrl() };
+  const { rememberedStores } = await import("../lib/oidc-device.server");
+  const remembered = (await rememberedStores(request, shopDomain())).map((u) => ({ id: u.id, store: u.storeDisplayName, email: u.email }));
   return {
-    prefillEmail: preselect,
-    otpMode: Boolean(otpEmail && otpUserId),
-    otpEmail,
-    otpUserId,
-    error,
+    expired: false,
+    remembered,
+    r,
+    step: url.searchParams.get("step") || "email",
+    email: url.searchParams.get("email") || oidcReq.loginHint || "",
+    uid: url.searchParams.get("uid") || "",
+    sent: url.searchParams.get("sent") === "1",
+    purpose: ["setup", "reset"].includes(url.searchParams.get("purpose")) ? url.searchParams.get("purpose") : "login",
   };
 };
 
-async function issueAuthCode({ user, oidcReq }) {
-  const { randomToken } = await import("../lib/crypto.server");
-  const { default: prisma } = await import("../db.server");
-  const code = randomToken(32);
-  await prisma.oidcAuthCode.create({
-    data: {
-      code,
-      b2bUserId: user.id,
-      customerGid: user.customerGid,
-      companyLocationGid: user.companyLocationGid,
-      clientId: oidcReq.clientId,
-      redirectUri: oidcReq.redirectUri,
-      nonce: oidcReq.nonce || null,
-      scope: oidcReq.scope,
-      codeChallenge: oidcReq.codeChallenge || null,
-      codeChallengeMethod: oidcReq.codeChallengeMethod || null,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-    },
-  });
-  const cb = new URL(oidcReq.redirectUri);
-  cb.searchParams.set("code", code);
-  if (oidcReq.state) cb.searchParams.set("state", oidcReq.state);
-  return cb.toString();
+async function issueAuthCode(args) {
+  const { issueAuthCode: issue } = await import("../lib/oidc-code.server");
+  return issue(args);
 }
 
+// After a successful sign-in: the short pending cookie as before, plus this
+// device's list of verified stores (for silent switching later).
+async function signedInHeaders(request, user, writeOidcSessionCookie) {
+  const { deviceCookieWith } = await import("../lib/oidc-device.server");
+  const h = new Headers();
+  h.append("set-cookie", writeOidcSessionCookie({ userId: user.id, companyLocationGid: user.companyLocationGid }));
+  h.append("set-cookie", deviceCookieWith(request, user.id));
+  return h;
+}
+
+
+// After the emailed code proves who they are, a short signed grant lets
+// them choose a password on the next screen (setting one up, or resetting).
+const GRANT = "dr_pw_grant";
+async function grantCookie(user) {
+  const { signCookiePayload } = await import("../lib/crypto.server");
+  const val = signCookiePayload({ uid: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 600 });
+  return `${GRANT}=${val}; Path=/oidc; Max-Age=600; HttpOnly; Secure; SameSite=Lax`;
+}
+async function readGrant(request) {
+  const [{ verifyCookiePayload }, { readCookieValue }] = await Promise.all([import("../lib/crypto.server"), import("../lib/oidc-request.server")]);
+  const v = readCookieValue(request, GRANT);
+  return v ? verifyCookiePayload(v) : null;
+}
+const clearGrant = `${GRANT}=; Path=/oidc; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+
 export const action = async ({ request }) => {
-  const [{ default: prisma }, { readOidcRequestPayload, writeOidcSessionCookie }, authLib, brevo] = await Promise.all([
+  const [{ default: prisma }, { readOidcRequestPayload, writeOidcSessionCookie }, auth, brevo] = await Promise.all([
     import("../db.server"),
     import("../lib/oidc-request.server"),
     import("../lib/b2b-auth.server"),
     import("../lib/brevo.server"),
   ]);
-  const {
-    findUserByUsername,
-    findUsersByEmail,
-    verifyPassword,
-    recordAudit,
-    isRateLimited,
-    issueOtp,
-    verifyOtp,
-  } = authLib;
-  const { sendLoginOtp } = brevo;
-
-  const oidcReq = readOidcRequestPayload(request);
-  if (!oidcReq) {
-    return new Response("OIDC session expired.", { status: 400 });
-  }
-  const shop = shopFromOidcRequest(oidcReq);
+  const form = await request.formData();
+  const r = String(form.get("r") || "");
+  const oidcReq = readOidcRequestPayload(request, r);
+  if (!oidcReq) return redirect("/oidc/login");
+  // Every screen change keeps this sign-in's id.
+  const q = (params) => "/oidc/login?" + new URLSearchParams({ ...params, r }).toString();
+  const shop = shopDomain();
   const ip = clientIp(request);
   const userAgent = request.headers.get("user-agent") || null;
-  const form = await request.formData();
-  const mode = String(form.get("mode") || "password");
+  const mode = String(form.get("mode") || "");
+  const email = String(form.get("email") || "").trim().toLowerCase();
+  const since = new Date(Date.now() - 15 * 60 * 1000);
 
-  if (mode === "password") {
-    const username = String(form.get("username") || "").trim().toLowerCase();
-    const password = String(form.get("password") || "");
-    if (!username || !password) {
-      return { error: "Enter your username and password." };
+  const sendCode = async (user, purpose = "login") => {
+    const recent = await prisma.b2BLoginAudit.count({ where: { shop, email: user.email, result: "otp_sent", createdAt: { gte: since } } });
+    if (recent >= OTP_SENDS_PER_15_MIN) {
+      await auth.recordAudit({ shop, username: user.username, email: user.email, result: "rate_limited", ip, userAgent });
+      return { error: "We've sent several codes already. Please use the latest one in your email, or wait 15 minutes and try again.", step: "code", email: user.email, uid: user.id, purpose };
     }
-    if (await isRateLimited(shop, username)) {
-      await recordAudit({ shop, username, result: "rate_limited", ip, userAgent });
-      return { error: "Too many failed attempts. Please wait 15 minutes before trying again." };
+    const code = await auth.issueOtp(user.id);
+    await brevo.sendLoginOtp({ email: user.email, firstName: "", storeDisplayName: user.storeDisplayName, username: user.username, code, expiresInMin: 10, purpose });
+    await auth.recordAudit({ shop, username: user.username, email: user.email, result: "otp_sent", ip, userAgent });
+    return redirect(q({ step: "code", email: user.email, uid: user.id, sent: "1", purpose }));
+  };
+
+  if (mode === "start" || mode === "resend") {
+    const method = String(form.get("method") || "code");
+    if (!email || !email.includes("@")) return { error: "Please enter your store's email address.", step: "email", email };
+    const all = await auth.findUsersByEmail(shop, email);
+    const users = all.filter((u) => u.status !== "disabled");
+    if (users.length === 0 && all.length > 0) {
+      await auth.recordAudit({ shop, email, result: "disabled", ip, userAgent });
+      return { error: `Sign-in for ${email} is paused at the moment. Please call Dutch Rusk on ${DR_PHONE} and we'll sort it out.`, step: "email", email };
     }
-    const user = await findUserByUsername(shop, username);
-    if (!user) {
-      await recordAudit({ shop, username, result: "unknown_user", ip, userAgent });
-      return { error: "Invalid username or password." };
+    if (users.length === 0) {
+      await auth.recordAudit({ shop, email, result: "unknown_user", ip, userAgent });
+      return { error: `We can't find a Dutch Rusk account for ${email}. Check it's the email address for your store, or call us on ${DR_PHONE}.`, step: "email", email };
     }
-    if (user.status === "disabled") {
-      await recordAudit({ shop, username, result: "disabled", ip, userAgent });
-      return { error: "This account has been disabled. Contact Dutch Rusk support." };
+    if (method === "password" && mode === "start") {
+      // No password yet: set one up now (code first, then choose it).
+      if (!users[0].passwordHash) return sendCode(users[0], "setup");
+      return redirect(q({ step: "password", email }));
     }
-    if (!user.passwordHash) {
-      await recordAudit({ shop, username, result: "bad_password", ip, userAgent });
-      return { error: "Password not set yet. Check your email for the invite, or use \"Forgot password\"." };
-    }
-    const ok = await verifyPassword(password, user.passwordHash);
-    if (!ok) {
-      await recordAudit({ shop, username, result: "bad_password", ip, userAgent });
-      return { error: "Invalid username or password." };
+    const again = String(form.get("purpose") || "login");
+    return sendCode(users[0], mode === "resend" && ["setup", "reset"].includes(again) ? again : "login");
+  }
+
+  if (mode === "choose") {
+    // One tap on a store this device has already verified: no code, no password.
+    const { readDeviceUserIds } = await import("../lib/oidc-device.server");
+    const uid = String(form.get("uid") || "");
+    const user = readDeviceUserIds(request).includes(uid) ? await prisma.b2BUser.findUnique({ where: { id: uid } }) : null;
+    if (!user || user.shop !== shop || user.status === "disabled") {
+      return { error: "Please sign in to that store again with your email.", step: "email", email: "" };
     }
     await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-    await recordAudit({ shop, username, email: user.email, result: "ok", ip, userAgent });
+    await auth.recordAudit({ shop, username: user.username, email: user.email, result: "remembered", ip, userAgent });
     const callback = await issueAuthCode({ user, oidcReq });
-    const sessionCookie = writeOidcSessionCookie({
-      userId: user.id,
-      companyLocationGid: user.companyLocationGid,
-    });
-    return redirect(callback, {
-      headers: { "set-cookie": sessionCookie },
-    });
+    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie) });
   }
 
-  if (mode === "otp_request") {
-    const email = String(form.get("email") || "").trim().toLowerCase();
-    if (!email) return { error: "Enter your email address." };
-    const users = await findUsersByEmail(shop, email);
-    if (users.length === 0) {
-      await recordAudit({ shop, email, result: "unknown_user", ip, userAgent });
-      return { info: "If that email exists on file, a login code has been sent." };
+  if (mode === "forget_device") {
+    const { clearDeviceCookie } = await import("../lib/oidc-device.server");
+    return redirect(q({ step: "email" }), { headers: { "set-cookie": clearDeviceCookie() } });
+  }
+
+  if (mode === "forgot") {
+    const users = (await auth.findUsersByEmail(shop, email)).filter((u) => u.status !== "disabled");
+    if (users.length === 0) return { error: "Please enter your email again.", step: "email", email };
+    return sendCode(users[0], users[0].passwordHash ? "reset" : "setup");
+  }
+
+  if (mode === "set_password") {
+    const grant = await readGrant(request);
+    const user = grant?.uid ? await prisma.b2BUser.findUnique({ where: { id: grant.uid } }) : null;
+    if (!user || user.shop !== shop || user.email !== email || grant.email !== email || user.status === "disabled") {
+      return { error: "That took a little too long. Please start again.", step: "email", email };
     }
-    if (users.length > 1) {
-      return { multi: users.map((u) => ({ id: u.id, storeDisplayName: u.storeDisplayName, username: u.username })) };
-    }
+    const pw = String(form.get("password") || "");
+    const pw2 = String(form.get("password2") || "");
+    const purpose = String(form.get("purpose") || "setup");
+    if (pw.length < 8) return { error: "Your password needs at least 8 characters.", step: "newpw", email, purpose };
+    if (pw !== pw2) return { error: "The two passwords don't match. Please type them again.", step: "newpw", email, purpose };
+    await prisma.b2BUser.update({ where: { id: user.id }, data: { passwordHash: await auth.hashPassword(pw), status: "active", lastLoginAt: new Date() } });
+    // A new password ends every other signed-in session for this store.
+    await prisma.oidcRefreshToken.updateMany({ where: { b2bUserId: user.id, usedAt: null }, data: { usedAt: new Date() } });
+    await auth.recordAudit({ shop, username: user.username, email, result: purpose === "reset" ? "password_reset" : "password_set", ip, userAgent });
+    const callback = await issueAuthCode({ user, oidcReq });
+    const headers = await signedInHeaders(request, user, writeOidcSessionCookie);
+    headers.append("set-cookie", clearGrant);
+    return redirect(callback, { headers });
+  }
+
+  if (mode === "password") {
+    const password = String(form.get("password") || "");
+    if (!email || !password) return { error: "Please enter your email address and password.", step: "password", email };
+    const users = await auth.findUsersByEmail(shop, email);
     const user = users[0];
-    const code = await issueOtp(user.id);
-    await sendLoginOtp({
-      email: user.email,
-      firstName: (user.storeDisplayName || "").split(" ")[0],
-      storeDisplayName: user.storeDisplayName,
-      username: user.username,
-      code,
-    });
-    await recordAudit({ shop, username: user.username, email: user.email, result: "otp_sent", ip, userAgent });
-    const url = new URL(request.url);
-    url.searchParams.set("otp_email", email);
-    url.searchParams.set("otp_uid", user.id);
-    return redirect(`/oidc/login?otp_email=${encodeURIComponent(email)}&otp_uid=${user.id}`);
-  }
-
-  if (mode === "otp_pick") {
-    const uid = String(form.get("uid") || "");
-    const user = await prisma.b2BUser.findUnique({ where: { id: uid } });
-    if (!user) return { error: "Invalid selection." };
-    const code = await issueOtp(user.id);
-    await sendLoginOtp({
-      email: user.email,
-      firstName: (user.storeDisplayName || "").split(" ")[0],
-      storeDisplayName: user.storeDisplayName,
-      username: user.username,
-      code,
-    });
-    await recordAudit({ shop, username: user.username, email: user.email, result: "otp_sent", ip, userAgent });
-    return redirect(`/oidc/login?otp_email=${encodeURIComponent(user.email)}&otp_uid=${user.id}`);
+    if (user && (await auth.isRateLimited(shop, user.username))) {
+      await auth.recordAudit({ shop, username: user.username, email, result: "rate_limited", ip, userAgent });
+      return { error: "Too many attempts. Please wait 15 minutes, or email yourself a sign-in code instead.", step: "password", email };
+    }
+    if (!user || user.status === "disabled") {
+      await auth.recordAudit({ shop, email, result: "unknown_user", ip, userAgent });
+      return { error: "That email and password don't match. Try again, or email yourself a sign-in code.", step: "password", email };
+    }
+    if (!user.passwordHash) return sendCode(user, "setup");
+    if (!(await auth.verifyPassword(password, user.passwordHash))) {
+      await auth.recordAudit({ shop, username: user.username, email, result: "bad_password", ip, userAgent });
+      return { error: "That email and password don't match. Try again, or email yourself a sign-in code.", step: "password", email };
+    }
+    await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    await auth.recordAudit({ shop, username: user.username, email, result: "ok", ip, userAgent });
+    const callback = await issueAuthCode({ user, oidcReq });
+    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie) });
   }
 
   if (mode === "otp_verify") {
     const uid = String(form.get("uid") || "");
-    const code = String(form.get("code") || "").trim();
-    const user = await prisma.b2BUser.findUnique({ where: { id: uid } });
-    if (!user) return { error: "Session expired. Request a new code." };
-    if (user.status === "disabled") {
-      await recordAudit({ shop, username: user.username, email: user.email, result: "disabled", ip, userAgent });
-      return { error: "This account has been disabled." };
+    const code = String(form.get("code") || "").replace(/\D/g, "");
+    const user = uid ? await prisma.b2BUser.findUnique({ where: { id: uid } }) : null;
+    // The code screen names one store; it must be the email shown on it.
+    if (!user || user.shop !== shop || user.email !== email || user.status === "disabled") {
+      return { error: "That sign-in has expired. Please enter your email again.", step: "email", email };
     }
-    const ok = await verifyOtp(user.id, code);
-    if (!ok) {
-      await recordAudit({ shop, username: user.username, email: user.email, result: "otp_bad", ip, userAgent });
-      return { error: "Invalid or expired code.", otpMode: true, otpUserId: uid, otpEmail: user.email };
+    const fails = await prisma.b2BLoginAudit.count({ where: { shop, email, result: "otp_bad", createdAt: { gte: since } } });
+    if (fails >= CODE_FAILS_PER_15_MIN) {
+      return { error: "Too many wrong codes. Please wait 15 minutes, then send a new code.", step: "code", email, uid };
+    }
+    if (code.length !== 6 || !(await auth.verifyOtp(user.id, code))) {
+      await auth.recordAudit({ shop, username: user.username, email, result: "otp_bad", ip, userAgent });
+      return { error: "That code isn't right, or it has expired. Check the latest email from us, or send a new code.", step: "code", email, uid, purpose: String(form.get("purpose") || "login") };
+    }
+    const purpose = String(form.get("purpose") || "login");
+    if (purpose === "setup" || purpose === "reset") {
+      await auth.recordAudit({ shop, username: user.username, email, result: "otp_verified", ip, userAgent });
+      return redirect(q({ step: "newpw", email, purpose }), { headers: { "set-cookie": await grantCookie(user) } });
     }
     await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-    await recordAudit({ shop, username: user.username, email: user.email, result: "otp_verified", ip, userAgent });
+    await auth.recordAudit({ shop, username: user.username, email, result: "otp_verified", ip, userAgent });
     const callback = await issueAuthCode({ user, oidcReq });
-    const sessionCookie = writeOidcSessionCookie({
-      userId: user.id,
-      companyLocationGid: user.companyLocationGid,
-    });
-    return redirect(callback, { headers: { "set-cookie": sessionCookie } });
+    return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie) });
   }
 
-  return { error: "Unknown login mode." };
+  return { error: "Something went wrong. Please enter your email again.", step: "email", email };
 };
 
-export default function OidcLoginPage() {
-  const { prefillEmail, otpMode, otpEmail, otpUserId, error: qsError } = useLoaderData();
-  const actionData = useActionData();
-  const err = actionData?.error || qsError;
-  const info = actionData?.info;
-  const multi = actionData?.multi;
-
-  const showOtpVerify = otpMode || actionData?.otpMode;
-  const otpUidForVerify = actionData?.otpUserId || otpUserId;
-  const otpEmailForVerify = actionData?.otpEmail || otpEmail;
-
-  return (
-    <div style={styles.page}>
-      <div style={styles.card}>
-        <h1 style={styles.h1}>Dutch Rusk B2B — Sign in</h1>
-
-        {err ? <div style={styles.error}>{err}</div> : null}
-        {info ? <div style={styles.info}>{info}</div> : null}
-
-        {multi ? (
-          <Form method="post" style={styles.form}>
-            <input type="hidden" name="mode" value="otp_pick" />
-            <p style={styles.help}>This email is used for multiple stores. Which one do you want to sign in to?</p>
-            {multi.map((m) => (
-              <label key={m.id} style={styles.radioRow}>
-                <input type="radio" name="uid" value={m.id} required />
-                <span><strong>{m.storeDisplayName}</strong> — {m.username}</span>
-              </label>
-            ))}
-            <button type="submit" style={styles.btn}>Send login code</button>
-          </Form>
-        ) : showOtpVerify ? (
-          <Form method="post" style={styles.form}>
-            <input type="hidden" name="mode" value="otp_verify" />
-            <input type="hidden" name="uid" value={otpUidForVerify} />
-            <p style={styles.help}>We sent a 6-digit code to <strong>{otpEmailForVerify}</strong>.</p>
-            <label style={styles.label} htmlFor="otp-code">Enter code</label>
-            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- intentional UX, see oidc.setup.$token.jsx */}
-            <input id="otp-code" name="code" required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} style={styles.input} autoFocus />
-            <button type="submit" style={styles.btn}>Verify code</button>
-            <a href="/oidc/login" style={styles.linkSmall}>Back</a>
-          </Form>
-        ) : (
-          <>
-            <details open style={styles.details}>
-              <summary style={styles.summary}>Username + Password</summary>
-              <Form method="post" style={styles.form}>
-                <input type="hidden" name="mode" value="password" />
-                <label style={styles.label} htmlFor="password-username">Username</label>
-                {/* eslint-disable-next-line jsx-a11y/no-autofocus -- intentional UX, see oidc.setup.$token.jsx */}
-                <input id="password-username" name="username" required autoComplete="username" style={styles.input} autoFocus />
-                <label style={styles.label} htmlFor="password-password">Password</label>
-                <input id="password-password" name="password" type="password" required autoComplete="current-password" style={styles.input} />
-                <button type="submit" style={styles.btn}>Sign in</button>
-                <a href="/oidc/forgot" style={styles.linkSmall}>Forgot password?</a>
-              </Form>
-            </details>
-
-            <details style={styles.details}>
-              <summary style={styles.summary}>Sign in with email code instead</summary>
-              <Form method="post" style={styles.form}>
-                <input type="hidden" name="mode" value="otp_request" />
-                <label style={styles.label} htmlFor="otp-email">Email address</label>
-                <input id="otp-email" name="email" type="email" required defaultValue={prefillEmail} autoComplete="email" style={styles.input} />
-                <button type="submit" style={styles.btn}>Send login code</button>
-              </Form>
-            </details>
-          </>
-        )}
-      </div>
-    </div>
-  );
+// Keep only the digits of whatever is typed or pasted ("386 146", "386-146",
+// or the whole line from the email), up to 6. A pasted code with a space or a
+// hidden character used to be cut short by a length limit and rejected.
+function keepDigits(e) {
+  const el = e.currentTarget;
+  const digits = el.value.replace(/\D/g, "").slice(0, 6);
+  if (el.value !== digits) el.value = digits;
 }
 
-const styles = {
-  page: { minHeight: "100vh", background: "#f6f6f7", display: "grid", placeItems: "center", padding: "24px", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" },
-  card: { width: "100%", maxWidth: 420, background: "white", borderRadius: 12, boxShadow: "0 2px 12px rgba(0,0,0,0.08)", padding: 32 },
-  h1: { fontSize: 20, marginBottom: 16, margin: 0, marginTop: 0, paddingBottom: 16 },
-  form: { display: "flex", flexDirection: "column", gap: 8 },
-  label: { fontSize: 13, fontWeight: 600, marginTop: 8 },
-  input: { padding: "10px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 15 },
-  btn: { marginTop: 16, background: "#111827", color: "white", padding: "10px 14px", border: 0, borderRadius: 6, fontSize: 15, cursor: "pointer" },
-  linkSmall: { fontSize: 13, marginTop: 12, color: "#2563eb", textAlign: "center", textDecoration: "none" },
-  details: { marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 },
-  summary: { fontWeight: 600, cursor: "pointer", padding: "6px 0" },
-  error: { background: "#fef2f2", color: "#991b1b", padding: "10px 12px", borderRadius: 6, fontSize: 14, marginBottom: 12 },
-  info: { background: "#eff6ff", color: "#1e40af", padding: "10px 12px", borderRadius: 6, fontSize: 14, marginBottom: 12 },
-  help: { fontSize: 14, color: "#374151", margin: "0 0 4px" },
-  radioRow: { display: "flex", gap: 8, alignItems: "center", padding: "6px 0", fontSize: 14 },
-};
+export default function DrSignIn() {
+  const data = useLoaderData();
+  const act = useActionData();
+
+  if (data.expired) {
+    return (
+      <DrAuthPage title="Let's try that again" intro="This sign-in page was open for a while, so it has timed out. One tap starts it again.">
+        <a className="dra-btn dra-btn--primary" href={`${data.storefront}/customer_authentication/login?return_to=%2F`}>Sign in again</a>
+      </DrAuthPage>
+    );
+  }
+
+  const step = act?.step || data.step;
+  const email = act?.email ?? data.email;
+  const uid = act?.uid || data.uid;
+  const purpose = act?.purpose || data.purpose || "login";
+  const heading = { login: "Check your email", setup: "Set up your password", reset: "Reset your password" }[purpose];
+
+  if (step === "newpw") {
+    return (
+      <DrAuthPage title={purpose === "reset" ? "Choose a new password" : "Choose your password"} intro={<>For <strong>{email}</strong>. You&apos;ll use this with your store&apos;s email address to sign in.</>}>
+        <Note kind="error">{act?.error}</Note>
+        <Form method="post" className="dra-form">
+          <input type="hidden" name="r" value={data.r} />
+          <input type="hidden" name="mode" value="set_password" />
+          <input type="hidden" name="email" value={email} />
+          <input type="hidden" name="purpose" value={purpose} />
+          <input type="email" name="username" value={email} autoComplete="username" readOnly hidden />
+          <div className="dra-field">
+            <label className="dra-label" htmlFor="password">New password</label>
+            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- first field on this screen */}
+            <input id="password" name="password" type="password" className="dra-input" minLength={8} autoComplete="new-password" required autoFocus />
+            <p className="dra-hint">At least 8 characters.</p>
+          </div>
+          <div className="dra-field">
+            <label className="dra-label" htmlFor="password2">Type it again</label>
+            <input id="password2" name="password2" type="password" className="dra-input" minLength={8} autoComplete="new-password" required />
+          </div>
+          <SubmitButton name="mode" value="set_password" busyText="Saving and signing you in...">Save password and sign in</SubmitButton>
+        </Form>
+      </DrAuthPage>
+    );
+  }
+
+  if (step === "code" && uid) {
+    return (
+      <DrAuthPage title={heading} intro={<>{purpose === "login" ? null : <>First, let&apos;s check it&apos;s you. </>}We&apos;ve sent a 6-digit code to <strong>{email}</strong>. It can take a minute to arrive. If you can&apos;t see it, check your junk or spam folder.</>}>
+        <Note kind="error">{act?.error}</Note>
+        <Form method="post" className="dra-form">
+          <input type="hidden" name="r" value={data.r} />
+          <input type="hidden" name="mode" value="otp_verify" />
+          <input type="hidden" name="email" value={email} />
+          <input type="hidden" name="uid" value={uid} />
+          <input type="hidden" name="purpose" value={purpose} />
+          <div className="dra-field">
+            <label className="dra-label" htmlFor="code">6-digit code</label>
+            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- the only field on this screen */}
+            <input id="code" name="code" className="dra-input dra-input--code" inputMode="numeric" autoComplete="one-time-code" required autoFocus onInput={keepDigits} />
+            <p className="dra-hint">The code works for 10 minutes.</p>
+          </div>
+          <SubmitButton name="mode" value="otp_verify" busyText={purpose === "login" ? "Signing you in..." : "Checking..."}>{purpose === "login" ? "Sign in" : "Next: choose a password"}</SubmitButton>
+        </Form>
+        <div className="dra-links">
+          <Form method="post" style={{ margin: 0 }}>
+            <input type="hidden" name="r" value={data.r} />
+            <input type="hidden" name="mode" value="resend" />
+            <input type="hidden" name="email" value={email} />
+            <input type="hidden" name="purpose" value={purpose} />
+            <button type="submit" className="dra-link">Send a new code</button>
+          </Form>
+          <a className="dra-link" href={`/oidc/login?step=email&r=${data.r}`}>Use a different email</a>
+        </div>
+      </DrAuthPage>
+    );
+  }
+
+  if (step === "password") {
+    return (
+      <DrAuthPage title="Enter your password" intro={<>Signing in as <strong>{email}</strong>.</>}>
+        <Note kind="error">{act?.error}</Note>
+        <Form method="post" className="dra-form">
+          <input type="hidden" name="r" value={data.r} />
+          <input type="hidden" name="mode" value="password" />
+          <input type="hidden" name="email" value={email} />
+          <input type="email" name="username" value={email} autoComplete="username" readOnly hidden />
+          <div className="dra-field">
+            <label className="dra-label" htmlFor="password">Password</label>
+            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- the only field on this screen */}
+            <input id="password" name="password" type="password" className="dra-input" autoComplete="current-password" required autoFocus />
+          </div>
+          <SubmitButton name="mode" value="password" busyText="Signing you in...">Sign in</SubmitButton>
+        </Form>
+        <div className="dra-links">
+          <Form method="post" style={{ margin: 0 }}>
+            <input type="hidden" name="r" value={data.r} />
+            <input type="hidden" name="mode" value="forgot" />
+            <input type="hidden" name="email" value={email} />
+            <button type="submit" className="dra-link">Forgotten your password?</button>
+          </Form>
+          <Form method="post" style={{ margin: 0 }}>
+            <input type="hidden" name="r" value={data.r} />
+            <input type="hidden" name="mode" value="resend" />
+            <input type="hidden" name="email" value={email} />
+            <button type="submit" className="dra-link">Email me a code instead</button>
+          </Form>
+        </div>
+      </DrAuthPage>
+    );
+  }
+
+  const remembered = data.remembered || [];
+  return (
+    <DrAuthPage title="Sign in to Dutch Rusk" intro={remembered.length ? "Choose a store you've used on this device, or sign in with another email." : "Wholesale ordering for Dutch Rusk customers. Use the email address for your store."}>
+      <Note kind="error">{act?.error}</Note>
+      {remembered.length ? (
+        <>
+          <div className="dra-stores">
+            {remembered.map((s) => (
+              <Form method="post" key={s.id} className="dra-form">
+                <input type="hidden" name="r" value={data.r} />
+                <input type="hidden" name="mode" value="choose" />
+                <input type="hidden" name="uid" value={s.id} />
+                <button type="submit" className="dra-storebtn">
+                  <span className="dra-storebtn__name">{s.store}</span>
+                  <span className="dra-storebtn__email">{s.email}</span>
+                  <span className="dra-storebtn__go" aria-hidden="true">Continue &rarr;</span>
+                </button>
+              </Form>
+            ))}
+          </div>
+          <p className="dra-or"><span>or sign in with another email</span></p>
+        </>
+      ) : null}
+      <Form method="post" className="dra-form">
+        <input type="hidden" name="r" value={data.r} />
+        <input type="hidden" name="mode" value="start" />
+        <div className="dra-field">
+          <label className="dra-label" htmlFor="email">Store email address</label>
+          {/* eslint-disable-next-line jsx-a11y/no-autofocus -- the only field on this screen */}
+          <input id="email" name="email" type="email" className="dra-input" defaultValue={email} autoComplete="email" inputMode="email" required autoFocus />
+        </div>
+        <SubmitButton name="method" value="code" busyText="Sending your code...">Email me a sign-in code</SubmitButton>
+        <SubmitButton name="method" value="password" variant="secondary" busyText="One moment...">Sign in with a password</SubmitButton>
+      </Form>
+      {remembered.length ? (
+        <div className="dra-links dra-links--center">
+          <Form method="post" style={{ margin: 0 }}>
+            <input type="hidden" name="r" value={data.r} />
+            <input type="hidden" name="mode" value="forget_device" />
+            <button type="submit" className="dra-link">Forget these stores on this device</button>
+          </Form>
+        </div>
+      ) : null}
+    </DrAuthPage>
+  );
+}

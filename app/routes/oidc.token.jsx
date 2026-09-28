@@ -72,9 +72,9 @@ function authenticateClient(request, form) {
   return crypto.timingSafeEqual(a, b);
 }
 
-async function issueRefreshToken({ b2bUserId, clientId, scope }) {
+async function issueRefreshToken({ b2bUserId, clientId, scope, background }) {
   const raw = randomToken(32);
-  await prisma.oidcRefreshToken.create({
+  const save = prisma.oidcRefreshToken.create({
     data: {
       tokenHash: sha256Hex(raw),
       b2bUserId,
@@ -83,24 +83,26 @@ async function issueRefreshToken({ b2bUserId, clientId, scope }) {
       expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
     },
   });
+  if (background) save.catch((err) => console.error("[oidc.token] refresh token save failed:", err?.message ?? err));
+  else await save;
   return raw;
 }
 
-async function tokensForUser({ user, clientId, scope, nonce, includeRefresh, previousRefreshRow }) {
-  const tags = ["b2b-general", user.catalogGroup ? `b2b-${user.catalogGroup.toLowerCase().replace(/\s+/g, "-")}` : null].filter(Boolean);
+async function tokensForUser({ user, clientId, scope, nonce, includeRefresh, previousRefreshRow, background }) {
+  // The refresh token is random; its hashed copy is saved in the background
+  // on a first sign-in (background: true), so the reply never waits on the
+  // database. Shopify only uses it much later.
+  const refreshPromise = includeRefresh ? issueRefreshToken({ b2bUserId: user.id, clientId, scope, background }) : null;
+  // Only who they are: the store's own Shopify customer (sub) and its email.
+  // No name, phone, address or tags: Ostendo owns customer data, and if
+  // "Sync customer data" were ever switched on in Shopify these claims would
+  // overwrite it (store names as first and last names, extra tags).
   const idToken = await signIdToken({
     audience: clientId,
     subject: user.customerGid,
     email: user.email,
     emailVerified: true,
     nonce: nonce || undefined,
-    extraClaims: {
-      given_name: (user.storeDisplayName || "").split(" ").slice(0, -1).join(" ") || null,
-      family_name: (user.storeDisplayName || "").split(" ").slice(-1)[0] || null,
-      "urn:shopify:customer:tags": tags,
-      "urn:dutchrusk:location_gid": user.companyLocationGid,
-      "urn:dutchrusk:username": user.username,
-    },
   });
 
   // Fire-and-forget the storefront pre-select metafield write. Shopify's token
@@ -108,14 +110,18 @@ async function tokensForUser({ user, clientId, scope, nonce, includeRefresh, pre
   // would break login. We don't await this — the metafield lands after the
   // token response is already returned, which is fine because the theme block
   // reads it on the storefront's NEXT page load.
-  writeTargetLocationMetafield({
+  // Off unless OIDC_PRESELECT=on: the old pre-select route never runs (see
+  // docs/OWN-LOGIN-AND-STORE-SWITCH-PLAN.md), and a test store has no app.
+  if (process.env.OIDC_PRESELECT === "on") writeTargetLocationMetafield({
     shop: process.env.SHOP_DOMAIN || "dutchrusk.myshopify.com",
     customerGid: user.customerGid,
     companyLocationGid: user.companyLocationGid,
     username: user.username,
   }).catch((err) => console.error("[oidc.token] pre-select metafield write failed:", err.message));
 
-  const accessToken = randomToken(32);
+  // Signed so /oidc/userinfo can answer for it without storing anything.
+  const { signCookiePayload } = await import("../lib/crypto.server");
+  const accessToken = signCookiePayload({ t: "at", uid: user.id, aud: clientId, exp: Math.floor(Date.now() / 1000) + 3600 });
   const response = {
     access_token: accessToken,
     token_type: "Bearer",
@@ -125,7 +131,7 @@ async function tokensForUser({ user, clientId, scope, nonce, includeRefresh, pre
   };
 
   if (includeRefresh) {
-    response.refresh_token = await issueRefreshToken({ b2bUserId: user.id, clientId, scope });
+    response.refresh_token = await refreshPromise;
     // Consume the old refresh token (single-use rotation) after issuing the new one.
     if (previousRefreshRow) {
       await prisma.oidcRefreshToken.update({
@@ -160,54 +166,54 @@ export const action = async ({ request }) => {
     const redirectUri = String(form.get("redirect_uri") || "");
     const codeVerifier = String(form.get("code_verifier") || "");
 
-    const codeRow = await prisma.oidcAuthCode.findUnique({ where: { code } });
-    if (!codeRow) return jsonError(400, "invalid_grant", "code not found");
-    if (codeRow.consumedAt) return jsonError(400, "invalid_grant", "code already consumed");
-    if (codeRow.expiresAt < new Date()) return jsonError(400, "invalid_grant", "code expired");
-    if (codeRow.redirectUri !== redirectUri) return jsonError(400, "invalid_grant", "redirect_uri mismatch");
-    if (codeRow.clientId !== process.env.OIDC_CLIENT_ID) return jsonError(400, "invalid_grant", "client_id mismatch");
-    if (!verifyCodeChallenge(codeVerifier, codeRow.codeChallenge, codeRow.codeChallengeMethod)) {
-      return jsonError(400, "invalid_grant", "code_verifier mismatch");
-    }
+    const t0 = Date.now();
+    const { readAuthCode, consumeAuthCode } = await import("../lib/oidc-code.server");
+    // Checked from its own signature, no database read (see oidc-code.server.js).
+    const p = readAuthCode(code);
+    if (!p) return jsonError(400, "invalid_grant", "code invalid or expired");
+    if (p.ru !== redirectUri) return jsonError(400, "invalid_grant", "redirect_uri mismatch");
+    if (p.cid !== process.env.OIDC_CLIENT_ID) return jsonError(400, "invalid_grant", "client_id mismatch");
+    if (!verifyCodeChallenge(codeVerifier, p.cc, p.ccm)) return jsonError(400, "invalid_grant", "code_verifier mismatch");
 
-    const user = await prisma.b2BUser.findUnique({ where: { id: codeRow.b2bUserId } });
-    if (!user) return jsonError(400, "invalid_grant", "user not found");
-
-    await prisma.oidcAuthCode.update({
-      where: { id: codeRow.id },
-      data: { consumedAt: new Date() },
-    });
-
-    const payload = await tokensForUser({
-      user,
-      clientId: codeRow.clientId,
-      scope: codeRow.scope,
-      nonce: codeRow.nonce,
-      includeRefresh: true,
-    });
+    const user = { id: p.uid, customerGid: p.sub, email: p.em, username: p.un, storeDisplayName: p.sd, catalogGroup: p.cat, companyLocationGid: p.loc };
+    // Recording the code as used and building the tokens run together; the
+    // tokens are only returned if this was the code's first use.
+    if (!consumeAuthCode(p)) return jsonError(400, "invalid_grant", "code already used");
+    const payload = await tokensForUser({ user, clientId: p.cid, scope: p.sc, nonce: p.n, includeRefresh: true, background: true });
+    console.log(`[oidc.token] ${new Date().toISOString()} code grant in ${Date.now() - t0} ms`);
     return jsonOk(payload);
   }
 
   if (grantType === "refresh_token") {
     const raw = String(form.get("refresh_token") || "");
     if (!raw) return jsonError(400, "invalid_request", "refresh_token required");
-    const row = await prisma.oidcRefreshToken.findUnique({ where: { tokenHash: sha256Hex(raw) } });
-    if (!row) return jsonError(400, "invalid_grant", "refresh_token not found");
-    if (row.usedAt) return jsonError(400, "invalid_grant", "refresh_token already consumed");
-    if (row.expiresAt < new Date()) return jsonError(400, "invalid_grant", "refresh_token expired");
-    if (row.clientId !== process.env.OIDC_CLIENT_ID) return jsonError(400, "invalid_grant", "client_id mismatch");
-
-    const user = await prisma.b2BUser.findUnique({ where: { id: row.b2bUserId } });
-    if (!user) return jsonError(400, "invalid_grant", "user not found");
-    if (user.status === "disabled") return jsonError(400, "invalid_grant", "account disabled");
+    const t0 = Date.now();
+    // One round trip: use up the token (only if unused and unexpired) and read
+    // its account in the same statement. Two refreshes racing with one token:
+    // exactly one gets a row back. Each separate query from far away cost
+    // about 0.45 s (1 to 2 s total on 28 Sept, too close to Shopify's limit).
+    const rows = await prisma.$queryRaw`
+      WITH t AS (
+        UPDATE "OidcRefreshToken" SET "usedAt" = NOW()
+        WHERE "tokenHash" = ${sha256Hex(raw)} AND "usedAt" IS NULL AND "expiresAt" > NOW()
+        RETURNING "b2bUserId", "clientId", "scope"
+      )
+      SELECT u.*, t."clientId" AS "rtClientId", t."scope" AS "rtScope" FROM t JOIN "B2BUser" u ON u."id" = t."b2bUserId"`;
+    const found = rows[0];
+    if (!found) return jsonError(400, "invalid_grant", "refresh_token not found, already used or expired");
+    if (found.rtClientId !== process.env.OIDC_CLIENT_ID) return jsonError(400, "invalid_grant", "client_id mismatch");
+    if (found.status === "disabled") return jsonError(400, "invalid_grant", "account disabled");
+    const user = found;
+    const row = { clientId: found.rtClientId, scope: found.rtScope };
 
     const payload = await tokensForUser({
       user,
       clientId: row.clientId,
       scope: row.scope,
       includeRefresh: true,
-      previousRefreshRow: row,
+      background: true,
     });
+    console.log(`[oidc.token] ${new Date().toISOString()} refresh grant in ${Date.now() - t0} ms`);
     return jsonOk(payload);
   }
 

@@ -109,24 +109,9 @@ export async function sendB2BReset({ email, firstName, storeDisplayName, usernam
   };
   if (templateId) return sendTemplate({ templateId, to, params, tags: ["dr_b2b_reset"] });
 
-  const subject = `Reset your password — ${storeDisplayName} (${username})`;
-  const text = `Hi ${params.first_name},
-
-Someone requested a password reset for:
-  Store:    Dutch Rusk ${storeDisplayName}
-  Username: ${username}
-
-If this was you, click here to set a new password:
-${actionUrl}
-
-This link expires in ${params.expires_in_hours} hours.
-
-If you did not request this, you can ignore this email. The password for
-this account will not change. If you manage other Dutch Rusk stores under
-the same email address, those accounts are NOT affected by this request.
-
-Dutch Rusk Team`;
-  return sendRawFallback({ to, subject, textBody: text, htmlBody: null, tags: ["dr_b2b_reset"] });
+  const { resetEmail } = await import("./auth-email.server.js");
+  const mail = resetEmail({ actionUrl, storeDisplayName, expiresInHours: params.expires_in_hours });
+  return sendRawFallback({ to, subject: mail.subject, textBody: mail.text, htmlBody: mail.html, tags: ["dr_b2b_reset"] });
 }
 
 // Uses the same design system as the canonical Dutch Rusk / Worthy branded
@@ -327,7 +312,7 @@ Dutch Rusk`;
   return sendRawFallback({ to, subject: `New order ${orderName}, ${companyName}`, textBody: text, htmlBody: html, tags: ["dr_sales_rep_order"] });
 }
 
-export async function sendLoginOtp({ email, firstName, storeDisplayName, username, code, expiresInMin }) {
+export async function sendLoginOtp({ email, firstName, storeDisplayName, username, code, expiresInMin, purpose }) {
   const templateId = process.env.BREVO_TEMPLATE_OTP;
   const to = { email, name: firstName || email };
   const params = {
@@ -339,19 +324,9 @@ export async function sendLoginOtp({ email, firstName, storeDisplayName, usernam
   };
   if (templateId) return sendTemplate({ templateId, to, params, tags: ["dr_login_otp"] });
 
-  const subject = `Your Dutch Rusk login code — ${code}`;
-  const text = `Hi ${params.first_name},
-
-Your login code for ${storeDisplayName} (${username}) is:
-
-    ${code}
-
-This code expires in ${params.expires_in_min} minutes.
-
-If you didn't request this, you can ignore this email.
-
-Dutch Rusk Team`;
-  return sendRawFallback({ to, subject, textBody: text, htmlBody: null, tags: ["dr_login_otp"] });
+  const { codeEmail } = await import("./auth-email.server.js");
+  const mail = codeEmail({ code, storeDisplayName, expiresInMin: params.expires_in_min, purpose });
+  return sendRawFallback({ to, subject: mail.subject, textBody: mail.text, htmlBody: mail.html, tags: ["dr_login_otp"] });
 }
 
 /**

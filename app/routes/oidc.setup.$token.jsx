@@ -1,4 +1,5 @@
 import { Form, useActionData, useLoaderData, redirect } from "react-router";
+import { DrAuthPage, Note, SubmitButton, storefrontUrl } from "../components/DrAuth";
 
 async function findTokenRow(rawToken) {
   const { sha256Hex } = await import("../lib/crypto.server");
@@ -7,14 +8,18 @@ async function findTokenRow(rawToken) {
   return await prisma.b2BPasswordResetToken.findUnique({ where: { tokenHash } });
 }
 
+// Sign-in pages are never cached: a stored copy could show an old page or an old sign-in.
+export const headers = () => ({ "Cache-Control": "no-store" });
+export const meta = () => [{ title: "Set your password | Dutch Rusk" }, { name: "robots", content: "noindex" }];
+
 export const loader = async ({ params }) => {
   const { default: prisma } = await import("../db.server");
   const row = await findTokenRow(params.token);
   if (!row || row.usedAt || row.expiresAt < new Date() || row.purpose !== "invite") {
-    return { valid: false, user: null };
+    return { valid: false, user: null, storefront: storefrontUrl() };
   }
   const user = await prisma.b2BUser.findUnique({ where: { id: row.userId } });
-  if (!user) return { valid: false, user: null };
+  if (!user) return { valid: false, user: null, storefront: storefrontUrl() };
   return {
     valid: true,
     user: { username: user.username, storeDisplayName: user.storeDisplayName, email: user.email },
@@ -26,16 +31,16 @@ export const action = async ({ params, request }) => {
   const { hashPassword, consumeToken } = await import("../lib/b2b-auth.server");
   const row = await findTokenRow(params.token);
   if (!row || row.usedAt || row.expiresAt < new Date() || row.purpose !== "invite") {
-    return { error: "This invite link is invalid or has expired." };
+    return { error: "This link has expired. Please ask for a new one." };
   }
   const form = await request.formData();
   const pw = String(form.get("password") || "");
   const pw2 = String(form.get("password2") || "");
-  if (pw.length < 8) return { error: "Password must be at least 8 characters." };
-  if (pw !== pw2) return { error: "Passwords don't match." };
+  if (pw.length < 8) return { error: "Your password needs at least 8 characters." };
+  if (pw !== pw2) return { error: "The two passwords don't match. Please type them again." };
 
   const consumed = await consumeToken(params.token, "invite");
-  if (!consumed) return { error: "This invite link is invalid or has expired." };
+  if (!consumed) return { error: "This link has expired. Please ask for a new one." };
 
   const hash = await hashPassword(pw);
   await prisma.b2BUser.update({
@@ -47,48 +52,32 @@ export const action = async ({ params, request }) => {
 };
 
 export default function SetupPage() {
-  const { valid, user } = useLoaderData();
+  const { valid, user, storefront } = useLoaderData();
   const actionData = useActionData();
   if (!valid) {
     return (
-      <div style={styles.page}>
-        <div style={styles.card}>
-          <h1 style={styles.h1}>Invite link is invalid</h1>
-          <p>The link you used has expired or was already used. Please contact the Dutch Rusk team to receive a new invite.</p>
-        </div>
-      </div>
+      <DrAuthPage title="This link has expired" intro="The link has already been used or is more than a few days old. Ask the Dutch Rusk team to send you a new one, or sign in with an emailed code instead.">
+        <a className="dra-btn dra-btn--primary" href={storefront}>Go to the Dutch Rusk website</a>
+      </DrAuthPage>
     );
   }
   return (
-    <div style={styles.page}>
-      <div style={styles.card}>
-        <h1 style={styles.h1}>Set your Dutch Rusk password</h1>
-        <p style={styles.help}>
-          Store: <strong>{user.storeDisplayName}</strong><br />
-          Username: <strong>{user.username}</strong>
-        </p>
-        {actionData?.error ? <div style={styles.error}>{actionData.error}</div> : null}
-        <Form method="post" style={styles.form}>
-          <label style={styles.label} htmlFor="password">New password (min 8 characters)</label>
-          {/* eslint-disable-next-line jsx-a11y/no-autofocus -- single-field setup form, autofocus is the intended UX */}
-          <input id="password" name="password" type="password" required minLength={8} style={styles.input} autoFocus />
-          <label style={styles.label} htmlFor="password2">Confirm password</label>
-          <input id="password2" name="password2" type="password" required minLength={8} style={styles.input} />
-          <button type="submit" style={styles.btn}>Save password</button>
-        </Form>
-      </div>
-    </div>
+    <DrAuthPage title="Set your password" intro="You'll use this with your store's email address to sign in.">
+      <p className="dra-store">Store: <strong>{user.storeDisplayName}</strong></p>
+      <Note kind="error">{actionData?.error}</Note>
+      <Form method="post" className="dra-form">
+        <div className="dra-field">
+          <label className="dra-label" htmlFor="password">New password</label>
+          {/* eslint-disable-next-line jsx-a11y/no-autofocus -- first field on this screen */}
+          <input id="password" name="password" type="password" className="dra-input" minLength={8} autoComplete="new-password" required autoFocus />
+          <p className="dra-hint">At least 8 characters.</p>
+        </div>
+        <div className="dra-field">
+          <label className="dra-label" htmlFor="password2">Type it again</label>
+          <input id="password2" name="password2" type="password" className="dra-input" minLength={8} autoComplete="new-password" required />
+        </div>
+        <SubmitButton busyText="Saving...">Save password</SubmitButton>
+      </Form>
+    </DrAuthPage>
   );
 }
-
-const styles = {
-  page: { minHeight: "100vh", background: "#f6f6f7", display: "grid", placeItems: "center", padding: 24, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" },
-  card: { width: "100%", maxWidth: 420, background: "white", borderRadius: 12, boxShadow: "0 2px 12px rgba(0,0,0,0.08)", padding: 32 },
-  h1: { fontSize: 20, margin: 0, paddingBottom: 8 },
-  help: { fontSize: 14, color: "#374151" },
-  form: { display: "flex", flexDirection: "column", gap: 8, marginTop: 12 },
-  label: { fontSize: 13, fontWeight: 600, marginTop: 8 },
-  input: { padding: "10px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 15 },
-  btn: { marginTop: 16, background: "#111827", color: "white", padding: "10px 14px", border: 0, borderRadius: 6, fontSize: 15, cursor: "pointer" },
-  error: { background: "#fef2f2", color: "#991b1b", padding: "10px 12px", borderRadius: 6, fontSize: 14 },
-};

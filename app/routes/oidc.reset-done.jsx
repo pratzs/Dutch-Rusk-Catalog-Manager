@@ -1,18 +1,17 @@
-export default function ResetDone() {
+import { DrAuthPage, storefrontUrl } from "../components/DrAuth";
+import { useLoaderData } from "react-router";
+
+// Sign-in pages are never cached: a stored copy could show an old page or an old sign-in.
+export const headers = () => ({ "Cache-Control": "no-store" });
+export const meta = () => [{ title: "Password changed | Dutch Rusk" }, { name: "robots", content: "noindex" }];
+
+export const loader = () => ({ storefront: storefrontUrl() });
+
+export default function Done() {
+  const { storefront } = useLoaderData();
   return (
-    <div style={styles.page}>
-      <div style={styles.card}>
-        <h1 style={styles.h1}>Password updated</h1>
-        <p>Your password has been saved. You can now sign in on the Dutch Rusk storefront with your new password.</p>
-        <a href="https://b2b.dutchrusk.co.nz/account/login" style={styles.btn}>Go to Dutch Rusk</a>
-      </div>
-    </div>
+    <DrAuthPage title="Password changed" intro="Your new password is saved. Sign in with your store's email address and your new password.">
+      <a className="dra-btn dra-btn--primary" href={storefront}>Go to the Dutch Rusk website</a>
+    </DrAuthPage>
   );
 }
-
-const styles = {
-  page: { minHeight: "100vh", background: "#f6f6f7", display: "grid", placeItems: "center", padding: 24, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" },
-  card: { width: "100%", maxWidth: 420, background: "white", borderRadius: 12, boxShadow: "0 2px 12px rgba(0,0,0,0.08)", padding: 32, textAlign: "center" },
-  h1: { fontSize: 20, margin: "0 0 12px 0" },
-  btn: { display: "inline-block", marginTop: 20, background: "#111827", color: "white", padding: "10px 18px", borderRadius: 6, fontSize: 15, textDecoration: "none" },
-};

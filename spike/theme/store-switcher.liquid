@@ -1,0 +1,184 @@
+{%- comment -%}
+  Store switcher for owners with several stores, each with its own login.
+
+  Needs our own sign-in (Dutch Rusk Login) as the store's identity provider:
+  a store this device has already signed in to is switched to silently
+  through Shopify single sign-on, with no code and no password. Every switch
+  signs out first (Shopify ignores a second sign-in straight after another
+  otherwise) and each store stays its own Shopify customer.
+
+  Parts:
+    part: 'head'    after the sign-out, sends the guest page on to sign in as
+                    the chosen store (render straight after <head>)
+    part: 'button'  "Store: <name>" in the header, next to the cart
+    part: 'menu'    "Switch store" item for the phone menu
+    part: 'panel'   the store list, remembering, toast (render before </body>)
+
+  This device remembers the stores it has used in localStorage (dr_stores):
+  email, company and location name only, never a password or code.
+{%- endcomment -%}
+{%- liquid
+  assign sw_brand = brand | default: '#181344'
+  assign sw_company = customer.current_company.name | default: customer.email
+  assign sw_location = customer.current_location.name | default: ''
+-%}
+
+{%- if part == 'head' -%}
+  {%- unless customer -%}
+    <script>
+      (function () {
+        try {
+          var s = JSON.parse(localStorage.getItem('dr_switch') || 'null');
+          if (!s || Date.now() - s.at > 120000) return;
+          localStorage.removeItem('dr_switch');
+          sessionStorage.setItem('dr_switched', s.name || '');
+          var url = '/customer_authentication/login?return_to=' + encodeURIComponent(s.r || '/');
+          if (s.e) url += '&login_hint=' + encodeURIComponent(s.e);
+          window.location.replace(url);
+        } catch (e) {}
+      })();
+    </script>
+  {%- endunless -%}
+
+{%- elsif part == 'button' -%}
+  {%- if customer.b2b? -%}
+    <button type="button" class="drsw-btn link focus-inset" data-drsw-open aria-haspopup="dialog" aria-label="Switch store. Ordering for {{ sw_company | escape }}">
+      <svg class="drsw-btn__icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1.5-5h15L21 9"/><path d="M3 9h18v2a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0V9z"/><path d="M5 13v7h14v-7"/><path d="M10 20v-4h4v4"/></svg>
+      <span class="drsw-btn__text"><span class="drsw-btn__label">Store</span><span class="drsw-btn__name">{{ sw_company | escape }}</span></span>
+      <svg class="drsw-btn__chev" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M5 7l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </button>
+  {%- endif -%}
+
+{%- elsif part == 'menu' -%}
+  {%- if customer.b2b? -%}
+    <li>
+      <button type="button" class="menu-drawer__menu-item list-menu__item link link--text focus-inset drsw-menuitem" data-drsw-open>
+        <span>Switch store</span>
+      </button>
+    </li>
+  {%- endif -%}
+
+{%- elsif part == 'panel' -%}
+  {%- if customer.b2b? -%}
+    <div class="drsw" id="drsw" hidden style="--drsw-brand: {{ sw_brand }}">
+      <div class="drsw__backdrop" data-drsw-close></div>
+      <div class="drsw__sheet" role="dialog" aria-modal="true" aria-labelledby="drsw-title">
+        <div class="drsw__head">
+          <h2 class="drsw__title" id="drsw-title">Switch store</h2>
+          <button type="button" class="drsw__x" data-drsw-close aria-label="Close">&times;</button>
+        </div>
+        <ul class="drsw__list" id="drsw-list"></ul>
+        <button type="button" class="drsw__add" data-drsw-add>+ Sign in to another store</button>
+        <p class="drsw__hint">Stores you've used on this device switch in a few seconds, no code needed. Each store keeps its own prices, cart and orders.</p>
+      </div>
+    </div>
+    <div class="drsw-toast" id="drsw-toast" role="status" hidden></div>
+    <style>
+      /* Own styles, scoped under .drsw-btn: the theme's .header__icon rules
+         (fixed width, spans shown) must not reach inside. */
+      button.drsw-btn{display:inline-flex;align-items:center;gap:6px;height:4.4rem;width:auto;min-width:4.4rem;justify-content:center;background:none;border:0;cursor:pointer;padding:0 8px;margin:0 2px;color:rgb(var(--color-foreground,18,18,18));font:inherit;max-width:240px;border-radius:8px}
+      button.drsw-btn:hover{background:rgba(0,0,0,.04)}
+      .drsw-btn .drsw-btn__icon{flex:none}
+      .drsw-btn .drsw-btn__text{display:flex;flex-direction:column;align-items:flex-start;line-height:1.15;min-width:0;width:auto;height:auto}
+      .drsw-btn .drsw-btn__label{display:block;font-size:11px;opacity:.7;width:auto;height:auto}
+      .drsw-btn .drsw-btn__name{display:block;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px;width:auto;height:auto}
+      .drsw-btn .drsw-btn__chev{flex:none}
+      @media (max-width:989px){.drsw-btn .drsw-btn__text,.drsw-btn .drsw-btn__chev{display:none !important}button.drsw-btn{padding:0 4px;min-width:4.4rem}}
+      /* Same size and weight as the other menu items: only the family is inherited. */
+      .drsw-menuitem{width:100%;text-align:left;background:none;border:0;font-family:inherit;cursor:pointer}
+      .drsw{position:fixed;inset:0;z-index:2147483000;font-family:inherit}
+      .drsw[hidden],.drsw-toast[hidden]{display:none}
+      .drsw__backdrop{position:absolute;inset:0;background:rgba(15,15,30,.45)}
+      .drsw__sheet{position:absolute;right:16px;top:72px;width:min(400px,calc(100vw - 32px));max-height:calc(100vh - 96px);overflow:auto;background:#fff;color:#1f1d2e;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.25);padding:18px}
+      @media (max-width:749px){.drsw__sheet{left:0;right:0;top:auto;bottom:0;width:100%;border-radius:16px 16px 0 0;max-height:80vh;padding:18px 16px 24px}}
+      .drsw__head{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px}
+      .drsw__title{margin:0;font-size:20px;font-weight:800;color:var(--drsw-brand)}
+      .drsw__x{border:0;background:none;font-size:28px;line-height:1;cursor:pointer;color:#666;padding:4px 8px}
+      .drsw__list{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:8px}
+      .drsw__item{display:flex;align-items:stretch;gap:6px}
+      .drsw__go{flex:1;display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 10px;text-align:left;padding:12px 14px;border:1px solid #DADCEB;border-radius:10px;background:#fff;cursor:pointer;font:inherit;color:inherit}
+      .drsw__go:hover{border-color:var(--drsw-brand)}
+      .drsw__go[aria-current="true"]{border:2px solid var(--drsw-brand);background:#F4F5FB;cursor:default}
+      .drsw__name{font-weight:800;font-size:16px;color:var(--drsw-brand)}
+      .drsw__meta{grid-column:1;font-size:13px;color:#666670;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .drsw__tag{grid-row:1 / span 2;grid-column:2;font-size:13px;font-weight:700;color:var(--drsw-brand);white-space:nowrap}
+      .drsw__forget{border:0;background:none;color:#888;font-size:20px;padding:0 8px;cursor:pointer}
+      .drsw__add{width:100%;padding:12px 14px;border:1.5px dashed #B9BBD0;border-radius:10px;background:#fff;cursor:pointer;font:inherit;font-weight:700;color:var(--drsw-brand)}
+      .drsw__hint{margin:10px 2px 0;font-size:13px;line-height:1.45;color:#666670}
+      .drsw-busy .drsw__go,.drsw-busy .drsw__add{opacity:.6;pointer-events:none}
+      .drsw-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483001;background:#181344;color:#fff;padding:12px 18px;border-radius:10px;font-size:15px;box-shadow:0 8px 24px rgba(0,0,0,.25);max-width:calc(100vw - 32px)}
+    </style>
+    <script>
+      (function () {
+        var KEY = 'dr_stores';
+        var me = { e: {{ customer.email | json }}, s: {{ sw_company | json }}, l: {{ sw_location | json }} };
+        var logout = {{ routes.account_logout_url | json }};
+        function same(a, b) { return String(a || '').toLowerCase() === String(b || '').toLowerCase(); }
+        function load() {
+          try { var l = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(l) ? l.filter(function (x) { return x && typeof x.e === 'string'; }) : []; } catch (e) { return []; }
+        }
+        function save(l) { try { localStorage.setItem(KEY, JSON.stringify(l.slice(0, 10))); } catch (e) {} }
+        // Remember this store on this device (most recent first).
+        save([{ e: me.e, s: me.s, l: me.l, t: Date.now() }].concat(load().filter(function (x) { return !same(x.e, me.e); })));
+
+        var root = document.getElementById('drsw');
+        var list = document.getElementById('drsw-list');
+
+        function go(email, name) {
+          root.classList.add('drsw-busy');
+          try { localStorage.setItem('dr_switch', JSON.stringify({ e: email, name: name || '', r: location.pathname + location.search, at: Date.now() })); } catch (e) {}
+          window.location.href = logout;
+        }
+        function render() {
+          list.innerHTML = '';
+          load().forEach(function (x) {
+            var cur = same(x.e, me.e);
+            var li = document.createElement('li'); li.className = 'drsw__item';
+            var b = document.createElement('button'); b.type = 'button'; b.className = 'drsw__go';
+            var n = document.createElement('span'); n.className = 'drsw__name'; n.textContent = x.s || x.e;
+            var m = document.createElement('span'); m.className = 'drsw__meta'; m.textContent = (x.l ? x.l + ' · ' : '') + x.e;
+            var t = document.createElement('span'); t.className = 'drsw__tag'; t.textContent = cur ? '✓ Ordering now' : 'Switch →';
+            b.appendChild(n); b.appendChild(t); b.appendChild(m);
+            if (cur) b.setAttribute('aria-current', 'true');
+            else b.addEventListener('click', function () { go(x.e, x.s); });
+            li.appendChild(b);
+            if (!cur) {
+              var f = document.createElement('button'); f.type = 'button'; f.className = 'drsw__forget';
+              f.setAttribute('aria-label', 'Forget ' + (x.s || x.e) + ' on this device'); f.textContent = '×';
+              f.addEventListener('click', function () { save(load().filter(function (o) { return !same(o.e, x.e); })); render(); });
+              li.appendChild(f);
+            }
+            list.appendChild(li);
+          });
+        }
+        function open() { render(); root.hidden = false; var c = root.querySelector('.drsw__go:not([aria-current])') || root.querySelector('.drsw__add'); if (c) c.focus(); }
+        function close() { root.hidden = true; }
+        document.addEventListener('click', function (e) {
+          var t = e.target;
+          if (!t || !t.closest) return;
+          if (t.closest('[data-drsw-open]')) {
+            e.preventDefault();
+            // Close the phone menu first if the tap came from it.
+            var d = t.closest('header-drawer') || (t.closest('.menu-drawer') && document.querySelector('header-drawer'));
+            if (d && typeof d.closeMenuDrawer === 'function') { try { d.closeMenuDrawer(e); } catch (x) {} }
+            else { var det = t.closest('details[open]'); if (det) det.removeAttribute('open'); document.body.classList.remove('overflow-hidden-mobile', 'overflow-hidden-tablet', 'overflow-hidden-desktop'); }
+            open();
+          } else if (t.closest('[data-drsw-close]')) close();
+          else if (t.closest('[data-drsw-add]')) go('', '');
+        });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !root.hidden) close(); });
+
+        // Confirmation after a switch.
+        try {
+          if (sessionStorage.getItem('dr_switched') !== null) {
+            sessionStorage.removeItem('dr_switched');
+            var toast = document.getElementById('drsw-toast');
+            toast.textContent = "You're now ordering for " + me.s;
+            toast.hidden = false;
+            setTimeout(function () { toast.hidden = true; }, 4500);
+          }
+        } catch (e) {}
+      })();
+    </script>
+  {%- endif -%}
+{%- endif -%}
