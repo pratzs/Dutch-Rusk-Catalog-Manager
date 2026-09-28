@@ -32,16 +32,18 @@ export const loader = async ({ request }) => {
   const r = url.searchParams.get("r") || "";
   const oidcReq = readOidcRequestPayload(request, r);
   if (!oidcReq) return { expired: true, storefront: storefrontUrl() };
-  const { rememberedStores } = await import("../lib/oidc-device.server");
-  const remembered = (await rememberedStores(request, shopDomain())).map((u) => ({ id: u.id, store: u.storeDisplayName, email: u.email }));
-  // A switch link names the store (login_hint). If this device cannot switch
-  // silently, say which store they are signing in to.
-  let hintStore = null;
-  if (oidcReq.loginHint) {
-    const { default: prisma } = await import("../db.server");
-    const u = await prisma.b2BUser.findFirst({ where: { shop: shopDomain(), email: String(oidcReq.loginHint).trim().toLowerCase() } });
-    hintStore = u ? u.storeDisplayName : null;
-  }
+  const [{ rememberedStores }, { default: prisma }] = await Promise.all([import("../lib/oidc-device.server"), import("../db.server")]);
+  // This device's stores, and (for a switch link naming a store in
+  // login_hint) that store's name, read together: one round trip, not two.
+  const [rows, hinted] = await Promise.all([
+    rememberedStores(request, shopDomain()),
+    oidcReq.loginHint
+      ? prisma.b2BUser.findFirst({ where: { shop: shopDomain(), email: String(oidcReq.loginHint).trim().toLowerCase() } })
+      : null,
+  ]);
+  const remembered = rows.map((u) => ({ id: u.id, store: u.storeDisplayName, email: u.email }));
+  // If this device cannot switch silently, say which store they are signing in to.
+  const hintStore = hinted ? hinted.storeDisplayName : null;
   return {
     expired: false,
     hintStore,
@@ -118,6 +120,14 @@ export const action = async ({ request }) => {
   const email = String(form.get("email") || "").trim().toLowerCase();
   const remember = form.get("remember") === "1";
   const since = new Date(Date.now() - 15 * 60 * 1000);
+  // Bookkeeping (last sign-in, the audit trail) runs in the background: the
+  // database is across the Pacific from the server, and each step waited on
+  // up to six round trips one after another (about 2 s, 29 Sept).
+  const later = (p) => { p.catch((err) => console.error("[oidc.login] bookkeeping failed:", err?.message ?? err)); };
+  const signedIn = (user, result) => {
+    later(prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }));
+    later(auth.recordAudit({ shop, username: user.username, email: user.email, result, ip, userAgent }));
+  };
 
   const sendCode = async (user, purpose = "login") => {
     const recent = await prisma.b2BLoginAudit.count({ where: { shop, email: user.email, result: "otp_sent", createdAt: { gte: since } } });
@@ -127,7 +137,7 @@ export const action = async ({ request }) => {
     }
     const code = await auth.issueOtp(user.id);
     await brevo.sendLoginOtp({ email: user.email, firstName: "", storeDisplayName: user.storeDisplayName, username: user.username, code, expiresInMin: 10, purpose });
-    await auth.recordAudit({ shop, username: user.username, email: user.email, result: "otp_sent", ip, userAgent });
+    later(auth.recordAudit({ shop, username: user.username, email: user.email, result: "otp_sent", ip, userAgent }));
     return redirect(q({ step: "code", email: user.email, uid: user.id, sent: "1", purpose }));
   };
 
@@ -161,8 +171,7 @@ export const action = async ({ request }) => {
     if (!user || user.shop !== shop || user.status === "disabled") {
       return { error: "Please sign in to that store again with your email.", step: "email", email: "" };
     }
-    await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-    await auth.recordAudit({ shop, username: user.username, email: user.email, result: "remembered", ip, userAgent });
+    signedIn(user, "remembered");
     const callback = await issueAuthCode({ user, oidcReq });
     return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie, true) });
   }
@@ -217,8 +226,7 @@ export const action = async ({ request }) => {
       await auth.recordAudit({ shop, username: user.username, email, result: "bad_password", ip, userAgent });
       return { error: "That email and password don't match. Try again, or email yourself a sign-in code.", step: "password", email };
     }
-    await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-    await auth.recordAudit({ shop, username: user.username, email, result: "ok", ip, userAgent });
+    signedIn(user, "ok");
     const callback = await issueAuthCode({ user, oidcReq });
     return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie, remember) });
   }
@@ -226,12 +234,15 @@ export const action = async ({ request }) => {
   if (mode === "otp_verify") {
     const uid = String(form.get("uid") || "");
     const code = String(form.get("code") || "").replace(/\D/g, "");
-    const user = uid ? await prisma.b2BUser.findUnique({ where: { id: uid } }) : null;
+    // The store and its recent wrong codes are read together (one round trip).
+    const [user, fails] = await Promise.all([
+      uid ? prisma.b2BUser.findUnique({ where: { id: uid } }) : null,
+      prisma.b2BLoginAudit.count({ where: { shop, email, result: "otp_bad", createdAt: { gte: since } } }),
+    ]);
     // The code screen names one store; it must be the email shown on it.
     if (!user || user.shop !== shop || user.email !== email || user.status === "disabled") {
       return { error: "That sign-in has expired. Please enter your email again.", step: "email", email };
     }
-    const fails = await prisma.b2BLoginAudit.count({ where: { shop, email, result: "otp_bad", createdAt: { gte: since } } });
     if (fails >= CODE_FAILS_PER_15_MIN) {
       return { error: "Too many wrong codes. Please wait 15 minutes, then send a new code.", step: "code", email, uid };
     }
@@ -241,11 +252,10 @@ export const action = async ({ request }) => {
     }
     const purpose = String(form.get("purpose") || "login");
     if (purpose === "setup" || purpose === "reset") {
-      await auth.recordAudit({ shop, username: user.username, email, result: "otp_verified", ip, userAgent });
+      later(auth.recordAudit({ shop, username: user.username, email, result: "otp_verified", ip, userAgent }));
       return redirect(q({ step: "newpw", email, purpose }), { headers: { "set-cookie": await grantCookie(user) } });
     }
-    await prisma.b2BUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-    await auth.recordAudit({ shop, username: user.username, email, result: "otp_verified", ip, userAgent });
+    signedIn(user, "otp_verified");
     const callback = await issueAuthCode({ user, oidcReq });
     return redirect(callback, { headers: await signedInHeaders(request, user, writeOidcSessionCookie, remember) });
   }
