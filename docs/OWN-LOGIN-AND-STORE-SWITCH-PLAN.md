@@ -96,3 +96,51 @@ set-password pages; an admin list with invite, reset, disable; a CSV importer.
    everyone and on the customer message.
 
 Estimated build: several days, plus testing on the development store.
+
+## Test store findings, 29 Sept 2026 (staging)
+
+The spike now runs on its own Render service, `dr-login-staging`
+(https://dr-login-staging.onrender.com). It deploys this branch, reads the
+`idp_test` schema, and has the pricing timer off. The laptop tunnel used before
+this died overnight on 28 Sept.
+
+Must be settled before go-live:
+
+- **The provider's address is permanent.** Once any customer has signed in,
+  Shopify greys out the discovery URL and client ID. The only way out is to
+  remove the provider and add a new one. Live needs a domain we own, e.g.
+  `login.dutchrusk.co.nz` (one DNS record), never a host's own subdomain.
+- **"Sync customer data" is on by default** for a new provider. It must be
+  switched off: Ostendo owns customer data.
+- **The server and the database are on opposite sides of the Pacific**
+  (Singapore and Oregon). Checking a code made six round trips in a row
+  (about 2 s). These are now cut to the ones that must finish first: the
+  store, the rate limits, marking the code used. Re-time with a real code.
+- **Our error pages.** Every sign-in page now has a branded error page, where
+  it used to show a raw stack trace when the connection dropped.
+
+Proven on staging:
+
+- Removing and re-adding the provider is safe. Both stores signed in to their
+  existing customers, with their earlier orders (#1002, #1003), and no
+  duplicate customers were created. This is also the rollback path.
+- Silent switching works from the header, from a collection page (it comes
+  back to the same page), and from "Switch store" in the Shopify account menu
+  (Orders page). A remembered store signs in with one tap and no code.
+- Shopify's "Test connection" passed.
+- Token exchange takes 2 to 5 ms on our side. 280 of 280 real token exchanges
+  succeeded, all under 0.9 s, across a full deploy handover. A further 3,539
+  requests during two more deploys all got answers.
+
+Open:
+
+- One switch failed at 23:01 UTC with Shopify's "Access token request error"
+  (Shopify request id `cdaf09b8-a636-402b-84c8-372d9f69d02d-1790636468`), a
+  minute after a deploy. The customer lands signed out. One tap on the
+  remembered store gets them back in.
+  - It could not be reproduced (above).
+  - Render's log API returned nothing from the server instance that handled
+    it, so the cause is unknown.
+  - If it recurs on live, give Shopify support the request id.
+- Render's log API can miss a whole instance. Live needs a second log check
+  (the Render dashboard, or a log drain) before we rely on logs for support.
