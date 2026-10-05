@@ -263,3 +263,35 @@ model SharedCart {
 
   @@unique([shop, locationGid])
 }
+
+// One row per catalog price that a monthly deal sheet has overridden (kind
+// "price") or per quantity break it added (kind "break"). It exists for two
+// reasons: so the hourly Catalog Reprice job knows NOT to reprice a deal price
+// when Ostendo moves retail, and so the deal can be put back on the 1st.
+//
+// "What it was" is stored as the INTENT, not the old dollar amount, because
+// retail moves during the month: baseKind "pct" restores retail x (1 - basePct),
+// "none" deletes the fixed price (the list is 0% so retail applies), "custom"
+// restores baseCustomPrice. See docs/CATALOG-PRICING.md.
+model DealSheetPrice {
+  id              String    @id @default(cuid())
+  shop            String
+  priceListId     String    // Shopify PriceList GID
+  variantGid      String
+  kind            String    @default("price") // price | break
+  month           String    // e.g. 2026-10
+  dealPrice       Float
+  minQty          Int?      // break rows only
+  baseKind        String    @default("none") // pct | none | custom
+  basePct         Float?
+  baseCustomPrice Float?
+  label           String?
+  endsAt          DateTime  // 00:00 NZ on the 1st of the next month
+  appliedAt       DateTime  @default(now())
+  revertedAt      DateTime?
+  revertNote      String?
+
+  @@unique([priceListId, variantGid, kind])
+  @@index([shop, revertedAt, endsAt])
+  @@index([variantGid])
+}

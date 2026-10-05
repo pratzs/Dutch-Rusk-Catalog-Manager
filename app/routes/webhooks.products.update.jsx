@@ -8,7 +8,7 @@ const DEDUP_TTL = 3 * 60 * 1000; // 3 minutes
 // own full catalog sync, so a burst started many exhaustive syncs at once and
 // the instance stopped answering: Shopify logged those deliveries as "no
 // response" after its 5s timeout. Collect the variant ids instead and run ONE
-// sync once the burst has been quiet for DEBOUNCE_MS.
+// pass once the burst has been quiet for DEBOUNCE_MS.
 const DEBOUNCE_MS = 20 * 1000;
 const MAX_WAIT_MS = 2 * 60 * 1000; // a never-quiet stream still syncs this often
 const pendingVariantIds = new Set();
@@ -23,9 +23,14 @@ function flushPending() {
   pendingVariantIds.clear();
 
   const cronSecret = process.env.CRON_SECRET ?? "internal";
-  const syncUrl = `${process.env.SHOPIFY_APP_URL ?? "https://dutch-rusk-catalog-manager.onrender.com"}/api/catalog-price-sync`;
+  const base = process.env.SHOPIFY_APP_URL ?? "https://dutch-rusk-catalog-manager.onrender.com";
 
-  fetch(syncUrl, {
+  // /api/catalog-reprice first puts catalog prices and compare-at back in step
+  // with the new retail, THEN runs the price sync that rebuilds the metafields.
+  // The sync used to be called from here directly; run in parallel it read the
+  // old prices, and its 8-minute lock refused the second run. The debounce
+  // above stays: one call per burst. See docs/CATALOG-PRICING.md.
+  fetch(`${base}/api/catalog-reprice`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
     body: JSON.stringify({ variantIds }),
