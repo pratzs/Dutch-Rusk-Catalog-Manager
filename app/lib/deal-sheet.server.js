@@ -62,6 +62,31 @@ async function liveRows(gql, listId, variantGids) {
   return out;
 }
 
+export const DEAL_TAG = "deal-sheet";
+
+/** variant gid -> product gid. */
+async function productsOf(gql, variantGids) {
+  const out = {};
+  for (let i = 0; i < variantGids.length; i += 100) {
+    const d = await gql(`query($ids:[ID!]!){ nodes(ids:$ids){ ... on ProductVariant{ id product{ id } } } }`, { ids: variantGids.slice(i, i + 100) });
+    for (const n of d.nodes) if (n) out[n.id] = n.product.id;
+  }
+  return out;
+}
+
+async function tagProducts(gql, productIds, add) {
+  for (const id of productIds) {
+    const d = await gql(
+      add
+        ? `mutation($id:ID!,$t:[String!]!){ tagsAdd(id:$id, tags:$t){ userErrors{ message } } }`
+        : `mutation($id:ID!,$t:[String!]!){ tagsRemove(id:$id, tags:$t){ userErrors{ message } } }`,
+      { id, t: [DEAL_TAG] },
+    );
+    const errs = (add ? d.tagsAdd : d.tagsRemove).userErrors;
+    if (errs.length) throw new Error(`tag ${id}: ${JSON.stringify(errs).slice(0, 200)}`);
+  }
+}
+
 async function variantRetail(gql, variantGids) {
   const out = {};
   for (let i = 0; i < variantGids.length; i += 100) {
@@ -82,6 +107,10 @@ export async function applyDealRows(gql, { shop, priceListId, month, rows, dryRu
   const endsAt = endsAtForMonth(month);
   const priceRows = rows.filter((r) => r.kind === "price");
   const breakRows = rows.filter((r) => r.kind === "break");
+  // "listing": a line that is ON the sheet but needs no price change (its normal
+  // General price already is the deal price). Registered only so the product
+  // gets the Deals tag and appears in the Deal Sheet menu.
+  const listingRows = rows.filter((r) => r.kind === "listing");
 
   const existing = await prisma.dealSheetPrice.findMany({ where: { priceListId, variantGid: { in: rows.map((r) => r.variantGid) } } });
   const reg = Object.fromEntries(existing.map((e) => [`${e.variantGid}|${e.kind}`, e]));
@@ -96,8 +125,8 @@ export async function applyDealRows(gql, { shop, priceListId, month, rows, dryRu
       : inferBase(live[r.variantGid] ? { price: live[r.variantGid].price, compareAt: live[r.variantGid].compareAt } : null);
     plan.push({ ...r, ...base, retail: retail[r.variantGid] });
   }
-  log(`[deal-sheet] ${month}: ${priceRows.length} price row(s), ${breakRows.length} break(s), ends ${endsAt.toISOString()}`);
-  if (dryRun) return { plan, breakRows, endsAt };
+  log(`[deal-sheet] ${month}: ${priceRows.length} price row(s), ${breakRows.length} break(s), ${listingRows.length} listing-only, ends ${endsAt.toISOString()}`);
+  if (dryRun) return { plan, breakRows, listingRows, endsAt };
 
   for (let i = 0; i < plan.length; i += 50) {
     const batch = plan.slice(i, i + 50).map((p) => ({
@@ -136,7 +165,16 @@ export async function applyDealRows(gql, { shop, priceListId, month, rows, dryRu
     const data = { shop, month, dealPrice: r2(b.dealPrice), minQty: b.minQty, baseKind: "none", label: b.label ?? null, endsAt, revertedAt: null, revertNote: null };
     await prisma.dealSheetPrice.upsert({ where: { priceListId_variantGid_kind: { priceListId, variantGid: b.variantGid, kind: "break" } }, create: { priceListId, variantGid: b.variantGid, kind: "break", ...data }, update: { ...data, appliedAt: new Date() } });
   }
-  return { plan, breakRows, endsAt, applied: plan.length + breakRows.length };
+  for (const l of listingRows) {
+    const data = { shop, month, dealPrice: r2(l.dealPrice ?? 0), baseKind: "none", label: l.label ?? null, endsAt, revertedAt: null, revertNote: null, minQty: null };
+    await prisma.dealSheetPrice.upsert({ where: { priceListId_variantGid_kind: { priceListId, variantGid: l.variantGid, kind: "listing" } }, create: { priceListId, variantGid: l.variantGid, kind: "listing", ...data }, update: { ...data, appliedAt: new Date() } });
+  }
+
+  // Every product on the sheet gets the Deals tag (the Deal Sheet collection is
+  // "tag equals deal-sheet"; the theme shows the Deals badge off the same tag).
+  const prodOf = await productsOf(gql, rows.map((r) => r.variantGid));
+  await tagProducts(gql, [...new Set(Object.values(prodOf))], true);
+  return { plan, breakRows, listingRows, endsAt, applied: plan.length + breakRows.length + listingRows.length };
 }
 
 /**
@@ -157,6 +195,7 @@ export async function revertDueDeals(gql, { now = new Date(), dryRun = false, lo
   for (const [listId, rows] of Object.entries(byList)) {
     const priceRows = rows.filter((r) => r.kind === "price");
     const breakRows = rows.filter((r) => r.kind === "break");
+    const listingRows = rows.filter((r) => r.kind === "listing");
     const live = await liveRows(gql, listId, priceRows.map((r) => r.variantGid));
     const restore = []; const remove = []; const done = [];
 
@@ -198,10 +237,24 @@ export async function revertDueDeals(gql, { now = new Date(), dryRun = false, lo
       }
       for (const [r, note] of done) await prisma.dealSheetPrice.update({ where: { id: r.id }, data: { revertedAt: new Date(), revertNote: note } });
       for (const b of breakRows) await prisma.dealSheetPrice.update({ where: { id: b.id }, data: { revertedAt: new Date(), revertNote: "quantity break removed" } });
+      for (const l of listingRows) await prisma.dealSheetPrice.update({ where: { id: l.id }, data: { revertedAt: new Date(), revertNote: "listing ended" } });
     }
     result.restored += restore.length;
     result.deleted += remove.length;
     result.breaksRemoved += breakRows.length;
+  }
+  if (!dryRun) {
+    // A product keeps the Deals tag only while some variant of it is still on a sheet.
+    const dueProducts = await productsOf(gql, [...new Set(due.map((d) => d.variantGid))]);
+    const untag = [];
+    for (const pid of new Set(Object.values(dueProducts))) {
+      const d = await gql(`query($id:ID!){ product(id:$id){ variants(first:100){ nodes{ id } } } }`, { id: pid });
+      const ids = d.product.variants.nodes.map((v) => v.id);
+      const stillOn = await prisma.dealSheetPrice.count({ where: { variantGid: { in: ids }, revertedAt: null } });
+      if (stillOn === 0) untag.push(pid);
+    }
+    await tagProducts(gql, untag, false);
+    result.untagged = untag.length;
   }
   log(`[deal-sheet] reverted: ${result.restored} restored, ${result.deleted} removed, ${result.breaksRemoved} break(s) removed, ${result.skipped.length} left alone`);
   return result;

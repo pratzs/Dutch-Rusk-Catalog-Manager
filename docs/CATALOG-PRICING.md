@@ -89,6 +89,26 @@ compare-at.
 Code: `app/lib/deal-sheet.server.js`. Table: `DealSheetPrice`
 (migration `20261006000001_add_deal_sheet_price`).
 
+### The Deals menu and badge
+
+Every product on a sheet carries the Shopify tag `deal-sheet`, set when the
+sheet is applied and removed on the 1st unless the product is on the next sheet.
+Lines whose normal General price already is the deal price are registered as
+`kind = "listing"` rows (no price change), so those products are tagged too.
+
+- Collection **Deal Sheet** (`/collections/deal-sheet`), automated, rule
+  "tag equals deal-sheet", published to the Online Store. The `deal-` handle
+  prefix means the existing deal-access gate in `main-collection-product-grid`
+  already blocks buyers who are not entitled.
+- Menu: **Special Deals > Deal Sheet** in `main-menu`. The header hides the whole
+  Special Deals item from buyers who are not entitled.
+- Badge: `snippets/product-badge.liquid` in the theme shows "Deals" on tagged
+  products, only for entitled buyers (the tag itself is public).
+
+The menu item and collection are permanent; only the tags change each month.
+`menuUpdate` replaces the whole tree, so any future menu edit must resend all of
+it. A pre-change copy is in the backups folder.
+
 ## 3. Backups
 
 Before any bulk change, snapshot every price list (fixed prices, compare-at,
