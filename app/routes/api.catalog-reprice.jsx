@@ -5,8 +5,10 @@
 //   { variantIds: [...] }       from webhooks.products.update when Ostendo moves
 //                               a price. Reprices only those variants.
 //   { mode: "maintenance" }     from the hourly Render cron. Puts back any deal
-//                               whose month has ended, then sweeps every catalog
-//                               row as a backstop for a missed webhook.
+//                               whose month has ended, switches BOGO deals on/off
+//                               for the month, sinks sold-out products on the
+//                               Deals page, then sweeps every catalog row as a
+//                               backstop for a missed webhook.
 //
 // Both finish by asking the catalog price sync to rebuild the metafields the
 // pricing Functions and the theme read, but only when there is something to
@@ -17,7 +19,8 @@
 // That sync is called from HERE, after the prices are right, rather than from
 // the webhook in parallel: run in parallel it read the old prices, and its
 // 8-minute lock then refused the second run. See docs/CATALOG-PRICING.md.
-import { adminGql } from "../lib/brand-order.server";
+import { adminGql, arrangeOneCollection, SOLD_OUT_LAST_HANDLES } from "../lib/brand-order.server";
+import { reconcileBogo } from "../lib/bogo-schedule.server";
 import { getAdminToken } from "../lib/admin-token.server";
 import { repriceVariants } from "../lib/catalog-reprice.server";
 import { revertDueDeals } from "../lib/deal-sheet.server";
@@ -73,18 +76,34 @@ export async function action({ request }) {
     const gql = adminGql(shop, accessToken);
 
     let reverted = null;
-    if (maintenance) reverted = await revertDueDeals(gql);
+    let bogo = null;
+    let ordered = null;
+    if (maintenance) {
+      reverted = await revertDueDeals(gql);
+      // BOGO deals run only in the months a deal sheet lists them (Dragon and
+      // Bundaberg all year). This is what ends a deal when the month turns.
+      bogo = await reconcileBogo(gql);
+      ordered = {};
+      for (const handle of SOLD_OUT_LAST_HANDLES) {
+        try {
+          ordered[handle] = await arrangeOneCollection(gql, handle);
+        } catch (e) {
+          console.error(`[catalog-reprice] could not arrange ${handle}:`, e.message);
+          ordered[handle] = { error: e.message };
+        }
+      }
+    }
     const summary = await repriceVariants(gql, maintenance ? null : variantIds);
 
     const stale = maintenance ? [] : await staleRetailMetafields(gql, variantIds);
-    const changed = summary.updated > 0 || summary.variantCompareAtFixed > 0 || stale.length > 0 || (reverted && (reverted.restored || reverted.deleted || reverted.breaksRemoved));
+    const changed = summary.updated > 0 || summary.variantCompareAtFixed > 0 || stale.length > 0 || (reverted && (reverted.restored || reverted.deleted || reverted.breaksRemoved)) || bogo?.changed;
     if (changed) {
       // Don't make the caller wait for the sync; it can take minutes.
       const ids = maintenance ? null : [...new Set([...variantIds, ...(summary.touchedVariantIds ?? [])])];
       triggerSync(ids).then((r) => console.log("[catalog-reprice] sync:", JSON.stringify(r).slice(0, 200)));
     }
     console.log(`[catalog-reprice] ${maintenance ? "sweep" : "webhook"}: checked ${summary.checked}, updated ${summary.updated}, held ${summary.held.length}, product compare-at fixed ${summary.variantCompareAtFixed}`);
-    return Response.json({ success: true, checked: summary.checked, updated: summary.updated, held: summary.held.length, variantCompareAtFixed: summary.variantCompareAtFixed, reverted, syncTriggered: !!changed });
+    return Response.json({ success: true, checked: summary.checked, updated: summary.updated, held: summary.held.length, variantCompareAtFixed: summary.variantCompareAtFixed, reverted, bogo, ordered, syncTriggered: !!changed });
   } catch (err) {
     console.error("[catalog-reprice] failed:", err);
     return Response.json({ error: err.message }, { status: 500 });

@@ -1,30 +1,28 @@
 import { useState } from "react";
 import { useLoaderData, useFetcher } from "react-router";
+import { readState, writeBundles, parseMonths, describeSchedule, isActiveIn, nzMonth } from "../lib/bogo-schedule.server";
 
-const METAFIELD_NAMESPACE = "custom";
-const METAFIELD_KEY = "bogo_bundles";
-const FUNCTION_METAFIELD_KEY = "bogo_fn";
+// Bundles live in two places now. custom.bogo_master holds every bundle with its
+// schedule and is what this page edits. custom.bogo_bundles holds only the ones
+// active this month, which is what the theme, the checkout Function and the deal
+// access list read. See app/lib/bogo-schedule.server.js.
+
+/** admin.graphql returns a Response; the schedule library wants plain data. */
+const plain = (admin) => async (query, variables = {}) => {
+  const res = await admin.graphql(query, { variables });
+  const json = await res.json();
+  if (json.errors) throw new Error(JSON.stringify(json.errors).slice(0, 300));
+  return json.data;
+};
 
 export async function loader({ request }) {
   const { authenticate } = await import("../shopify.server");
   const { admin } = await authenticate.admin(request);
 
-  const res = await admin.graphql(
-    `query BogoBundles {
-      shop {
-        id
-        metafield(namespace: "${METAFIELD_NAMESPACE}", key: "${METAFIELD_KEY}") { value }
-      }
-    }`
-  );
-  const { data } = await res.json();
-  const shopId = data?.shop?.id;
-  let bundles = [];
-  try {
-    bundles = JSON.parse(data?.shop?.metafield?.value || "[]");
-  } catch {
-    bundles = [];
-  }
+  const state = await readState(plain(admin));
+  const shopId = state.shopId;
+  const bundles = state.master;
+  const thisMonth = nzMonth();
 
   const allVariantIds = [...new Set(bundles.flatMap((b) => b.variantIds ?? []))];
   const variantsById = {};
@@ -56,6 +54,8 @@ export async function loader({ request }) {
 
   const bundlesWithVariants = bundles.map((b) => ({
     ...b,
+    scheduleText: describeSchedule(b),
+    activeNow: isActiveIn(b, thisMonth),
     variants: (b.variantIds ?? []).map((id) => variantsById[id] ?? { id, productTitle: "(product not found)", variantTitle: "", imageUrl: null }),
   }));
 
@@ -75,18 +75,7 @@ export async function loader({ request }) {
     .filter((c) => c.priceList?.id)
     .map((c) => ({ priceListId: c.priceList.id, title: c.title }));
 
-  return { shopId, bundles: bundlesWithVariants, catalogs };
-}
-
-async function findPricingDiscountId(admin) {
-  const res = await admin.graphql(
-    `query { discountNodes(first: 50) { nodes { id discount { __typename ... on DiscountAutomaticApp { title } } } } }`
-  );
-  const { data } = await res.json();
-  const node = data?.discountNodes?.nodes?.find(
-    (n) => n.discount?.__typename === "DiscountAutomaticApp" && n.discount.title === "B2B Wholesale Custom Pricing"
-  );
-  return node?.id ?? null;
+  return { shopId, bundles: bundlesWithVariants, catalogs, thisMonth };
 }
 
 const ONLINE_STORE_PUBLICATION_ID = "gid://shopify/Publication/93695902009";
@@ -242,136 +231,13 @@ async function deleteDealCollection(admin, bundleId) {
   );
 }
 
-// The shape the CURRENTLY LIVE Function reads, kept so that deploying the app
-// ahead of the Functions does not switch deals off in between. Delete once the
-// new Functions are live and bogo_fn is the only consumer.
-const LEGACY_FUNCTION_FIELDS = ["buyQty", "getQty", "variantIds", "catalogIds", "overridePct"];
-
-function forLegacyFunction(bundle) {
-  const out = {};
-  for (const field of LEGACY_FUNCTION_FIELDS) {
-    if (bundle?.[field] !== undefined) out[field] = bundle[field];
-  }
-  return out;
-}
-
-// Only what the Function reads. Everything else on a bundle (id, label, brand,
-// productIds, collectionHandle) is for the admin UI and the theme badge.
-//
-/** "gid://shopify/ProductVariant/123" -> "123" */
-function bareId(gid) {
-  return typeof gid === "string" ? gid.slice(gid.lastIndexOf("/") + 1) : gid;
-}
-
-/**
- * The copy the Function reads, squeezed as small as it will go.
- *
- * This config is part of the Function's INPUT, which means it is sent on every
- * single cart, and input bytes cost instructions against an 11M budget that big
- * carts genuinely run out of. In full form it was 3,947 bytes, about 3,300 of
- * which was the "gid://shopify/ProductVariant/" prefix repeated across 75 deal
- * variants. Dropping the prefixes and shortening the keys takes it to roughly
- * 1,300 bytes, which buys back cart lines.
- *
- *   i = deal id, b = buyQty, g = getQty, o = overridePct, c = catalog ids,
- *
- * Variant ids are deliberately NOT here any more. Deal membership travels on
- * each variant inside custom.catalog_savings, so sending 75 ids on every cart
- * was pure weight: this config went from 1,492 bytes to 296.
- *
- * Both id lists are bare numerics; the Function compares them against the
- * numeric tail of the gids it receives. The SHOP copy of this metafield keeps
- * the full, readable form, because the theme's deal badge Liquid reads that one.
- */
-function forFunction(bundle) {
-  const out = {};
-  // The id has to travel now. The discount Function no longer receives the
-  // variant id it used to match deals on, so membership is written onto each
-  // variant as these ids by api.catalog-price-sync, and matched back here.
-  if (bundle?.id !== undefined) out.i = bundle.id;
-  if (bundle?.buyQty !== undefined) out.b = bundle.buyQty;
-  if (bundle?.getQty !== undefined) out.g = bundle.getQty;
-  if (bundle?.overridePct !== undefined && bundle.overridePct !== null && bundle.overridePct !== "") {
-    out.o = bundle.overridePct;
-  }
-  if (Array.isArray(bundle?.catalogIds) && bundle.catalogIds.length) out.c = bundle.catalogIds.map(bareId);
-  // Variant ids are no longer used by the Function -- deal membership travels
-  // on each variant inside custom.catalog_savings. They are still written so
-  // that saving this page during a rollout cannot break the previous Function,
-  // which still matches on them. Safe to drop once the new Functions are live
-  // everywhere; worth about 1.2KB on every cart.
-  if (Array.isArray(bundle?.variantIds)) out.v = bundle.variantIds.map(bareId);
-  return out;
-}
-
 async function saveBundles(admin, shopId, bundles) {
-  const metafields = [
-    {
-      ownerId: shopId,
-      namespace: METAFIELD_NAMESPACE,
-      key: METAFIELD_KEY,
-      type: "json",
-      value: JSON.stringify(bundles),
-    },
-  ];
-
-  // The Function reading BOGO deals at checkout is merged into the
-  // "B2B Wholesale Custom Pricing" discount and reads its config from
-  // discountNode.metafield, not shop.metafield (the latter isn't resolved
-  // at runtime for this deprecated Product Discount API target -- confirmed
-  // by extensive testing). Write to both: shop for the theme's badge
-  // Liquid, and the live discount for the Function itself.
-  const pricingDiscountId = await findPricingDiscountId(admin);
-  if (pricingDiscountId) {
-    metafields.push({
-      ownerId: pricingDiscountId,
-      namespace: METAFIELD_NAMESPACE,
-      key: METAFIELD_KEY,
-      type: "json",
-      value: JSON.stringify(bundles.map(forLegacyFunction)),
-    });
-    // The compact copy lives on its own key rather than replacing the one
-    // above, so the app can be deployed before the Functions without the live
-    // Function suddenly reading a shape it does not understand and quietly
-    // dropping every deal.
-    metafields.push({
-      ownerId: pricingDiscountId,
-      namespace: METAFIELD_NAMESPACE,
-      key: FUNCTION_METAFIELD_KEY,
-      type: "json",
-      value: JSON.stringify(bundles.map(forFunction)),
-    });
-  }
-
-  const res = await admin.graphql(
-    `mutation SetBogoBundles($metafields: [MetafieldsSetInput!]!) {
-      metafieldsSet(metafields: $metafields) {
-        userErrors { field message }
-      }
-    }`,
-    { variables: { metafields } }
-  );
-  const { data } = await res.json();
-  const userErrors = data?.metafieldsSet?.userErrors ?? [];
-  if (userErrors.length) throw new Error(userErrors.map((e) => e.message).join(", "));
-  if (!pricingDiscountId) throw new Error("Saved to the theme badge metafield, but couldn't find the live pricing discount to update -- checkout won't reflect this change until that's fixed.");
+  await writeBundles(plain(admin), shopId, bundles);
 }
 
 async function readBundles(admin) {
-  const res = await admin.graphql(
-    `query BogoBundlesForWrite {
-      shop { id metafield(namespace: "${METAFIELD_NAMESPACE}", key: "${METAFIELD_KEY}") { value } }
-    }`
-  );
-  const { data } = await res.json();
-  const shopId = data?.shop?.id;
-  let bundles = [];
-  try {
-    bundles = JSON.parse(data?.shop?.metafield?.value || "[]");
-  } catch {
-    bundles = [];
-  }
-  return { shopId, bundles };
+  const state = await readState(plain(admin));
+  return { shopId: state.shopId, bundles: state.master };
 }
 
 export async function action({ request }) {
@@ -390,6 +256,12 @@ export async function action({ request }) {
       const getQty = Number(form.get("getQty"));
       const overridePctRaw = String(form.get("overridePct") || "").trim();
       const overridePct = overridePctRaw ? Number(overridePctRaw) : null;
+      let months;
+      try {
+        months = parseMonths(form.get("months"));
+      } catch (e) {
+        return { error: e.message };
+      }
       let variantIds = [];
       try {
         variantIds = JSON.parse(String(form.get("variantIds") || "[]"));
@@ -413,6 +285,7 @@ export async function action({ request }) {
       const next = bundles.filter((b) => b.id !== id);
       let entry = { id, label, buyQty, getQty, variantIds };
       if (overridePct !== null) entry.overridePct = overridePct;
+      if (months !== null) entry.months = months; // absent = all year
       if (catalogIds.length) entry.catalogIds = catalogIds;
       entry = await enrichBundleForStorefront(admin, entry);
       await syncDealCollection(admin, entry);
@@ -435,10 +308,10 @@ export async function action({ request }) {
   }
 }
 
-const emptyForm = { id: "", label: "", buyQty: "", getQty: "", overridePct: "", items: [], catalogIds: [] };
+const emptyForm = { id: "", label: "", buyQty: "", getQty: "", overridePct: "", months: "", items: [], catalogIds: [] };
 
 export default function Bogo() {
-  const { bundles, catalogs } = useLoaderData();
+  const { bundles, catalogs, thisMonth } = useLoaderData();
   const fetcher = useFetcher();
   const busy = fetcher.state !== "idle";
 
@@ -497,6 +370,7 @@ export default function Bogo() {
       buyQty: String(bundle.buyQty),
       getQty: String(bundle.getQty),
       overridePct: bundle.overridePct != null ? String(bundle.overridePct) : "",
+      months: Array.isArray(bundle.months) ? bundle.months.join(", ") : "",
       items: bundle.variants.map((v) => ({
         id: v.id,
         label: v.variantTitle ? `${v.productTitle} - ${v.variantTitle}` : v.productTitle,
@@ -525,6 +399,7 @@ export default function Bogo() {
     fd.set("buyQty", form.buyQty);
     fd.set("getQty", form.getQty);
     fd.set("overridePct", form.overridePct);
+    fd.set("months", form.months);
     fd.set("variantIds", JSON.stringify(form.items.map((it) => it.id)));
     fd.set("catalogIds", JSON.stringify(form.catalogIds));
     fetcher.submit(fd, { method: "post" });
@@ -560,7 +435,7 @@ export default function Bogo() {
       {fetcher.data?.error ? <s-section><s-text tone="critical">{fetcher.data.error}</s-text></s-section> : null}
       {fetcher.data?.ok ? <s-section><s-text tone="success">{fetcher.data.ok}</s-text></s-section> : null}
 
-      <s-section heading={`Active deals (${bundles.length})`}>
+      <s-section heading={`Deals (${bundles.filter((b) => b.activeNow).length} on in ${thisMonth}, ${bundles.filter((b) => !b.activeNow).length} off)`}>
         {bundles.length === 0 ? (
           <s-text tone="subdued">No BOGO deals yet.</s-text>
         ) : (
@@ -576,7 +451,13 @@ export default function Bogo() {
             <tbody>
               {bundles.map((b) => (
                 <tr key={b.id} style={{ borderTop: "1px solid #e5e7eb", fontSize: 13 }}>
-                  <td style={cell}><strong>{b.label}</strong></td>
+                  <td style={cell}>
+                    <strong>{b.label}</strong>
+                    <div style={{ marginTop: 4, fontSize: 12, color: b.activeNow ? "#007f5f" : "#b98900", fontWeight: 600 }}>
+                      {b.activeNow ? "ON this month" : "OFF this month"}
+                    </div>
+                    <div style={{ color: "#6d7175", fontSize: 12 }}>Runs: {b.scheduleText}</div>
+                  </td>
                   <td style={cell}>
                     Buy {b.buyQty}, get {b.getQty} free
                     {b.overridePct != null ? (
@@ -662,6 +543,21 @@ export default function Bogo() {
                   onChange={(e) => setForm((f) => ({ ...f, getQty: e.target.value }))}
                 />
               </div>
+            </div>
+            <div>
+              <label style={labelStyle} htmlFor="months-input">Months this deal runs (leave blank for all year)</label>
+              <input
+                id="months-input"
+                style={inputStyle}
+                value={form.months}
+                onChange={(e) => setForm((f) => ({ ...f, months: e.target.value }))}
+                placeholder="e.g. 2026-11   or   2026-11, 2026-12"
+              />
+              <s-text tone="subdued" style={{ fontSize: 12, marginTop: 4 }}>
+                A deal should only run in months its deal sheet lists it. Type the months as YYYY-MM. It switches
+                on and off by itself at the start of each month (New Zealand time). Dragon and Bundaberg run all
+                year, so leave those blank.
+              </s-text>
             </div>
             <div>
               <label style={labelStyle} htmlFor="override-input">Override discount % (optional)</label>

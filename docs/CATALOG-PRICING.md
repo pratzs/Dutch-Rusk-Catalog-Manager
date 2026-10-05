@@ -109,6 +109,37 @@ The menu item and collection are permanent; only the tags change each month.
 `menuUpdate` replaces the whole tree, so any future menu edit must resend all of
 it. A pre-change copy is in the backups folder.
 
+### BOGO deals run only in the months a deal sheet lists them
+
+Rule from the business (6 Oct 2026): a BOGO offer applies only in months the deal
+sheet mentions it. **Dragon (2kg and Novelty) and Bundaberg run all year.** Every
+other BOGO is switched on for its month and off after.
+
+- `custom.bogo_master` holds every bundle with a `months` list (`["2026-11"]`;
+  absent = all year; `[]` = off). The BOGO Bundles page edits this.
+- `custom.bogo_bundles` holds only the bundles active this month. The theme badge,
+  the Special Deals page, the deal access list and the catalog sync all read this
+  key, so none of them changed.
+- The same active set is written to the checkout Function config
+  (`bogo_fn` and the legacy `bogo_bundles` on the pricing discount). A deal that
+  is off is simply not in the Function's config, so it cannot apply at checkout.
+- The hourly Catalog Pricing job runs `reconcileBogo`, so a deal switches on or
+  off at 00:00 New Zealand time when the month turns. It writes nothing when
+  nothing changed, and triggers the price sync when it did (the per-variant deal
+  markers follow).
+- Adding next month's deal: BOGO Bundles page, set "Months this deal runs".
+
+Code: `app/lib/bogo-schedule.server.js`.
+
+### Sold-out products on the Deals page
+
+`SOLD_OUT_LAST_HANDLES` in `brand-order.server.js` lists collections whose
+sold-out products sink to the bottom (just `deal-sheet`). "Sold out" means no
+variant has `availableForSale`, the same test as the storefront badge. The
+48-hour ordering job honours it, and the hourly Catalog Pricing job re-arranges
+the Deals collection too, because stock moves faster than every 48 hours. Add a
+handle to the list to extend it to another collection.
+
 ## 3. Backups
 
 Before any bulk change, snapshot every price list (fixed prices, compare-at,

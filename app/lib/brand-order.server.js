@@ -44,6 +44,13 @@ const MOVE_BATCH = 200;
 // only thing that collection exists to show.
 export const LEAVE_ALONE = ["New Arrivals"];
 
+// Collections whose sold-out products sink to the bottom. The Deals page is the
+// one that matters most: it changes monthly and a buyer landing on it should
+// not have to scroll past products they cannot order. The hourly Catalog
+// Pricing job re-arranges it (arrangeOneCollection), because stock moves faster
+// than this job's 48-hour run.
+export const SOLD_OUT_LAST_HANDLES = ["deal-sheet"];
+
 // Ordering by brand is only as good as the vendor field, and a lot of products
 // arrive filed under the house vendor even though the title names a real brand:
 // Snickers, Twix, Ajax, Bubble Tea, Candycove, Carefree and so on were all
@@ -309,7 +316,7 @@ export function desiredOrderForShop(productsInBestSellingOrder) {
  * The order a collection's products should be in.
  * Pure, so it can be reasoned about and tested without touching Shopify.
  */
-export function desiredOrder(productsInBestSellingOrder) {
+export function desiredOrder(productsInBestSellingOrder, { soldOutLast = false } = {}) {
   const vendorRank = new Map();
   for (const p of productsInBestSellingOrder) {
     const v = p.vendor || "";
@@ -318,12 +325,14 @@ export function desiredOrder(productsInBestSellingOrder) {
   return productsInBestSellingOrder
     .map((p, i) => ({
       p,
+      s: soldOutLast && p.soldOut ? 1 : 0,
       v: vendorRank.get(p.vendor || ""),
       b: sizeBand(p.tags, p.title),
       t: String(p.title || "").toLowerCase(),
       i,
     }))
-    .sort((a, b) => a.v - b.v || a.b - b.b || (a.t < b.t ? -1 : a.t > b.t ? 1 : 0) || a.i - b.i)
+    // Sold-out products go last (when asked), then the usual brand/size/title order.
+    .sort((a, b) => a.s - b.s || a.v - b.v || a.b - b.b || (a.t < b.t ? -1 : a.t > b.t ? 1 : 0) || a.i - b.i)
     .map((k) => k.p);
 }
 
@@ -351,7 +360,7 @@ export function adminGql(shop, accessToken) {
   };
 }
 
-async function productsInOrder(gql, id, sortKey) {
+async function productsInOrder(gql, id, sortKey, withStock = false) {
   const out = [];
   let cursor = null;
   do {
@@ -363,11 +372,14 @@ async function productsInOrder(gql, id, sortKey) {
       `query($id:ID!,$c:String,$k:ProductCollectionSortKeys){
         collection(id:$id){ products(first:100, after:$c, sortKey:$k){
           pageInfo{ hasNextPage endCursor }
-          nodes{ id title vendor tags productType } } } }`,
+          nodes{ id title vendor tags productType ${withStock ? "variants(first:30){ nodes{ availableForSale } }" : ""} } } } }`,
       { id, c: cursor, k: sortKey }
     );
     const page = data?.collection?.products;
     if (!page) break;
+    // "Sold out" means no variant can be bought, the same test the storefront's
+    // Sold out badge uses (product.available).
+    if (withStock) for (const p of page.nodes) p.soldOut = !(p.variants?.nodes ?? []).some((v) => v.availableForSale);
     out.push(...page.nodes);
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
@@ -384,10 +396,11 @@ async function waitForJob(gql, jobId) {
 }
 
 async function arrangeCollection(gql, col) {
-  const bestSelling = await productsInOrder(gql, col.id, "BEST_SELLING");
+  const soldOutLast = SOLD_OUT_LAST_HANDLES.includes(col.handle);
+  const bestSelling = await productsInOrder(gql, col.id, "BEST_SELLING", soldOutLast);
   if (bestSelling.length < 2) return { collection: col.title, products: bestSelling.length, changed: false };
 
-  const order = col.handle === SHOP_ALL_HANDLE ? desiredOrderForShop : desiredOrder;
+  const order = col.handle === SHOP_ALL_HANDLE ? desiredOrderForShop : (list) => desiredOrder(list, { soldOutLast });
   const target = order(bestSelling).map((p) => p.id);
   const current = (await productsInOrder(gql, col.id, null)).map((p) => p.id);
 
@@ -429,6 +442,14 @@ async function arrangeCollection(gql, col) {
   let wrong = 0;
   for (let i = 0; i < target.length; i++) if (after[i] !== target[i]) wrong++;
   return { collection: col.title, products: target.length, changed: true, positionsWrong: wrong };
+}
+
+/** Re-arrange one collection by handle. Cheap when nothing moved: it writes nothing. */
+export async function arrangeOneCollection(gql, handle) {
+  const data = await gql(`query($h:String!){ collectionByHandle(handle:$h){ id title handle sortOrder } }`, { h: handle });
+  const col = data?.collectionByHandle;
+  if (!col) return null;
+  return arrangeCollection(gql, col);
 }
 
 /**
