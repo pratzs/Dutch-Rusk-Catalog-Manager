@@ -66,3 +66,15 @@ test("a held row comes back by itself once Ostendo retail is fixed (remembered c
   const d = decideRow({ retail: 3.7, fixed: 3.29, compareAt: 3.66 });
   assert.deepEqual([d.action, d.price, d.compareAt, d.pct], ["update", 3.33, 3.7, 10]);
 });
+
+import { decideCompareAtOnly, GENERAL_PRICE_LIST } from "./catalog-reprice.server.js";
+test("other catalogs: only compare-at is managed, the price is never touched", () => {
+  assert.equal(GENERAL_PRICE_LIST, "gid://shopify/PriceList/34326708537");
+  assert.equal(decideCompareAtOnly({ retail: 25.4, fixed: 16.5, compareAt: null }).action, "update"); // TEEG Chupa Chups
+  assert.equal(decideCompareAtOnly({ retail: 90, fixed: 52.8, compareAt: null }).action, "update"); // 41% under retail is NOT held here
+  assert.equal(decideCompareAtOnly({ retail: 33, fixed: 29.1, compareAt: 31.7 }).action, "update"); // stale compare-at
+  assert.equal(decideCompareAtOnly({ retail: 33, fixed: 29.1, compareAt: 33 }).action, "none");
+  assert.equal(decideCompareAtOnly({ retail: 10, fixed: 10, compareAt: null }).action, "none");
+  assert.equal(decideCompareAtOnly({ retail: 0, fixed: 39, compareAt: 5 }).action, "clear"); // no retail: no false was-price
+  assert.equal(decideCompareAtOnly({ retail: 0, fixed: 39, compareAt: 0 }).action, "none");
+});

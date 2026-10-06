@@ -35,6 +35,12 @@
 // catalog price sync reads `compareAt || price` as the standard retail, so a
 // stale one poisons standard_retail_price and catalog_savings (248 variants on
 // 5 Oct 2026, left behind by the manual compare-price button).
+// SCOPE (7 Oct 2026, user rule): only the GENERAL customer price is managed here.
+// Every other catalog (TEEG, Night N Day, Metromart, ...) belongs to its key
+// account manager: their prices are never repriced or held. What this job does
+// for ALL catalogs is keep the compare-at ("was") price equal to retail.
+export const GENERAL_PRICE_LIST = "gid://shopify/PriceList/34326708537";
+
 const r2 = (x) => Math.round(x * 100) / 100;
 const EPS = 0.005;
 
@@ -90,6 +96,17 @@ export function decideRow({ retail, fixed, compareAt, dealActive = false }) {
     return { action: "update", price: fixed, compareAt: retail, pct: null, reason: "custom price kept, compare-at refreshed" };
   }
   return { action: "hold", reason: "custom price is at or above retail" };
+}
+
+/**
+ * Compare-at only (every catalog except General). The price is never touched.
+ * @returns {{action:"none"|"update"|"clear"}}
+ */
+export function decideCompareAtOnly({ retail, fixed, compareAt }) {
+  if (!(retail > 0)) return compareAt !== null && compareAt !== 0 ? { action: "clear" } : { action: "none" };
+  if (compareAt !== null && Math.abs(compareAt - retail) < EPS) return { action: "none" };
+  if (compareAt === null && fixed >= retail - EPS) return { action: "none" }; // no discount, nothing to compare
+  return { action: "update" }; // compare-at := retail, price kept
 }
 
 const PRICE_ROWS = `
@@ -167,6 +184,7 @@ export async function repriceVariants(gql, variantGids = null, { dryRun = false,
 
   for (const pl of lists) {
     const rows = await loadRows(gql, pl.id, variantGids);
+    const managePrice = pl.id === GENERAL_PRICE_LIST;
     const updates = [];
     const clears = [];
     const upserts = [];
@@ -180,6 +198,21 @@ export async function repriceVariants(gql, variantGids = null, { dryRun = false,
       const key = `${pl.id}|${x.variant.id}`;
       const dealActive = dealKey.has(key);
       const label = `${x.variant.product?.title ?? ""} | ${x.variant.title ?? ""}`.trim();
+
+      if (!managePrice) {
+        const stale = heldKey.get(key);
+        if (stale) resolved.push({ id: stale.id, variantGid: stale.variantGid }); // not ours to hold
+        const c = decideCompareAtOnly({ retail, fixed, compareAt: shownCompareAt });
+        if (c.action === "update") {
+          updates.push({ variantId: x.variant.id, price: fixed, compareAt: retail });
+          touchedVariants.add(x.variant.id);
+        } else if (c.action === "clear") {
+          clears.push({ variantId: x.variant.id, price: fixed });
+          summary.cleared++;
+          touchedVariants.add(x.variant.id);
+        }
+        continue;
+      }
 
       // A held row has had its compare-at cleared; judge it by the one it had.
       let h = heldKey.get(key);

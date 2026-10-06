@@ -36,7 +36,8 @@ function nzHour(now = new Date()) {
   return parseInt(new Intl.DateTimeFormat("en-NZ", { timeZone: "Pacific/Auckland", hour: "numeric", hour12: false }).format(now), 10) % 24;
 }
 const SWEEP_NZ_HOUR = 3;
-const REPORT_NZ_WEEKDAY = "Mon"; // the held-rows email goes out once a week
+const REPORT_NZ_WEEKDAY = "Mon"; // the held-rows email goes out once a week,
+const REPORT_NZ_HOUR = 8; // Monday 8am NZ (the hourly cron runs at :00)
 
 function nzWeekday(now = new Date()) {
   return new Intl.DateTimeFormat("en-NZ", { timeZone: "Pacific/Auckland", weekday: "short" }).format(now);
@@ -139,7 +140,7 @@ export async function action({ request }) {
         console.error("[catalog-reprice] verify pass:", e.message);
       }
     }
-    if (fullSweep && (body.report === true || nzWeekday() === REPORT_NZ_WEEKDAY)) {
+    if (maintenance && (body.report === true || (nzWeekday() === REPORT_NZ_WEEKDAY && nzHour() === REPORT_NZ_HOUR))) {
       try {
         heldReport = await sendHeldReport();
       } catch (e) {

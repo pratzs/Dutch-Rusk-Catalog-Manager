@@ -6,6 +6,16 @@ keep the price lists right without anyone touching them.
 
 ## 1. Catalog prices follow retail (`catalog-reprice`)
 
+**Scope (user rule, 7 Oct 2026).** Two different jobs:
+- **Compare-at, every catalog:** the "was" price must equal retail. Nothing else
+  is touched (`decideCompareAtOnly`). Never held, never emailed. TEEG, Night N Day,
+  Metromart and the rest are priced by their key account managers.
+- **Sale price, General catalog only** (`GENERAL_PRICE_LIST`): repriced at the same
+  % off when retail moves, with the safeguards below.
+
+Everything in the rest of this section (percentages, holds, the held-rows email)
+applies to the General catalog only.
+
 **The problem it fixes.** Ostendo owns retail. When it changes a product price,
 only the product moves. A catalog price is a fixed dollar amount, so it used to
 stay put: on 5 Oct 2026 236 catalog prices were giving 13-18% off instead of
@@ -47,7 +57,7 @@ in Ostendo the row resolves on its own: compare-at is restored, or the old % off
 is re-applied to the new retail. If someone changes the price by hand the
 record is dropped. A held row with no compare-at is simply listed.
 
-**Weekly held-rows email (Mondays, 03:xx NZ).** After the daily sweep, on Mondays,
+**Weekly held-rows email (Mondays, 8am NZ).** The hourly job, on Mondays at the 8am run,
 `sendHeldReport` emails `PRICING_ALERT_EMAIL` (cc `HELD_REPORT_CC`, comma list;
 set to Ryan and the Dutch Rusk admin address) a plain-English HTML email
 (`app/lib/held-report.server.js`) with numbered steps per job: (1) retail moved
