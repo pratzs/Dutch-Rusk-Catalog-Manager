@@ -89,25 +89,32 @@ compare-at.
 Code: `app/lib/deal-sheet.server.js`. Table: `DealSheetPrice`
 (migration `20261006000001_add_deal_sheet_price`).
 
-### The Deals menu and badge
+### The Deals on the Special Deals page, and the badge
 
 Every product on a sheet carries the Shopify tag `deal-sheet`, set when the
 sheet is applied and removed on the 1st unless the product is on the next sheet.
 Lines whose normal General price already is the deal price are registered as
 `kind = "listing"` rows (no price change), so those products are tagged too.
 
-- Collection **Deal Sheet** (`/collections/deal-sheet`), automated, rule
+- **Special Deals page** (`/pages/special-deals`): the BOGO offer cards come first,
+  exactly as before, then a **Deals** section with the deal-sheet products. The
+  second part is the theme section `sections/deals-products.liquid`, added to
+  `templates/page.special-deals.json` below the BOGO section. It renders the
+  `deal-sheet` collection with the normal product card, quick add, stock map and
+  "Show more" pagination. The Special Deals menu item is a plain link, no dropdown.
+- Collection **Deals** (`/collections/deal-sheet`, handle kept): automated, rule
   "tag equals deal-sheet", published to the Online Store. The `deal-` handle
-  prefix means the existing deal-access gate in `main-collection-product-grid`
-  already blocks buyers who are not entitled.
-- Menu: **Special Deals > Deal Sheet** in `main-menu`. The header hides the whole
-  Special Deals item from buyers who are not entitled.
-- Badge: `snippets/product-badge.liquid` in the theme shows "Deals" on tagged
-  products, only for entitled buyers (the tag itself is public).
+  prefix means the deal-access gate on collection pages blocks buyers who are not
+  entitled. Its order (sold-out last) is maintained by the app.
+- Badge: `snippets/product-badge.liquid` shows "Deals" on tagged products, only
+  for entitled buyers (the tag itself is public).
+- Gate: the page and the new section both use `snippets/deal-access.liquid`
+  (server side, fails closed). The header hides Special Deals from buyers who are
+  not entitled.
 
-The menu item and collection are permanent; only the tags change each month.
+The collection and page are permanent; only the tags change each month.
 `menuUpdate` replaces the whole tree, so any future menu edit must resend all of
-it. A pre-change copy is in the backups folder.
+it. A pre-change copy of the main menu is in the backups folder.
 
 ### BOGO deals run only in the months a deal sheet lists them
 
