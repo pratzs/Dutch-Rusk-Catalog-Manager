@@ -123,7 +123,18 @@ the old address.** The Catalog Manager cannot do this itself (its token has no
 navigation scope); use the Shopify admin (Content > Menus > URL redirects) or the
 Shopify connector's `urlRedirectCreate`. The BOGO deal collections
 (`deal-<bundle id>`) are deleted by the BOGO page when a deal is removed, and
-that address does not get a redirect yet.
+that address now gets a 301 to Special Deals too: the BOGO page queues it in the
+shop metafield `custom.pending_redirects` and tries to create it straight away;
+the hourly job retries whatever is still queued (`app/lib/redirects.server.js`).
+
+**Known blocker.** Creating a redirect needs the `write_online_store_navigation`
+access scope, and releasing a new scope needs `shopify app deploy`. That deploy is
+currently refused because the `checkout-price-display` checkout extension is on
+API version 2025-07, which Shopify no longer accepts ("Version couldn't be
+created"). It has to be upgraded (and the checkout re-tested) before any app
+deploy, scope or Function, will go through. Until then the queue simply waits, and
+the monthly routine flushes it through the Shopify connector: read
+`custom.pending_redirects`, `urlRedirectCreate` each one, then clear the queue.
 
 The collection and page are permanent; only the tags change each month.
 `menuUpdate` replaces the whole tree, so any future menu edit must resend all of

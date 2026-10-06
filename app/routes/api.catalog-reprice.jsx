@@ -24,6 +24,7 @@ import { reconcileBogo } from "../lib/bogo-schedule.server";
 import { getAdminToken } from "../lib/admin-token.server";
 import { repriceVariants } from "../lib/catalog-reprice.server";
 import { revertDueDeals } from "../lib/deal-sheet.server";
+import { flushRedirects } from "../lib/redirects.server";
 
 async function triggerSync(variantIds) {
   const url = `${process.env.SHOPIFY_APP_URL ?? "https://dutch-rusk-catalog-manager.onrender.com"}/api/catalog-price-sync`;
@@ -78,7 +79,16 @@ export async function action({ request }) {
     let reverted = null;
     let bogo = null;
     let ordered = null;
+    let redirects = null;
     if (maintenance) {
+      // 301s for pages the app has retired (removed BOGO deals), queued until the
+      // app is allowed to create them.
+      try {
+        redirects = await flushRedirects(gql);
+      } catch (e) {
+        console.error("[catalog-reprice] redirects:", e.message);
+        redirects = { error: e.message };
+      }
       reverted = await revertDueDeals(gql);
       // BOGO deals run only in the months a deal sheet lists them (Dragon and
       // Bundaberg all year). This is what ends a deal when the month turns.
@@ -103,7 +113,7 @@ export async function action({ request }) {
       triggerSync(ids).then((r) => console.log("[catalog-reprice] sync:", JSON.stringify(r).slice(0, 200)));
     }
     console.log(`[catalog-reprice] ${maintenance ? "sweep" : "webhook"}: checked ${summary.checked}, updated ${summary.updated}, held ${summary.held.length}, product compare-at fixed ${summary.variantCompareAtFixed}`);
-    return Response.json({ success: true, checked: summary.checked, updated: summary.updated, held: summary.held.length, variantCompareAtFixed: summary.variantCompareAtFixed, reverted, bogo, ordered, syncTriggered: !!changed });
+    return Response.json({ success: true, checked: summary.checked, updated: summary.updated, held: summary.held.length, variantCompareAtFixed: summary.variantCompareAtFixed, reverted, bogo, ordered, redirects, syncTriggered: !!changed });
   } catch (err) {
     console.error("[catalog-reprice] failed:", err);
     return Response.json({ error: err.message }, { status: 500 });

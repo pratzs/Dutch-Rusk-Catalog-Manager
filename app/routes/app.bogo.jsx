@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import { readState, writeBundles, parseMonths, describeSchedule, isActiveIn, nzMonth } from "../lib/bogo-schedule.server";
+import { queueRedirect, flushRedirects, SPECIAL_DEALS_PATH } from "../lib/redirects.server";
 
 // Bundles live in two places now. custom.bogo_master holds every bundle with its
 // schedule and is what this page edits. custom.bogo_bundles holds only the ones
@@ -299,7 +300,17 @@ export async function action({ request }) {
       const next = bundles.filter((b) => b.id !== id);
       await saveBundles(admin, shopId, next);
       await deleteDealCollection(admin, id);
-      return { ok: "Deal removed." };
+      // The deal's page is gone, so its old address must 301 to Special Deals.
+      // Queued first so it is not lost if the app lacks the permission or
+      // Shopify errors; the hourly Catalog Pricing job retries until it lands.
+      const gql = plain(admin);
+      await queueRedirect(gql, `/collections/${dealCollectionHandle(id)}`, SPECIAL_DEALS_PATH);
+      const redirect = await flushRedirects(gql);
+      return {
+        ok: redirect.pending
+          ? "Deal removed. Its old page address will redirect to Special Deals as soon as the app has the redirect permission (queued, retried hourly)."
+          : "Deal removed. Its old page address now redirects to Special Deals.",
+      };
     }
 
     return { error: "Unknown action." };
