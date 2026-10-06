@@ -100,9 +100,9 @@ Lines whose normal General price already is the deal price are registered as
   exactly as before, then a **Deals** section with the deal-sheet products. The
   second part is the theme section `sections/deals-products.liquid`, added to
   `templates/page.special-deals.json` below the BOGO section. It renders the
-  `deal-sheet` collection with the normal product card, quick add, stock map and
+  `deal-products` collection with the normal product card, quick add, stock map and
   "Show more" pagination. The Special Deals menu item is a plain link, no dropdown.
-- Collection **Deals** (`/collections/deal-sheet`, handle kept): automated, rule
+- Collection **Deals** (`/collections/deal-products`): automated, rule
   "tag equals deal-sheet", published to the Online Store. The `deal-` handle
   prefix means the deal-access gate on collection pages blocks buyers who are not
   entitled. Its order (sold-out last) is maintained by the app.
@@ -111,6 +111,19 @@ Lines whose normal General price already is the deal price are registered as
 - Gate: the page and the new section both use `snippets/deal-access.liquid`
   (server side, fails closed). The header hides Special Deals from buyers who are
   not entitled.
+
+**301 redirect.** The first version of this was a standalone page at
+`/collections/deal-sheet`. When the Deals products moved onto Special Deals, that
+address got a 301 to `/pages/special-deals` (Shopify redirect id
+606819451193). Shopify ignores a redirect on a path that still has a live
+collection, so the collection's handle was renamed to `deal-products` first
+(keeping the `deal-` prefix so the access gate still applies). **Rule: whenever a
+storefront page or collection address changes or is retired, create a 301 from
+the old address.** The Catalog Manager cannot do this itself (its token has no
+navigation scope); use the Shopify admin (Content > Menus > URL redirects) or the
+Shopify connector's `urlRedirectCreate`. The BOGO deal collections
+(`deal-<bundle id>`) are deleted by the BOGO page when a deal is removed, and
+that address does not get a redirect yet.
 
 The collection and page are permanent; only the tags change each month.
 `menuUpdate` replaces the whole tree, so any future menu edit must resend all of
@@ -141,7 +154,7 @@ Code: `app/lib/bogo-schedule.server.js`.
 ### Sold-out products on the Deals page
 
 `SOLD_OUT_LAST_HANDLES` in `brand-order.server.js` lists collections whose
-sold-out products sink to the bottom (just `deal-sheet`). "Sold out" means no
+sold-out products sink to the bottom (just `deal-products`). "Sold out" means no
 variant has `availableForSale`, the same test as the storefront badge. The
 48-hour ordering job honours it, and the hourly Catalog Pricing job re-arranges
 the Deals collection too, because stock moves faster than every 48 hours. Add a

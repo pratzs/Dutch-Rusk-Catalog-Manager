@@ -49,7 +49,7 @@ export const LEAVE_ALONE = ["New Arrivals"];
 // not have to scroll past products they cannot order. The hourly Catalog
 // Pricing job re-arranges it (arrangeOneCollection), because stock moves faster
 // than this job's 48-hour run.
-export const SOLD_OUT_LAST_HANDLES = ["deal-sheet"];
+export const SOLD_OUT_LAST_HANDLES = ["deal-products"];
 
 // Ordering by brand is only as good as the vendor field, and a lot of products
 // arrive filed under the house vendor even though the title names a real brand:
