@@ -40,11 +40,12 @@ async function sendTemplate({ templateId, to, params, tags }) {
   return await resp.json().catch(() => ({}));
 }
 
-async function sendRawFallback({ to, subject, textBody, htmlBody, tags }) {
+async function sendRawFallback({ to, cc, subject, textBody, htmlBody, tags }) {
   const apiKey = requireBrevoKey();
   const body = {
     sender: senderConfig(),
     to: [{ email: to.email, name: to.name || to.email }],
+    ...(cc?.length ? { cc: cc.map((e) => ({ email: e })) } : {}),
     subject,
     textContent: textBody,
     htmlContent: htmlBody,
@@ -352,6 +353,11 @@ If you didn't request this, you can ignore this email.
 
 Dutch Rusk Team`;
   return sendRawFallback({ to, subject, textBody: text, htmlBody: null, tags: ["dr_login_otp"] });
+}
+
+/** The held-catalog-prices email: HTML, optional cc. See held-report.server.js. */
+export async function sendHeldPricesEmail({ to, cc, subject, html, text }) {
+  return await sendRawFallback({ to: { email: to, name: to }, cc, subject, textBody: text, htmlBody: html, tags: ["held-prices"] });
 }
 
 /**

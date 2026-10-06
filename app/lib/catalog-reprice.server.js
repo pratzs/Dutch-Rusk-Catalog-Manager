@@ -320,10 +320,19 @@ export async function buildHeldReport() {
   return { count: rows.length, subject: `Dutch Rusk catalog prices on hold: ${rows.length} need a look`, lines };
 }
 
-export async function sendHeldReport() {
-  const report = await buildHeldReport();
-  if (!report) return { sent: false, count: 0 };
-  const { sendPricingAlert } = await import("./brevo.server.js");
-  const r = await sendPricingAlert({ subject: report.subject, lines: report.lines });
-  return { sent: !r?.skipped, count: report.count, result: r?.skipped ?? "ok" };
+/**
+ * Email the held rows. To PRICING_ALERT_EMAIL, cc HELD_REPORT_CC (comma list) so
+ * the people who fix Ostendo prices see it too. `to`/`cc` override for a one-off.
+ */
+export async function sendHeldReport({ to, cc } = {}) {
+  const { default: prisma } = await import("../db.server.js");
+  const { buildHeldEmail } = await import("./held-report.server.js");
+  const email = buildHeldEmail(await prisma.heldPriceRow.findMany());
+  if (!email) return { sent: false, count: 0 };
+  const recipient = to ?? process.env.PRICING_ALERT_EMAIL;
+  if (!recipient) return { sent: false, count: email.count, result: "PRICING_ALERT_EMAIL not set" };
+  const ccList = cc ?? (process.env.HELD_REPORT_CC ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const { sendHeldPricesEmail } = await import("./brevo.server.js");
+  await sendHeldPricesEmail({ to: recipient, cc: ccList, subject: email.subject, html: email.html, text: email.text });
+  return { sent: true, count: email.count, to: recipient, cc: ccList };
 }
