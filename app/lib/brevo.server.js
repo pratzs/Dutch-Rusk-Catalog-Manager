@@ -371,6 +371,19 @@ export async function sendHeldPricesEmail({ to, cc, subject, html, text }) {
  * Deliberately plain text and no Brevo template, so it works without anyone
  * having to create one. Recipient comes from PRICING_ALERT_EMAIL.
  */
+/**
+ * A plain HTML report email (no Brevo template), e.g. the Metromart North vs
+ * South report. `to` is one address or a comma-separated list.
+ */
+export async function sendReportEmail({ to, subject, htmlBody, textBody, tags }) {
+  const addresses = String(to).split(",").map((s) => s.trim()).filter(Boolean);
+  const results = [];
+  for (const email of addresses) {
+    results.push(await sendRawFallback({ to: { email, name: email }, subject, textBody, htmlBody, tags: tags || ["report"] }));
+  }
+  return results;
+}
+
 export async function sendPricingAlert({ subject, lines }) {
   const to = process.env.PRICING_ALERT_EMAIL;
   if (!to) return { skipped: "PRICING_ALERT_EMAIL not set" };

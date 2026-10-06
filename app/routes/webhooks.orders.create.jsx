@@ -630,6 +630,68 @@ export const action = async ({ request }) => {
     console.error(`[orders/create] Sales rep notification failed for order ${order?.id}:`, err);
   }
 
+  // ── Metromart order alert (Jira SUP-45) ──────────────────────────────────
+  // Every Metromart on this (Dutch Rusk) shop is a South Island store. Nish
+  // Jha, Worthy Products' key account manager for Metromart, gets an email for
+  // each of their orders. Recipient comes from METROMART_ALERT_TO; unset means
+  // off. Same email layout as the sales rep notification. Its own try/catch,
+  // and marked on the order so a webhook retry never sends it twice.
+  try {
+    const alertTo = process.env.METROMART_ALERT_TO;
+    if (alertTo) {
+      const orderGid = `gid://shopify/Order/${order.id}`;
+      const infoJson = await graphqlJson(
+        admin,
+        `query MetromartOrder($id: ID!) {
+          order(id: $id) {
+            customAttributes { key value }
+            customer { firstName lastName email }
+            purchasingEntity { ... on PurchasingCompany { company { name } } }
+          }
+        }`,
+        { id: orderGid }
+      );
+      const info = infoJson?.data?.order;
+      const companyName = info?.purchasingEntity?.company?.name || "";
+      const already = info?.customAttributes?.some((a) => a.key === "Metromart Alert Sent");
+      if (!already && /metro\s*mart/i.test(companyName)) {
+        const { sendSalesRepOrderNotification } = await import("../lib/brevo.server");
+        const c = info?.customer;
+        const customerName = [c?.firstName, c?.lastName].filter(Boolean).join(" ") || c?.email || "Customer";
+        for (const email of alertTo.split(",").map((s) => s.trim()).filter(Boolean)) {
+          await sendSalesRepOrderNotification({
+            repEmail: email,
+            repName: process.env.METROMART_ALERT_NAME || "Nish",
+            orderName,
+            customerName,
+            companyName,
+            lineItems: (await import("../lib/rep-line-items.server")).repEmailLineItems(lineItems, {}),
+            subtotal: order.subtotal_price ?? order.total_price,
+            currency: order.currency,
+            poNumber: order.po_number,
+            note: order.note,
+          });
+        }
+        await graphqlJson(
+          admin,
+          `mutation MarkMetromartAlert($input: OrderInput!) { orderUpdate(input: $input) { userErrors { field message } } }`,
+          {
+            input: {
+              id: orderGid,
+              customAttributes: [
+                ...(info.customAttributes ?? []).map((a) => ({ key: a.key, value: a.value })),
+                { key: "Metromart Alert Sent", value: alertTo },
+              ],
+            },
+          }
+        );
+        console.log(`[orders/create] ${orderName}: Metromart alert sent to ${alertTo} (${companyName}).`);
+      }
+    }
+  } catch (err) {
+    console.error(`[orders/create] Metromart alert failed for order ${order?.id}:`, err);
+  }
+
   // ── Shared cart ──────────────────────────────────────────────────────────
   // The customer's shared cart for this store (see
   // app/lib/shared-cart.server.js) is emptied once it has been ordered, or

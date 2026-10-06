@@ -264,6 +264,19 @@ model SharedCart {
   @@unique([shop, locationGid])
 }
 
+// One row per scheduled report that has been sent (e.g. "metromart-week-2026-10-11").
+// The key is claimed BEFORE sending, so a restart or a second server process
+// can never send the same report twice. See lib/metromart-report.server.js.
+model ReportSendLog {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  recipient String
+  status    String   @default("sending") // sending | sent
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // One row per catalog price that a monthly deal sheet has overridden (kind
 // "price") or per quantity break it added (kind "break"). It exists for two
 // reasons: so the hourly Catalog Reprice job knows NOT to reprice a deal price
