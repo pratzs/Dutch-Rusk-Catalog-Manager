@@ -2,6 +2,8 @@
 // app: plain words, one job per group, one table per job. Built from the
 // HeldPriceRow table (see catalog-reprice.server.js). Pure functions so it can be
 // previewed without sending.
+import { cleanPct } from "./catalog-reprice.server.js";
+
 const NAVY = "#181344";
 const GOLD = "#FDB714";
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -50,45 +52,63 @@ ${body}</div>`;
 const p = (t, extra = "") => `<p style="font:15px/1.6 Arial,sans-serif;color:#333;margin:12px 0;${extra}">${t}</p>`;
 const listHead = (name) => `<p style="font:700 13px Arial,sans-serif;color:${NAVY};margin:18px 0 0;text-transform:uppercase;letter-spacing:.5px;">${esc(name)} catalog</p>`;
 
+const steps = (items) => `<ol style="font:15px/1.65 Arial,sans-serif;color:#333;margin:10px 0 6px;padding-left:22px;">${items.map((i) => `<li style="margin:6px 0;">${i}</li>`).join("")}</ol>`;
+
+/** The price the website should show if Ostendo's new retail is correct: same % off as before. */
+function targetPrice(r) {
+  if (!(r.retailAtHold > 0) || !r.lastCompareAt) return null;
+  const pct = cleanPct(r.fixedAtHold, r.lastCompareAt);
+  return pct === null ? null : Math.round(r.retailAtHold * (1 - pct / 100) * 100) / 100;
+}
+
 /** @param rows HeldPriceRow[]  @returns {{subject, html, text, count}|null} */
 export function buildHeldEmail(rows) {
   if (!rows.length) return null;
   const sorted = [...rows].sort((a, b) => a.label.localeCompare(b.label));
-  const caseRows = sorted.filter(wholeCase);
+  const deepRows = sorted.filter(wholeCase);
   const retailRows = sorted.filter((r) => !wholeCase(r));
   const n = rows.length;
 
   let jobs = "";
   if (retailRows.length) {
     const body =
-      p(`For these products the <strong>retail price in Ostendo suddenly jumped or dropped</strong>. That usually means a typing mistake, like a missing digit or the price of a different pack size.`) +
-      p(`<strong>What to do:</strong> open each product in Ostendo and look at the retail price.<br>
-&bull; <strong>If Ostendo is wrong:</strong> fix the price. That is all. The website puts the crossed-out price back by itself overnight.<br>
-&bull; <strong>If Ostendo is right:</strong> the website price needs to change instead. Email Pratham the new price.`) +
+      p(`For these products the <strong>retail price in Ostendo suddenly jumped or dropped</strong>. That is often a typing mistake, like a missing digit or the price of a different pack size. Please do these steps for <strong>each product</strong> in the tables below.`) +
+      steps([
+        `Open <strong>Ostendo</strong> and find the product (use the name and pack size in the table).`,
+        `Look at its <strong>retail (selling) price</strong>. Compare it with <em>Ostendo used to say</em> in the table.`,
+        `<strong>If the new Ostendo price is a mistake:</strong> type the correct price and save. That is all. The website puts the crossed-out price back by itself overnight.`,
+        `<strong>If the new Ostendo price is correct</strong> (a real price change): leave Ostendo alone and change the website price instead. Open <strong>Shopify admin</strong>, then <strong>Catalogs</strong>, open the catalog named in the table, click <strong>Edit prices</strong>, search for the product, type the amount from the last column (<em>Set website price to</em>) and save. The crossed-out price comes back overnight.`,
+      ]) +
       byList(retailRows).map(([list, rs]) =>
         listHead(list) +
-        table(["Product", "Customers pay", "Ostendo used to say", "Ostendo says now"], rs.map((r) => [
-          product(r),
-          money(r.fixedAtHold),
-          r.lastCompareAt ? money(r.lastCompareAt) : "n/a",
-          r.retailAtHold > 0 ? `<strong style="color:#B13924;">${money(r.retailAtHold)}</strong>` : `<strong style="color:#B13924;">$0.00 (no price set)</strong>`,
-        ])),
+        table(["Product", "Customers pay", "Ostendo used to say", "Ostendo says now", "Set website price to (only if Ostendo is right)"], rs.map((r) => {
+          const tp = targetPrice(r);
+          return [
+            product(r),
+            money(r.fixedAtHold),
+            r.lastCompareAt ? money(r.lastCompareAt) : "n/a",
+            r.retailAtHold > 0 ? `<strong style="color:#B13924;">${money(r.retailAtHold)}</strong>` : `<strong style="color:#B13924;">$0.00 (no price set)</strong>`,
+            r.retailAtHold > 0 ? (tp !== null ? `<strong>${money(tp)}</strong>` : "keep the same") : "Ostendo needs a price first",
+          ];
+        })),
       ).join("");
     jobs += card(1, `Check ${retailRows.length} retail price${retailRows.length === 1 ? "" : "s"} in Ostendo`, body);
   }
-  if (caseRows.length) {
+  if (deepRows.length) {
     const body =
-      p(`For these products the <strong>website price looks like the price of ONE item, but the product is a whole case</strong> (a Shipper or Outer holds lots of items). So the price is far lower than Ostendo's price for the case.`) +
-      p(`<strong>What to do:</strong> for each product, decide what a whole case should cost.<br>
-&bull; <strong>If the website price is wrong:</strong> email Pratham the right price for the whole case.<br>
-&bull; <strong>If the website price is right on purpose:</strong> tell Pratham, and he will mark it as fine.`) +
-      byList(caseRows).map(([list, rs]) =>
+      p(`For these products the <strong>website price is much lower than Ostendo's retail price</strong> (more than 40% lower). That is fine if it is a special deal on purpose. It is a problem if it is a typing mistake.`) +
+      steps([
+        `Look at the table: what customers pay now, and what Ostendo's retail price is.`,
+        `<strong>If the website price is on purpose:</strong> you do not need to do anything.`,
+        `<strong>If the website price is a mistake:</strong> open <strong>Shopify admin</strong>, then <strong>Catalogs</strong>, open the catalog named in the table, click <strong>Edit prices</strong>, search for the product, type the correct price and save. Its crossed-out price comes back overnight.`,
+      ]) +
+      byList(deepRows).map(([list, rs]) =>
         listHead(list) +
-        table(["Product", "Customers pay now", "Ostendo price for the case"], rs.map((r) => [
+        table(["Product", "Customers pay now", "Ostendo retail price"], rs.map((r) => [
           product(r), money(r.fixedAtHold), `<strong>${money(r.retailAtHold)}</strong>`,
         ])),
       ).join("");
-    jobs += card(retailRows.length ? 2 : 1, `Decide the case price for ${caseRows.length} product${caseRows.length === 1 ? "" : "s"}`, body);
+    jobs += card(retailRows.length ? 2 : 1, `Double-check ${deepRows.length} deal price${deepRows.length === 1 ? "" : "s"}`, body);
   }
 
   const html = `<!doctype html><html><body style="margin:0;padding:0;background:#FAF8F5;">
@@ -103,7 +123,7 @@ export function buildHeldEmail(rows) {
 
 <div style="background:#FFF8E5;border-radius:10px;padding:16px 18px;margin:0 0 6px;">
 <p style="font:700 15px Arial,sans-serif;color:${NAVY};margin:0 0 6px;">What is this about?</p>
-<p style="font:15px/1.6 Arial,sans-serif;color:#333;margin:0;">Our website shows a price, and sometimes a crossed-out &ldquo;was&rdquo; price next to it. Every night the system checks that these match what Ostendo says. For <strong>${n} products</strong> the numbers did not make sense, so the system <strong>stopped and did not guess</strong>.</p>
+<p style="font:15px/1.6 Arial,sans-serif;color:#333;margin:0;">Our website shows a price, and sometimes a crossed-out &ldquo;was&rdquo; price next to it. The system checks that these match what Ostendo says. For <strong>${n} products</strong> the numbers did not make sense, so the system <strong>stopped and did not guess</strong>.</p>
 </div>
 ${p(`<strong>Nothing is broken and no customer was overcharged.</strong> Customers pay the same price as before. We only hid the crossed-out &ldquo;was&rdquo; price on these products, so nobody sees a wrong one.`)}
 
@@ -111,23 +131,32 @@ ${jobs}
 
 <div style="border-radius:12px;background:#F5F5F7;padding:18px 22px;margin:18px 0 0;">
 <p style="font:700 16px Arial,sans-serif;color:${NAVY};margin:0 0 8px;">What happens after you fix one?</p>
-<p style="font:15px/1.6 Arial,sans-serif;color:#333;margin:0;">Nothing else to do. The system checks again every night around 3am. When a product is fixed, its crossed-out price comes back on its own and it drops off this list. This email stops when the list is empty.</p>
+<p style="font:15px/1.6 Arial,sans-serif;color:#333;margin:0;">Nothing else to do. The system checks again every night around 3am (and sends this email once a week, on Monday). When a product is fixed, its crossed-out price comes back on its own and it drops off this list. This email stops when the list is empty.</p>
 </div>
 
-<p style="font:15px/1.6 Arial,sans-serif;color:#333;margin:22px 0 0;">Questions? Email Pratham at <a href="mailto:pratham@worthy.nz" style="color:${NAVY};font-weight:700;">pratham@worthy.nz</a>.</p>
+<p style="font:15px/1.6 Arial,sans-serif;color:#333;margin:22px 0 0;">Stuck on one? Message Pratham at <a href="mailto:pratham@worthy.nz" style="color:${NAVY};font-weight:700;">pratham@worthy.nz</a>.</p>
 </div></td></tr>
 <tr><td align="center" style="padding:16px 8px;font:12px Arial,sans-serif;color:#8a8a99;">Sent automatically by the Dutch Rusk catalog pricing check.</td></tr>
 </table></td></tr></table></body></html>`;
 
-  const t = (r) => `  ${niceList(r.priceListName)}: ${r.label}\n      customers pay ${money(r.fixedAtHold)}, Ostendo says ${money(r.retailAtHold)}${r.lastCompareAt ? `, used to say ${money(r.lastCompareAt)}` : ""}`;
+  const t = (r) => `  ${niceList(r.priceListName)}: ${r.label}\n      customers pay ${money(r.fixedAtHold)}, Ostendo says ${money(r.retailAtHold)}${r.lastCompareAt ? `, used to say ${money(r.lastCompareAt)}` : ""}${targetPrice(r) !== null ? `, set website price to ${money(targetPrice(r))} if Ostendo is right` : ""}`;
   const text = [
     `${n} website price(s) need a quick look.`,
     "",
     "Nothing is broken and no customer was overcharged. For these products the numbers from Ostendo did not make sense, so the system stopped and did not guess. We only hid the crossed-out 'was' price so nobody sees a wrong one.",
     "",
-    ...(retailRows.length ? [`JOB 1: Check ${retailRows.length} retail price(s) in Ostendo. If Ostendo is wrong, fix it (the website fixes itself overnight). If Ostendo is right, email Pratham the new price.`, ...retailRows.map(t), ""] : []),
-    ...(caseRows.length ? [`JOB ${retailRows.length ? 2 : 1}: Decide the case price for ${caseRows.length} product(s). The website price looks like one item, but the product is a whole case. Email Pratham the right case price.`, ...caseRows.map(t), ""] : []),
-    "The system checks again every night around 3am. Fixed products drop off this list. Questions: pratham@worthy.nz",
+    ...(retailRows.length ? [
+      `JOB 1: Check ${retailRows.length} retail price(s) in Ostendo. For each product:`,
+      "  1. Open Ostendo and find the product.",
+      "  2. Look at the retail price and compare it with what it used to say.",
+      "  3. If the new Ostendo price is a mistake, type the correct price and save. The website fixes itself overnight.",
+      "  4. If the new Ostendo price is correct, leave Ostendo alone. In Shopify admin go to Catalogs, open the catalog, Edit prices, search the product, type the 'set website price to' amount and save.",
+      ...retailRows.map(t), ""] : []),
+    ...(deepRows.length ? [
+      `JOB ${retailRows.length ? 2 : 1}: Double-check ${deepRows.length} deal price(s). Website price is more than 40% under Ostendo retail.`,
+      "  If it is on purpose, do nothing. If it is a mistake, in Shopify admin go to Catalogs, open the catalog, Edit prices, search the product, type the correct price and save.",
+      ...deepRows.map(t), ""] : []),
+    "The system checks again every night around 3am and sends this email once a week (Monday). Fixed products drop off this list. Stuck? Message pratham@worthy.nz",
   ].join("\n");
 
   return { count: n, subject: `Dutch Rusk website prices: ${n} need a quick check`, html, text };

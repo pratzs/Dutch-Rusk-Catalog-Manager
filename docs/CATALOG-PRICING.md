@@ -47,10 +47,24 @@ in Ostendo the row resolves on its own: compare-at is restored, or the old % off
 is re-applied to the new retail. If someone changes the price by hand the
 record is dropped. A held row with no compare-at is simply listed.
 
-**Daily held-rows email.** After the daily sweep, `sendHeldReport` emails
-`PRICING_ALERT_EMAIL` the held rows in two groups: price more than 40% under
-retail (often a per-unit price on a whole case: needs a price decision) and
-retail moved more than 30% (check Ostendo). No held rows, no email.
+**Weekly held-rows email (Mondays, 03:xx NZ).** After the daily sweep, on Mondays,
+`sendHeldReport` emails `PRICING_ALERT_EMAIL` (cc `HELD_REPORT_CC`, comma list;
+set to Ryan and the Dutch Rusk admin address) a plain-English HTML email
+(`app/lib/held-report.server.js`) with numbered steps per job: (1) retail moved
+more than 30%: fix Ostendo, or if Ostendo is right set the website price (the
+table gives the exact amount: same % off the new retail) in Shopify admin >
+Catalogs > Edit prices; (2) price more than 40% under retail: confirm or correct.
+No held rows, no email. `{mode:"maintenance", sweep:true, report:true}` forces one.
+
+**Proof after every sweep.** If the sweep changed anything, a second dry run must
+find nothing left to change; if it does, an alert email is sent.
+
+**Case prices set per unit (fixed by hand, 7 Oct 2026).** 20 Metromart Shipper rows
+carried the single-pack price (Jack Links $25.38 on a $376.80 shipper). Each was
+proven (shipper price equals the smaller pack's price exactly; shipper retail is
+exactly N x the smaller pack's retail; N matches the pack title) and set to
+price x N. This is NOT automated: raising a customer price needs proof each
+time. Rollback: `dutch-rusk-backups/metromart_case_prices_rollback_2026-10-07.json`.
 
 It also sets the product-level `compareAt` equal to `price` wherever one is set.
 

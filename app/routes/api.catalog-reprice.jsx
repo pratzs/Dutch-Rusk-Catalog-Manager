@@ -9,8 +9,9 @@
 //                               for the month, sinks sold-out products on the
 //                               Deals page, then (once a day, 03:xx NZ, or when
 //                               {sweep:true}) sweeps every catalog row as a
-//                               backstop for a missed webhook and emails the
-//                               list of held rows. Ostendo changes prices rarely
+//                               backstop for a missed webhook, re-checks that
+//                               nothing is left to change, and on Mondays (or
+//                               {report:true}) emails the list of held rows. Ostendo changes prices rarely
 //                               and the webhook handles each change at once, so
 //                               a daily sweep is plenty.
 //
@@ -35,6 +36,11 @@ function nzHour(now = new Date()) {
   return parseInt(new Intl.DateTimeFormat("en-NZ", { timeZone: "Pacific/Auckland", hour: "numeric", hour12: false }).format(now), 10) % 24;
 }
 const SWEEP_NZ_HOUR = 3;
+const REPORT_NZ_WEEKDAY = "Mon"; // the held-rows email goes out once a week
+
+function nzWeekday(now = new Date()) {
+  return new Intl.DateTimeFormat("en-NZ", { timeZone: "Pacific/Auckland", weekday: "short" }).format(now);
+}
 
 async function triggerSync(variantIds) {
   const url = `${process.env.SHOPIFY_APP_URL ?? "https://dutch-rusk-catalog-manager.onrender.com"}/api/catalog-price-sync`;
@@ -118,7 +124,22 @@ export async function action({ request }) {
       ? { checked: 0, updated: 0, held: [], cleared: 0, restored: 0, variantCompareAtFixed: 0 }
       : await repriceVariants(gql, maintenance ? null : variantIds);
     let heldReport = null;
-    if (fullSweep) {
+    let verify = null;
+    if (fullSweep && (summary.updated > 0 || summary.cleared > 0)) {
+      // Prove the sweep worked: a second dry run must find nothing left to change.
+      try {
+        const again = await repriceVariants(gql, null, { dryRun: true, log: () => {} });
+        verify = { updated: again.updated, cleared: again.cleared };
+        if (again.updated > 0 || again.cleared > 0) {
+          console.error("[catalog-reprice] VERIFY FAILED: rows still need changing after the sweep", JSON.stringify(verify));
+          const { sendPricingAlert } = await import("../lib/brevo.server");
+          await sendPricingAlert({ subject: "Dutch Rusk catalog pricing: sweep did not settle", lines: [`After the daily sweep ${again.updated} row(s) still needed a price change and ${again.cleared} a compare-at clear. Look at the [catalog-reprice] lines in the Render logs.`] });
+        }
+      } catch (e) {
+        console.error("[catalog-reprice] verify pass:", e.message);
+      }
+    }
+    if (fullSweep && (body.report === true || nzWeekday() === REPORT_NZ_WEEKDAY)) {
       try {
         heldReport = await sendHeldReport();
       } catch (e) {
