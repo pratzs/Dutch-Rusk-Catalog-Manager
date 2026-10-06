@@ -19,11 +19,17 @@
 //     price, refresh only the compare-at.
 //   - A live monthly deal price (DealSheetPrice row): keep the price, refresh
 //     compare-at. The deal engine puts the percentage back on the 1st.
-//   - Anything that looks like bad data is HELD, not changed: retail moving more
+//   - Anything that looks like bad data is HELD, not repriced: retail moving more
 //     than 30% against the old compare-at, or a price more than 40% under
 //     retail. Those were real findings (a $25 Jack Links case against $376
 //     retail, a retail that fell 80% overnight) and repricing them silently
 //     would spread the mistake.
+//     A held row's compare-at no longer matches retail, so it is a false "was"
+//     price. It is CLEARED (the price itself is untouched) and remembered in
+//     HeldPriceRow. Once retail is corrected in Ostendo the row resolves on its
+//     own: the remembered compare-at is fed back through the same rule and the
+//     percentage comes back. If someone changes the price by hand, the memory is
+//     dropped. A daily email lists what is held (see sendHeldReport).
 //
 // Also keeps the PRODUCT-level compareAt equal to price where one is set. The
 // catalog price sync reads `compareAt || price` as the standard retail, so a
@@ -88,7 +94,7 @@ export function decideRow({ retail, fixed, compareAt, dealActive = false }) {
 
 const PRICE_ROWS = `
   pageInfo { hasNextPage endCursor }
-  nodes { price { amount } compareAtPrice { amount } variant { id price } }`;
+  nodes { price { amount } compareAtPrice { amount } variant { id price title sku product { title } } }`;
 
 async function allPriceLists(gql) {
   const lists = [];
@@ -129,6 +135,15 @@ async function loadRows(gql, listId, variantGids) {
   return rows;
 }
 
+async function writePrices(gql, pl, batch) {
+  const d = await gql(
+    `mutation($id:ID!,$p:[PriceListPriceInput!]!){ priceListFixedPricesUpdate(priceListId:$id, pricesToAdd:$p, variantIdsToDelete:[]){ userErrors{ field message code } } }`,
+    { id: pl.id, p: batch },
+  );
+  const errs = d.priceListFixedPricesUpdate.userErrors;
+  if (errs.length) throw new Error(`priceListFixedPricesUpdate ${pl.name}: ${JSON.stringify(errs).slice(0, 300)}`);
+}
+
 /**
  * Reprice catalog rows. `variantGids` null = every row in every catalog (the
  * hourly sweep); otherwise only those variants (the product-update webhook).
@@ -141,46 +156,97 @@ export async function repriceVariants(gql, variantGids = null, { dryRun = false,
   const deals = await prisma.dealSheetPrice.findMany({ where: { kind: "price", revertedAt: null } });
   const dealKey = new Set(deals.map((d) => `${d.priceListId}|${d.variantGid}`));
 
-  const summary = { checked: 0, updated: 0, held: [], byList: {}, variantCompareAtFixed: 0 };
+  const held = await prisma.heldPriceRow.findMany();
+  const heldKey = new Map(held.map((h) => [`${h.priceListId}|${h.variantGid}`, h]));
+  const sess = await prisma.session.findFirst({ where: { isOnline: false, accessToken: { not: "" } }, orderBy: { id: "desc" } });
+  const shop = sess?.shop ?? "";
+
+  const summary = { checked: 0, updated: 0, held: [], cleared: 0, restored: 0, byList: {}, variantCompareAtFixed: 0 };
   const touchedVariants = new Set();
+  const visited = new Set();
 
   for (const pl of lists) {
     const rows = await loadRows(gql, pl.id, variantGids);
     const updates = [];
+    const clears = [];
+    const upserts = [];
+    const resolved = [];
     for (const x of rows) {
       summary.checked++;
+      visited.add(`${pl.id}|${x.variant.id}`);
       const retail = parseFloat(x.variant.price);
       const fixed = parseFloat(x.price.amount);
-      const compareAt = x.compareAtPrice ? parseFloat(x.compareAtPrice.amount) : null;
-      const dealActive = dealKey.has(`${pl.id}|${x.variant.id}`);
-      const d = decideRow({ retail, fixed, compareAt, dealActive });
+      const shownCompareAt = x.compareAtPrice ? parseFloat(x.compareAtPrice.amount) : null;
+      const key = `${pl.id}|${x.variant.id}`;
+      const dealActive = dealKey.has(key);
+      const label = `${x.variant.product?.title ?? ""} | ${x.variant.title ?? ""}`.trim();
+
+      // A held row has had its compare-at cleared; judge it by the one it had.
+      let h = heldKey.get(key);
+      if (h && Math.abs(h.fixedAtHold - fixed) > EPS) {
+        resolved.push({ id: h.id, variantGid: h.variantGid }); // price changed by hand: forget it
+        h = undefined;
+      }
+      const compareAt = shownCompareAt ?? (h?.lastCompareAt ?? null);
+
+      let d = decideRow({ retail, fixed, compareAt, dealActive });
+      if (d.action === "none" && shownCompareAt === null && h && compareAt !== null) {
+        d = { action: "update", price: fixed, compareAt: retail, pct: null, reason: "compare-at restored" };
+      }
+
       if (d.action === "hold") {
-        summary.held.push({ list: pl.name, variant: x.variant.id, retail, fixed, compareAt, reason: d.reason });
+        summary.held.push({ list: pl.name, variant: x.variant.id, label, sku: x.variant.sku, retail, fixed, compareAt, reason: d.reason });
         log(`[catalog-reprice] HOLD ${pl.name} ${x.variant.id} retail ${retail} fixed ${fixed} compareAt ${compareAt}: ${d.reason}`);
-      } else if (d.action === "update") {
-        updates.push({ variantId: x.variant.id, price: d.price, compareAt: d.compareAt });
-        touchedVariants.add(x.variant.id);
-        if (d.pct !== null && d.pct !== undefined) {
-          log(`[catalog-reprice] ${pl.name} ${x.variant.id}: ${fixed} -> ${d.price} (${d.pct}% off ${d.compareAt}, was ${compareAt})`);
+        const falseShown = shownCompareAt !== null && Math.abs(shownCompareAt - retail) >= EPS;
+        if (falseShown) {
+          clears.push({ variantId: x.variant.id, price: fixed });
+          summary.cleared++;
+          touchedVariants.add(x.variant.id);
+        }
+        upserts.push({
+          variantGid: x.variant.id, label, fixedAtHold: fixed, retailAtHold: retail, reason: d.reason,
+          lastCompareAt: compareAt, compareAtCleared: falseShown || (h?.compareAtCleared ?? false),
+        });
+      } else {
+        if (h) { resolved.push({ id: h.id, variantGid: h.variantGid }); summary.restored++; }
+        if (d.action === "update") {
+          updates.push({ variantId: x.variant.id, price: d.price, compareAt: d.compareAt });
+          touchedVariants.add(x.variant.id);
+          if (d.pct !== null && d.pct !== undefined) {
+            log(`[catalog-reprice] ${pl.name} ${x.variant.id}: ${fixed} -> ${d.price} (${d.pct}% off ${d.compareAt}, was ${compareAt})`);
+          }
         }
       }
     }
     summary.byList[pl.name] = updates.length;
     summary.updated += updates.length;
-    if (dryRun || updates.length === 0) continue;
+    if (dryRun) continue;
+
     for (let i = 0; i < updates.length; i += 50) {
       const batch = updates.slice(i, i + 50).map((u) => ({
         variantId: u.variantId,
         price: { amount: u.price.toFixed(2), currencyCode: "NZD" },
         compareAtPrice: { amount: u.compareAt.toFixed(2), currencyCode: "NZD" },
       }));
-      const d = await gql(
-        `mutation($id:ID!,$p:[PriceListPriceInput!]!){ priceListFixedPricesUpdate(priceListId:$id, pricesToAdd:$p, variantIdsToDelete:[]){ userErrors{ field message code } } }`,
-        { id: pl.id, p: batch },
-      );
-      const errs = d.priceListFixedPricesUpdate.userErrors;
-      if (errs.length) throw new Error(`priceListFixedPricesUpdate ${pl.name}: ${JSON.stringify(errs).slice(0, 300)}`);
+      await writePrices(gql, pl, batch);
     }
+    // Clear the false compare-at, keep the price: compareAtPrice null (omitting it leaves the old one in place).
+    for (let i = 0; i < clears.length; i += 50) {
+      const batch = clears.slice(i, i + 50).map((u) => ({ variantId: u.variantId, price: { amount: u.price.toFixed(2), currencyCode: "NZD" }, compareAtPrice: null }));
+      await writePrices(gql, pl, batch);
+    }
+    for (const u of upserts) {
+      const data = { shop, priceListName: pl.name, label: u.label, fixedAtHold: u.fixedAtHold, retailAtHold: u.retailAtHold, reason: u.reason, lastCompareAt: u.lastCompareAt, compareAtCleared: u.compareAtCleared };
+      await prisma.heldPriceRow.upsert({ where: { priceListId_variantGid: { priceListId: pl.id, variantGid: u.variantGid } }, create: { priceListId: pl.id, variantGid: u.variantGid, ...data }, update: data });
+    }
+    const reHeld = new Set(upserts.map((u) => u.variantGid));
+    const gone = resolved.filter((r) => !reHeld.has(r.variantGid)).map((r) => r.id);
+    if (gone.length) await prisma.heldPriceRow.deleteMany({ where: { id: { in: gone } } });
+  }
+  // A full sweep has seen every row: a record whose row no longer exists is dead.
+  if (!variantGids && !dryRun) {
+    const dead = held.filter((h) => !visited.has(`${h.priceListId}|${h.variantGid}`)).map((h) => h.id);
+    if (dead.length) await prisma.heldPriceRow.deleteMany({ where: { id: { in: dead } } });
   }
 
   summary.variantCompareAtFixed = await fixProductLevelCompareAt(gql, variantGids, { dryRun, log, touchedVariants });
@@ -227,4 +293,37 @@ async function fixProductLevelCompareAt(gql, variantGids, { dryRun, log, touched
   }
   for (const s of stale) touchedVariants.add(s.id);
   return stale.length;
+}
+
+const money = (n) => (n === null || n === undefined ? "none" : "$" + Number(n).toFixed(2));
+
+/**
+ * Plain-text list of every row currently held, for the daily email. Returns null
+ * when nothing is held. Two groups: price looks like a per-unit price on a case
+ * (needs a price decision) and retail looks wrong or moved a lot (fix in Ostendo).
+ */
+export async function buildHeldReport() {
+  const { default: prisma } = await import("../db.server.js");
+  const rows = await prisma.heldPriceRow.findMany({ orderBy: [{ priceListName: "asc" }, { label: "asc" }] });
+  if (!rows.length) return null;
+  const nice = (n) => n.replace(/ - [0-9a-f-]{36}$/, "");
+  const per = rows.filter((r) => /40% under retail/.test(r.reason));
+  const moved = rows.filter((r) => !/40% under retail/.test(r.reason));
+  const line = (r) => `  ${nice(r.priceListName)}: ${r.label}
+      price ${money(r.fixedAtHold)}, retail now ${money(r.retailAtHold)}, compare-at was ${money(r.lastCompareAt)} (${r.compareAtCleared ? "hidden until fixed" : "none shown"})`;
+  const lines = [
+    `${rows.length} catalog price(s) are on hold. The price itself has not been changed. Any compare-at ("was") price that no longer matched retail has been hidden so customers are not shown a wrong one. Fix the cause below and the next daily check puts the discount back by itself.`,
+    "",
+  ];
+  if (per.length) lines.push(`PRICE LOOKS WRONG: more than 40% under retail (${per.length}). Often a per-unit price sitting on a whole-case pack. Decide the right price, or fix retail in Ostendo:`, ...per.map(line), "");
+  if (moved.length) lines.push(`RETAIL LOOKS WRONG: it moved more than 30% (${moved.length}). Check the retail price in Ostendo:`, ...moved.map(line), "");
+  return { count: rows.length, subject: `Dutch Rusk catalog prices on hold: ${rows.length} need a look`, lines };
+}
+
+export async function sendHeldReport() {
+  const report = await buildHeldReport();
+  if (!report) return { sent: false, count: 0 };
+  const { sendPricingAlert } = await import("./brevo.server.js");
+  const r = await sendPricingAlert({ subject: report.subject, lines: report.lines });
+  return { sent: !r?.skipped, count: report.count, result: r?.skipped ?? "ok" };
 }

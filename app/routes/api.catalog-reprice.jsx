@@ -7,8 +7,12 @@
 //   { mode: "maintenance" }     from the hourly Render cron. Puts back any deal
 //                               whose month has ended, switches BOGO deals on/off
 //                               for the month, sinks sold-out products on the
-//                               Deals page, then sweeps every catalog row as a
-//                               backstop for a missed webhook.
+//                               Deals page, then (once a day, 03:xx NZ, or when
+//                               {sweep:true}) sweeps every catalog row as a
+//                               backstop for a missed webhook and emails the
+//                               list of held rows. Ostendo changes prices rarely
+//                               and the webhook handles each change at once, so
+//                               a daily sweep is plenty.
 //
 // Both finish by asking the catalog price sync to rebuild the metafields the
 // pricing Functions and the theme read, but only when there is something to
@@ -22,9 +26,15 @@
 import { adminGql, arrangeOneCollection, SOLD_OUT_LAST_HANDLES } from "../lib/brand-order.server";
 import { reconcileBogo } from "../lib/bogo-schedule.server";
 import { getAdminToken } from "../lib/admin-token.server";
-import { repriceVariants } from "../lib/catalog-reprice.server";
+import { repriceVariants, sendHeldReport } from "../lib/catalog-reprice.server";
 import { revertDueDeals } from "../lib/deal-sheet.server";
 import { flushRedirects } from "../lib/redirects.server";
+
+/** The hour of day in New Zealand, whatever timezone the server is in. */
+function nzHour(now = new Date()) {
+  return parseInt(new Intl.DateTimeFormat("en-NZ", { timeZone: "Pacific/Auckland", hour: "numeric", hour12: false }).format(now), 10) % 24;
+}
+const SWEEP_NZ_HOUR = 3;
 
 async function triggerSync(variantIds) {
   const url = `${process.env.SHOPIFY_APP_URL ?? "https://dutch-rusk-catalog-manager.onrender.com"}/api/catalog-price-sync`;
@@ -103,17 +113,29 @@ export async function action({ request }) {
         }
       }
     }
-    const summary = await repriceVariants(gql, maintenance ? null : variantIds);
+    const fullSweep = maintenance && (body.sweep === true || nzHour() === SWEEP_NZ_HOUR);
+    const summary = maintenance && !fullSweep
+      ? { checked: 0, updated: 0, held: [], cleared: 0, restored: 0, variantCompareAtFixed: 0 }
+      : await repriceVariants(gql, maintenance ? null : variantIds);
+    let heldReport = null;
+    if (fullSweep) {
+      try {
+        heldReport = await sendHeldReport();
+      } catch (e) {
+        console.error("[catalog-reprice] held report:", e.message);
+        heldReport = { error: e.message };
+      }
+    }
 
     const stale = maintenance ? [] : await staleRetailMetafields(gql, variantIds);
-    const changed = summary.updated > 0 || summary.variantCompareAtFixed > 0 || stale.length > 0 || (reverted && (reverted.restored || reverted.deleted || reverted.breaksRemoved)) || bogo?.changed;
+    const changed = summary.updated > 0 || summary.cleared > 0 || summary.variantCompareAtFixed > 0 || stale.length > 0 || (reverted && (reverted.restored || reverted.deleted || reverted.breaksRemoved)) || bogo?.changed;
     if (changed) {
       // Don't make the caller wait for the sync; it can take minutes.
       const ids = maintenance ? null : [...new Set([...variantIds, ...(summary.touchedVariantIds ?? [])])];
       triggerSync(ids).then((r) => console.log("[catalog-reprice] sync:", JSON.stringify(r).slice(0, 200)));
     }
-    console.log(`[catalog-reprice] ${maintenance ? "sweep" : "webhook"}: checked ${summary.checked}, updated ${summary.updated}, held ${summary.held.length}, product compare-at fixed ${summary.variantCompareAtFixed}`);
-    return Response.json({ success: true, checked: summary.checked, updated: summary.updated, held: summary.held.length, variantCompareAtFixed: summary.variantCompareAtFixed, reverted, bogo, ordered, redirects, syncTriggered: !!changed });
+    console.log(`[catalog-reprice] ${maintenance ? (fullSweep ? "sweep" : "maintenance (no sweep)") : "webhook"}: checked ${summary.checked}, updated ${summary.updated}, held ${summary.held.length}, compare-at cleared ${summary.cleared}, restored ${summary.restored}, product compare-at fixed ${summary.variantCompareAtFixed}, held report ${JSON.stringify(heldReport)}`);
+    return Response.json({ success: true, checked: summary.checked, updated: summary.updated, held: summary.held.length, cleared: summary.cleared, restored: summary.restored, swept: !maintenance || fullSweep, heldReport, variantCompareAtFixed: summary.variantCompareAtFixed, reverted, bogo, ordered, redirects, syncTriggered: !!changed });
   } catch (err) {
     console.error("[catalog-reprice] failed:", err);
     return Response.json({ error: err.message }, { status: 500 });

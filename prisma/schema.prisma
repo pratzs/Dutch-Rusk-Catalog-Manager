@@ -295,3 +295,26 @@ model DealSheetPrice {
   @@index([shop, revertedAt, endsAt])
   @@index([variantGid])
 }
+
+// A catalog price row the repricer would not touch (retail moved >30%, price >40%
+// under retail, ...). While it is held its compare-at is cleared so the customer
+// never sees a made-up "was" price; lastCompareAt remembers what it was so the
+// discount % comes back by itself once retail is fixed in Ostendo.
+model HeldPriceRow {
+  id               String   @id @default(cuid())
+  shop             String
+  priceListId      String
+  priceListName    String   @default("")
+  variantGid       String
+  label            String   @default("")
+  fixedAtHold      Float    // if the price changes, a human has stepped in: forget this record
+  lastCompareAt    Float?
+  retailAtHold     Float
+  reason           String
+  compareAtCleared Boolean  @default(false)
+  heldAt           DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([priceListId, variantGid])
+  @@index([shop])
+}

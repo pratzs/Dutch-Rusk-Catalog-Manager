@@ -1,4 +1,5 @@
-// Hourly backstop for catalog pricing. Runs on a Render cron job.
+// Hourly job. Deals, BOGO and the Deals page need the hour; the full price sweep
+// inside it runs once a day (03:xx NZ). Backstop for catalog pricing. Runs on a Render cron job.
 //
 // It does not do the work itself: it asks the web service to, because the web
 // service already has the Shopify session, the database and the price sync.

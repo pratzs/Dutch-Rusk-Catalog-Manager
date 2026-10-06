@@ -56,3 +56,13 @@ test("deals end at 00:00 NZ on the 1st (NZDT in Oct/Nov, NZST in Jul)", () => {
   assert.equal(endsAtForMonth("2026-12").toISOString(), "2026-12-31T11:00:00.000Z");
   assert.equal(endsAtForMonth("2026-06").toISOString(), "2026-06-30T12:00:00.000Z");
 });
+
+test("a held row comes back by itself once Ostendo retail is fixed (remembered compare-at fed back in)", () => {
+  // Chupa Chups Bag: price 3.29, remembered compare-at 3.66 (10% off), retail wrongly 5.08 -> held.
+  assert.equal(decideRow({ retail: 5.08, fixed: 3.29, compareAt: 3.66 }).action, "hold");
+  // Retail corrected to 3.66: consistent again, nothing to reprice.
+  assert.equal(decideRow({ retail: 3.66, fixed: 3.29, compareAt: 3.66 }).action, "none");
+  // Retail corrected to a nearby value: the same 10% comes back.
+  const d = decideRow({ retail: 3.7, fixed: 3.29, compareAt: 3.66 });
+  assert.deepEqual([d.action, d.price, d.compareAt, d.pct], ["update", 3.33, 3.7, 10]);
+});

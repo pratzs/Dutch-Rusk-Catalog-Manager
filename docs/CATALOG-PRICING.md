@@ -37,6 +37,21 @@ $376 retail (a per-unit price on a shipper), and Cocolabu retail falling 82%
 overnight. Silently repricing those would spread the mistake. Look for
 `[catalog-reprice] HOLD` in the logs.
 
+**What a held row looks like to the customer (7 Oct 2026).** A held row's
+compare-at no longer matches retail, so it would be a false "was" price. The
+repricer **clears** it (the price is untouched; the write must pass
+`compareAtPrice: null`, leaving the field out keeps the old value) and records
+the row in `HeldPriceRow` with the compare-at it had. Each later check feeds
+that remembered compare-at back through the same rule, so once retail is fixed
+in Ostendo the row resolves on its own: compare-at is restored, or the old % off
+is re-applied to the new retail. If someone changes the price by hand the
+record is dropped. A held row with no compare-at is simply listed.
+
+**Daily held-rows email.** After the daily sweep, `sendHeldReport` emails
+`PRICING_ALERT_EMAIL` the held rows in two groups: price more than 40% under
+retail (often a per-unit price on a whole case: needs a price decision) and
+retail moved more than 30% (check Ostendo). No held rows, no email.
+
 It also sets the product-level `compareAt` equal to `price` wherever one is set.
 
 **Where it runs.**
@@ -46,8 +61,11 @@ It also sets the product-level `compareAt` equal to `price` wherever one is set.
   be called from the webhook directly, ran in parallel, read the old prices, and
   its 8-minute lock then refused the second run.
 - Render cron **Catalog Pricing** (hourly, `npm run cron:pricing`) calls the same
-  route with `{mode:"maintenance"}`: reverts due deals, then sweeps every row.
-  A webhook that never arrived is repaired within the hour.
+  route with `{mode:"maintenance"}`. Every hour it reverts due deals, switches
+  BOGO and re-sorts the Deals page. The full price sweep inside it runs **once a
+  day at 03:xx NZ** (Ostendo rarely changes prices and the webhook handles each
+  change at once); `{mode:"maintenance", sweep:true}` forces one. A webhook that
+  never arrived is repaired by the next daily sweep.
 
 Code: `app/lib/catalog-reprice.server.js`. Tests: `npm run test:pricing`.
 
