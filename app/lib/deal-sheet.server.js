@@ -18,6 +18,14 @@ import { cleanPct, pctOff } from "./catalog-reprice.server.js";
 const r2 = (x) => Math.round(x * 100) / 100;
 const EPS = 0.005;
 
+/** Singles in a variant, from its pack-size name. `base` = singles in a plain Outer/Shipper. */
+export function unitsOf(variantTitle, base = 1) {
+  const m = String(variantTitle).match(/\((\d+) (\w+)\)/);
+  if (m) return m[2] === "Outer" ? Number(m[1]) * base : Number(m[1]);
+  if (/^(Each|Bag|Packet|Unit|Tray|Block)$/.test(variantTitle)) return 1;
+  return base;
+}
+
 /** What a live row was, so it can be restored. `row` is null when none existed. */
 export function inferBase(row) {
   if (!row) return { baseKind: "none", basePct: null, baseCustomPrice: null };
@@ -44,7 +52,7 @@ export function endsAtForMonth(month) {
   throw new Error(`could not work out the NZ month end for ${month}`);
 }
 
-async function liveRows(gql, listId, variantGids) {
+export async function liveRows(gql, listId, variantGids) {
   const out = {};
   for (let i = 0; i < variantGids.length; i += 20) {
     const q = variantGids.slice(i, i + 20).map((g) => `variant_id:${g.slice(g.lastIndexOf("/") + 1)}`).join(" OR ");
