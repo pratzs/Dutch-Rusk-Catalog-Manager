@@ -165,3 +165,33 @@ renders in `layout/theme.liquid`, and the "Switch store" links in
 
 **What can replace it:** our own sign-in (the parked OIDC login in this app)
 with Shopify single sign-on. See `docs/OWN-LOGIN-AND-STORE-SWITCH-PLAN.md`.
+
+## 3. Two-device simulator and the duplicate-line loop (9 Oct 2026)
+
+`app/lib/__tests__/sim-harness.js` and `shared-cart-sim.test.js` run the REAL
+theme script (`snippets/drusk-shared-cart.liquid`) on virtual devices inside
+Node's vm, against a model of Shopify's cart (about 2.5 s per write, serialised,
+stock limits, quantity rules, updates by variant id or line key) and the real
+server code with an in-memory database. Virtual time: a 30 minute session runs
+in a second. Point it at any copy of the snippet:
+
+    DRUSK_THEME_SNIPPET=<path> npx vitest run app/lib/__tests__/shared-cart-sim.test.js
+
+**What it found.** Hamish Williams (The Ice Cream Truck, 8 Oct, two devices)
+reported items adding themselves. His devices saved the cart every ~2 seconds
+for over half an hour (268 saves in an hour, the next busiest customer had 116)
+and his saved cart held the same variant on two lines. Cause: two Shopify cart
+lines can look identical once the script drops blank-valued properties, so the
+app sees one key twice, the two devices can never agree and they re-save for as
+long as a page is open (15 to 17 saves a minute in the simulator, forever).
+Stock and quantity rules were ruled out (his six products had 58 to 119 in
+stock, increment 1).
+
+**The fix (theme branch `shared-cart-dedupe-and-breaker`, not live until merged).**
+`norm()` merges lines that share a key; `applyToBrowser` empties the duplicate
+line by line key; a brake in sessionStorage pauses syncing for 3 minutes after
+more than 15 saves with no shopper action in between (survives the cart page's
+own reloads). In the simulator the duplicate-line scenario settles to 0 saves a
+minute with both devices and the server in agreement; busy two-device random
+sessions behave identically to before; the brake alone cuts a 16 a minute loop
+to about 7.
