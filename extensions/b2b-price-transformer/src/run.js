@@ -53,7 +53,8 @@ const NO_CHANGES = {
 // to fit a 19.53KB cap: 14.98KB at 110 lines. DO NOT raise without re-measuring
 // BOTH, against a cart where every line has a DIFFERENT saving so no two
 // discount rows can share an entry.
-const MAX_LINES_TO_TRANSFORM = 110;
+// 108, was 110, in step with b2b-custom-prices (see the note there).
+const MAX_LINES_TO_TRANSFORM = 108;
 
 /**
  * @param {RunInput} input

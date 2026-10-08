@@ -43,14 +43,14 @@ function nzWeekday(now = new Date()) {
   return new Intl.DateTimeFormat("en-NZ", { timeZone: "Pacific/Auckland", weekday: "short" }).format(now);
 }
 
-async function triggerSync(variantIds) {
+async function triggerSync(variantIds, extra = {}) {
   const url = `${process.env.SHOPIFY_APP_URL ?? "https://dutch-rusk-catalog-manager.onrender.com"}/api/catalog-price-sync`;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-cron-secret": process.env.CRON_SECRET ?? "" },
-        body: JSON.stringify({ variantIds }),
+        body: JSON.stringify({ variantIds, ...extra }),
       });
       const j = await res.json().catch(() => ({}));
       if (j?.message !== "Locked") return j;
@@ -149,6 +149,33 @@ export async function action({ request }) {
       }
     }
 
+    // Volume pricing: once a day, notice breaks added or changed in the admin and
+    // have the sync write them into the Functions' data. Never allowed to fail
+    // the run: the worst case is the change waits for tomorrow.
+    let breaksCheck = null;
+    if (fullSweep) {
+      try {
+        const { breaksChangedSinceLastSync } = await import("../lib/volume-breaks.server.js");
+        const { default: prisma } = await import("../db.server");
+        const listIds = [];
+        let after = null;
+        do {
+          const d = await gql(`query($a:String){ priceLists(first:50, after:$a){ pageInfo{hasNextPage endCursor} nodes{ id } } }`, { a: after });
+          listIds.push(...d.priceLists.nodes.map((n) => n.id));
+          after = d.priceLists.pageInfo.hasNextPage ? d.priceLists.pageInfo.endCursor : null;
+        } while (after);
+        const r = await breaksChangedSinceLastSync(gql, prisma, shop, listIds, { log: console.log });
+        breaksCheck = { changed: r.changed, reason: r.reason, variants: r.variants.length };
+        if (r.changed) {
+          console.log(`[catalog-reprice] volume breaks changed (${r.reason}); starting a sync that refreshes them`);
+          triggerSync(null, { refreshBreaks: true }).then((x) => console.log("[catalog-reprice] breaks sync:", JSON.stringify(x).slice(0, 200)));
+        }
+      } catch (e) {
+        console.error("[catalog-reprice] breaks check:", e.message);
+        breaksCheck = { error: e.message };
+      }
+    }
+
     const stale = maintenance ? [] : await staleRetailMetafields(gql, variantIds);
     const changed = summary.updated > 0 || summary.cleared > 0 || summary.variantCompareAtFixed > 0 || stale.length > 0 || (reverted && (reverted.restored || reverted.deleted || reverted.breaksRemoved)) || bogo?.changed;
     if (changed) {
@@ -156,7 +183,7 @@ export async function action({ request }) {
       const ids = maintenance ? null : [...new Set([...variantIds, ...(summary.touchedVariantIds ?? [])])];
       triggerSync(ids).then((r) => console.log("[catalog-reprice] sync:", JSON.stringify(r).slice(0, 200)));
     }
-    console.log(`[catalog-reprice] ${maintenance ? (fullSweep ? "sweep" : "maintenance (no sweep)") : "webhook"}: checked ${summary.checked}, updated ${summary.updated}, held ${summary.held.length}, compare-at cleared ${summary.cleared}, restored ${summary.restored}, product compare-at fixed ${summary.variantCompareAtFixed}, held report ${JSON.stringify(heldReport)}`);
+    console.log(`[catalog-reprice] ${maintenance ? (fullSweep ? "sweep" : "maintenance (no sweep)") : "webhook"}: checked ${summary.checked}, updated ${summary.updated}, held ${summary.held.length}, compare-at cleared ${summary.cleared}, restored ${summary.restored}, product compare-at fixed ${summary.variantCompareAtFixed}, held report ${JSON.stringify(heldReport)}, breaks ${JSON.stringify(breaksCheck)}`);
     return Response.json({ success: true, checked: summary.checked, updated: summary.updated, held: summary.held.length, cleared: summary.cleared, restored: summary.restored, swept: !maintenance || fullSweep, heldReport, variantCompareAtFixed: summary.variantCompareAtFixed, reverted, bogo, ordered, redirects, syncTriggered: !!changed });
   } catch (err) {
     console.error("[catalog-reprice] failed:", err);

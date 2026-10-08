@@ -20,7 +20,7 @@
     "typecheck": "react-router typegen && tsc --noEmit",
     "cron:deals": "node scripts/deal-entitlement.mjs",
     "cron:pricing": "node scripts/catalog-pricing-maintenance.mjs",
-    "test:pricing": "node --test app/lib/catalog-reprice.test.mjs app/lib/bogo-schedule.test.mjs app/lib/redirects.test.mjs",
+    "test:pricing": "node --test app/lib/catalog-reprice.test.mjs app/lib/bogo-schedule.test.mjs app/lib/redirects.test.mjs app/lib/volume-breaks.test.mjs",
     "cron:brand-order": "node scripts/brand-order.mjs"
   },
   "type": "module",

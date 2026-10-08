@@ -1,9 +1,9 @@
 // @ts-check
-import { DiscountApplicationStrategy } from "../generated/api";
+import { DiscountApplicationStrategy } from "../../generated/api";
 
 /**
- * @typedef {import("../generated/api").RunInput} RunInput
- * @typedef {import("../generated/api").FunctionRunResult} FunctionRunResult
+ * @typedef {import("../../generated/api").RunInput} RunInput
+ * @typedef {import("../../generated/api").FunctionRunResult} FunctionRunResult
  */
 
 /**
@@ -46,25 +46,12 @@ const EMPTY_DISCOUNT = {
 // and apply the same limit to the same line count. Above the limit the transform
 // raises nothing, so there is nothing to discount and emitting anything here
 // would take a second discount off an already-correct catalog price.
-// 108, was 110: volume pricing (tierSaving and the per-line flag check) costs about
-// 0.14M instructions on a 110-line cart, and the two lines give that margin back so
-// the worst-case headroom is what it was (docs/B2B-PRICING.md, 9 Oct 2026).
-const MAX_LINES_TO_TRANSFORM = 108;
+const MAX_LINES_TO_TRANSFORM = 110;
 
 // Above this many lines, deal allocation is skipped and only the catalog
 // discount is worked out. Deals cost far more than the plain discount, and a
 // cart this size has never had one apply.
 const MAX_LINES_FOR_DEALS = 65;
-
-// Volume pricing is worked out for a limited number of lines per cart, in cart
-// order, because each flagged line costs about 25-30k instructions and the budget
-// is tight on big carts. The allowance shrinks as the cart grows, sized from
-// measurements of a cart where EVERY line has breaks (docs/B2B-PRICING.md).
-// Lines past the allowance pay their normal catalog price: never more than the
-// buyer's catalog price, whereas running out of budget bills full retail.
-function tiersAllowed(lineCount) {
-  return lineCount <= 40 ? 40 : lineCount <= MAX_LINES_FOR_DEALS ? 25 : 10;
-}
 
 /**
  * Format a non-negative integer number of cents as "12.34".
@@ -80,51 +67,6 @@ function tiersAllowed(lineCount) {
 function money(cents) {
   const minor = cents % 100;
   return (cents - minor) / 100 + (minor < 10 ? ".0" : ".") + minor;
-}
-
-/**
- * Volume pricing. A variant with quantity price breaks has a catalog_savings
- * string that STARTS WITH "+", and each break rides inside its price list's entry
- * as an "@<min qty>=<saving>" pair right after the base saving:
- *
- *     +27.75|34505457977:5.25@12=9.10@24=11.50|
- *     ^flag             ^base   ^12+    ^24+     (all savings off retail)
- *
- * An older Function (or any parseFloat) reads "+27.75" as 27.75 and stops at the
- * "@" in the saving, so it prices exactly as before: the data can ship before
- * this code.
- *
- * COST MATTERS HERE. Every instruction is money (see the header of this file),
- * and string operations in QuickJS are expensive, roughly 2k instructions each.
- * A first version that looked for "@" in every line cost +0.7M on a 110-line cart
- * with NO breaks at all. So:
- *   - a plain line pays one character read (the "+" flag) and nothing else;
- *   - only a flagged line calls this, and it works on a 96-character window;
- *   - a cart honours breaks on a limited number of lines (tiersAllowed below).
- *
- * Returns the saving that applies at `qty`: the deepest qualifying break, never
- * less than `base`.
- *
- * @param {string} raw
- * @param {number} from index just after "|<priceListId>:"
- * @param {number} qty
- * @param {number} base
- * @returns {number}
- */
-function tierSaving(raw, from, qty, base) {
-  const tail = raw.slice(from, from + 96);
-  const end = tail.indexOf("|");
-  const parts = (end < 0 ? tail : tail.slice(0, end)).split("@");
-  let best = base;
-  for (let k = 1; k < parts.length; k++) {
-    const p = parts[k];
-    const eq = p.indexOf("=");
-    if (eq <= 0) continue;
-    const minQty = parseInt(p.slice(0, eq), 10);
-    const val = parseFloat(p.slice(eq + 1));
-    if (minQty > 0 && qty >= minQty && val > best) best = val;
-  }
-  return best;
 }
 
 /**
@@ -157,7 +99,6 @@ export function run(input) {
   // difference between fitting in the budget and being killed.
   //
   // This is the path every cart the guard was raised for actually takes.
-  let tiersLeft = tiersAllowed(n);
   if (n > MAX_LINES_FOR_DEALS) {
     const wide = [];
     for (let i = 0; i < n; i++) {
@@ -166,13 +107,8 @@ export function run(input) {
       if (!raw) continue;
       const at = raw.indexOf(needle);
       if (at < 0) continue;
-      const from = at + needle.length;
-      let off = parseFloat(raw.slice(from, from + 12));
+      const off = parseFloat(raw.slice(at + needle.length, at + needle.length + 12));
       if (!(off > 0)) continue;
-      if (tiersLeft > 0 && raw[0] === "+") {
-        tiersLeft--;
-        off = tierSaving(raw, from, cartLine.quantity, off);
-      }
       wide.push({
         targets: [{ cartLine: { id: cartLine.id, quantity: cartLine.quantity } }],
         value: { fixedAmount: { amount: money(Math.round(off * 100)), appliesToEachItem: true } },
@@ -212,13 +148,8 @@ export function run(input) {
     if (!raw) continue;
 
     const at = raw.indexOf(needle);
-    let off = at < 0 ? 0 : parseFloat(raw.slice(at + needle.length, at + needle.length + 12));
+    const off = at < 0 ? 0 : parseFloat(raw.slice(at + needle.length, at + needle.length + 12));
     const hasSaving = off > 0;
-    // Volume pricing: a deeper saving once the line reaches a break's quantity.
-    if (hasSaving && tiersLeft > 0 && raw[0] === "+") {
-      tiersLeft--;
-      off = tierSaving(raw, at + needle.length, cartLine.quantity, off);
-    }
 
     // Deal membership. Reaching here means deals can apply.
     let tag = null;

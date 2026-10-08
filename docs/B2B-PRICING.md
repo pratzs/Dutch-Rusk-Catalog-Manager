@@ -63,6 +63,82 @@ believed:
   per byte of output). That is a platform cost and cannot be optimised away, so
   the number of discount rows is itself a real constraint.
 
+## Volume pricing (quantity price breaks), built 9 Oct 2026, NOT YET LIVE
+
+**The gap.** A catalog can say "12+ of this variant costs $47.83 each" (Shopify
+quantity price breaks). Shopify honours that natively, but the pair above sets
+every line to "retail minus a fixed saving", and the saving did not depend on
+quantity, so breaks never reached checkout. Found when Nishit enabled volume
+pricing on the Metromart catalog (Bic Lighters Outer, 12+ at $47.83) and it did
+nothing on the site. The October deal-sheet breaks (Calypso 4+, Warhead 3+,
+General catalog) had the same limitation.
+
+**The fix is data plus a few lines of Function code, not a third Function.**
+`api.catalog-price-sync` writes each break into the price list's own entry:
+
+```
++80.00|34505457977:18.80@12=32.17@24=36.00|
+^flag            ^base   ^12+    ^24+          (savings off retail)
+```
+
+- The leading **`+`** marks a variant that has any break. The discount Function
+  reads one character per line to learn that; only flagged lines pay for any break
+  maths. `parseFloat("+80.00")` is 80, and `parseFloat("18.80@12=...")` is 18.8,
+  so **a Function that has not been updated prices exactly as before**. The data
+  can ship before the code, in either order.
+- The discount Function takes the deepest saving whose break the line's quantity
+  reaches. Breaks are per cart line, as Shopify's are. The transform is unchanged:
+  it still raises to retail, and the saving is what comes back off.
+- The row label stays **B2B Wholesale Price**.
+
+**Guards.**
+- A break more than 40% below the catalog's own price is treated as bad data and
+  not shipped (`MAX_BREAK_DEPTH`). Real case: three Metromart Bic Lighters
+  *Shipper* rows (a case of 12 Outers, $734.40) carried the Outer's "12+ at $47.83".
+  They are skipped and logged `[volume-breaks] SKIPPED`. Remove them in Shopify.
+- A break at or above the base price, quantity 1, or malformed text is dropped.
+- A cart honours breaks on a limited number of lines (`tiersAllowed`: 40 lines
+  or fewer allows 40, up to 65 allows 25, above that 10). Lines past it pay their
+  normal catalog price. Never more than the catalog price; the alternative, running
+  out of instruction budget, bills full retail.
+- **`MAX_LINES_TO_TRANSFORM` is now 108 in both Functions (was 110).** Breaks cost
+  about 0.14M instructions on a 110-line cart; two fewer lines give it back so the
+  worst-case headroom is what it was. A 109 or 110 line cart now gets Shopify's
+  native catalog price with no discount rows. The largest order ever taken is 104.
+
+**Cost, measured with `shopify app function run` (limit 11M).** Heaviest live
+strings, every line discounted, 5 deals on:
+
+| cart | before | after, no breaks | after, every line has breaks |
+| --- | --- | --- | --- |
+| 40 lines | 4.93M | 5.02M | 6.52M |
+| 65 lines | 7.73M | 7.84M | 8.82M |
+| 65 lines, deals | 8.43M | 8.54M | 9.44M |
+| 110 lines | 10.19M | 10.34M | 10.62M |
+
+At the new 108 guard the 110-line figures drop by about 0.2M. A first version that
+looked for "@" in every line cost 0.7M extra on plain carts and 14M with breaks on
+every line; the flag character is what fixed that. Re-measure before raising any
+limit.
+
+**Keeping the data fresh.** `api.catalog-price-sync` reuses the break snapshot it
+stored (`CatalogSyncState` row `BREAKS_SNAPSHOT`) unless `refreshBreaks` is set.
+The daily sweep in `api.catalog-reprice` re-reads every price list's breaks,
+compares with the snapshot, and starts a refreshing sync when anything changed
+(also on the first run after deploy). The admin's "Full sync" button refreshes
+them immediately. So a break added in Shopify reaches checkout within a day, or
+straight away after a Full sync.
+
+**Rollout order and rollback.**
+1. Deploy the app (sync + route). Safe on its own: old Functions ignore the new data.
+2. Run the sync once (it refreshes the breaks). Check a few `catalog_savings` values.
+3. Deploy the Functions (`shopify app deploy --allow-updates`).
+4. Price a real cart for a Metromart buyer: 11 Outers 61.20 each, 12 at 47.83.
+Rollback: redeploy the previous app version; the data stays harmless. Tests:
+`extensions/b2b-custom-prices/tests/volume.test.js`,
+`parity-pre-volume.test.js` (byte-identical to the pre-volume Function on 4,000
+random carts with no breaks), `app/lib/volume-breaks.test.mjs`.
+
 ## The two thresholds, and why
 
 There are two, because deal allocation is much more expensive than the catalog
@@ -77,7 +153,7 @@ transform raised, and the transform's guard has always stood down below this
 size, so a cart that big gets no deal today either **and** no discount rows.
 Skipping the deal maths is what pays for it to get the rows.
 
-**`MAX_LINES_TO_TRANSFORM` = 110**, in BOTH Functions, and they must match.
+**`MAX_LINES_TO_TRANSFORM` = 110** (108 once volume pricing ships, see above), in BOTH Functions, and they must match.
 
 The discount Function no longer receives the line cost, so it cannot work out for
 itself whether the transform raised a line. Both read the same cart and apply the

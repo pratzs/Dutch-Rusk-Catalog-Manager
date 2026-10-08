@@ -52,13 +52,17 @@ function buildCompactPrices(mapByPriceListGid) {
  * The saving is stored rather than the catalog price so the discount Function
  * never needs the line cost: the amount it takes off IS the saving.
  *
+ * Volume pricing: a variant with quantity breaks gets a leading "+" and "@min=saving"
+ * pairs after the saving it applies to ("+27.75|34505457977:5.25@12=9.10|"); see
+ * app/lib/volume-breaks.server.js. Nothing changes for a variant without breaks.
+ *
  * Delimiters: retail first, then every entry preceded by "|", so a lookup for
  * "|<priceListId>:" cannot match the tail of a longer id, and "|#" cannot
  * collide with a price list id. A variant with no discount anywhere and no deal
  * still gets "<retail>|", because Shopify rejects an empty metafield value.
  */
-function buildSavings(retailPrice, savingsByPriceListId, dealIds) {
-  let out = retailPrice.toFixed(2) + "|";
+function buildSavings(retailPrice, savingsByPriceListId, dealIds, flag = "") {
+  let out = flag + retailPrice.toFixed(2) + "|";
   for (const plId of Object.keys(savingsByPriceListId)) {
     out += plId + ":" + savingsByPriceListId[plId] + "|";
   }
@@ -166,8 +170,9 @@ async function fetchVariantFixedPriceMetaBatch(admin, variantIds) {
 }
 
 async function runSync(admin, shop, options = {}) {
-  const { variantIds: specificVariantIds = null, companyOnly = false } = options;
+  const { variantIds: specificVariantIds = null, companyOnly = false, refreshBreaks = false } = options;
   const log = (...args) => console.log("[catalog-sync]", ...args);
+  const { tierSuffix, tierFlag } = await import("../lib/volume-breaks.server.js");
   const { default: prisma } = await import("../db.server");
 
   const lockKey = "GLOBAL_SYNC_LOCK";
@@ -196,6 +201,30 @@ async function runSync(admin, shop, options = {}) {
       for (const pl of toSync) {
         const prices = await fetchPriceListPrices(admin, pl.id);
         for (const { variantId, price } of prices) { allOverridesByList[pl.id][variantId] = price; }
+      }
+
+      // Volume pricing: every catalog's quantity breaks, shipped inside the saving
+      // string (see app/lib/volume-breaks.server.js). Fetched once per list; a
+      // failure THROWS so a half-read answer never drops anyone's volume price.
+      //
+      // Reading them live costs about as much as reading the prices, so a sync
+      // reuses the snapshot the last sync stored unless asked to refresh
+      // (refreshBreaks: the daily check found a change) or the list is new.
+      const { fetchListBreaks, breaksSnapshot, parseSnapshot } = await import("../lib/volume-breaks.server.js");
+      const execRaw = (query, variables) => gql(admin, query, variables);
+      const snapRow = await prisma.catalogSyncState.findUnique({ where: { shop_priceListId: { shop, priceListId: "BREAKS_SNAPSHOT" } } });
+      let storedSnap = {};
+      try { storedSnap = snapRow ? JSON.parse(snapRow.overriddenVariantIds) : {}; } catch { storedSnap = {}; }
+      const breaksByList = {};
+      const breaksSnap = {};
+      for (const pl of toSync) {
+        if (refreshBreaks || !storedSnap[pl.id]) {
+          breaksByList[pl.id] = await fetchListBreaks(execRaw, pl.id, { log });
+          breaksSnap[pl.id] = breaksSnapshot(breaksByList[pl.id]);
+        } else {
+          breaksSnap[pl.id] = storedSnap[pl.id];
+          breaksByList[pl.id] = parseSnapshot(storedSnap[pl.id]);
+        }
       }
 
       const affectedVariantIds = new Set();
@@ -273,9 +302,13 @@ async function runSync(admin, shop, options = {}) {
           const savings = {};
           for (const plGid of Object.keys(merged)) {
             const saving = standardPrice - parseFloat(merged[plGid]);
-            if (saving > 0.005) savings[plGid.slice(plGid.lastIndexOf("/") + 1)] = saving.toFixed(2);
+            if (saving > 0.005) {
+              savings[plGid.slice(plGid.lastIndexOf("/") + 1)] =
+                saving.toFixed(2) + tierSuffix(standardPrice, parseFloat(merged[plGid]), breaksByList[plGid]?.[variantId], (s) =>
+                  log(`[volume-breaks] SKIPPED implausible break on ${variantId} (${plGid}): ${s.min}+ at ${s.price} vs base ${s.basePrice}`));
+            }
           }
-          const savingsValue = buildSavings(standardPrice, savings, dealsByVariant[variantId]);
+          const savingsValue = buildSavings(standardPrice, savings, dealsByVariant[variantId], tierFlag(savings));
 
           metafieldsToWrite.push(
             { ownerId: variantId, namespace: "custom", key: "catalog_fixed_prices", type: "json", value: JSON.stringify(merged) },
@@ -287,6 +320,14 @@ async function runSync(admin, shop, options = {}) {
         await metafieldsSet(admin, metafieldsToWrite);
         updatedVariants += metafieldsToWrite.length;
       }
+
+      // Remember which breaks this run applied, so the daily check can tell when
+      // someone adds or changes volume pricing in the admin and a sync is due.
+      await prisma.catalogSyncState.upsert({
+        where: { shop_priceListId: { shop, priceListId: "BREAKS_SNAPSHOT" } },
+        create: { shop, priceListId: "BREAKS_SNAPSHOT", overriddenVariantIds: JSON.stringify(breaksSnap) },
+        update: { overriddenVariantIds: JSON.stringify(breaksSnap), lastSyncedAt: new Date() },
+      });
     }
 
     log("Updating mapping...");
@@ -364,7 +405,7 @@ export async function action({ request }) {
     shop = auth.session.shop;
   }
   try {
-    return Response.json({ success: true, ...(await runSync(admin, shop, { forceAll: body.forceAll === true, variantIds: Array.isArray(body.variantIds) ? body.variantIds : null, companyOnly: body.companyOnly === true })) });
+    return Response.json({ success: true, ...(await runSync(admin, shop, { forceAll: body.forceAll === true, variantIds: Array.isArray(body.variantIds) ? body.variantIds : null, companyOnly: body.companyOnly === true, refreshBreaks: body.refreshBreaks === true || body.forceAll === true })) });
   } catch (err) {
     console.error(err);
     return Response.json({ error: err.message }, { status: 500 });
