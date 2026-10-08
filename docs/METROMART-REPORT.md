@@ -13,8 +13,8 @@ as the sales rep order email, then stamps the order with the attribute
 
 | | When (NZ) | Period |
 |---|---|---|
-| Weekly | Sunday from 4pm (catch-up all Monday) | that Mon-Sun |
-| Monthly | 1st from 8am (catch-up all of the 2nd) | previous calendar month |
+| Weekly | Sunday from 9am (catch-up all Monday) | that Mon-Sun |
+| Monthly | 1st from 9am (catch-up all of the 2nd) | previous calendar month |
 
 - North Island = Odoo company 4 customers tagged `Metromart`; posted invoices less credit
   notes, product lines only, excl GST (finance basis).

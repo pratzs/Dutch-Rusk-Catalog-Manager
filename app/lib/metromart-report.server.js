@@ -311,8 +311,8 @@ export function renderMetromartEmail(data, { recipientName = "Nish", southError 
 
 // ── Send + schedule ─────────────────────────────────────────────────────────
 //
-// Weekly: Sunday from 4pm NZ (catch-up all Monday, e.g. after a restart).
-// Monthly: the 1st from 8am NZ (catch-up all of the 2nd).
+// Weekly: Sunday from 9am NZ (catch-up all Monday, e.g. after a restart).
+// Monthly: the 1st from 9am NZ (catch-up all of the 2nd). Times set by Nish, 9 Oct 2026.
 // Recipients come from METROMART_REPORT_TO (comma-separated). If it is not
 // set, nothing is scheduled. METROMART_REPORT_TIMER=off disables the timer.
 //
@@ -340,8 +340,8 @@ export async function sendMetromartReport(kind, { to, now = new Date(), allowSou
 function dueReport(now = new Date()) {
   const t = nzNow(now);
   const due = [];
-  if ((t.dow === 0 && t.hour >= 16) || t.dow === 1) due.push({ kind: "week", lastChance: t.dow === 1 && t.hour >= 18 });
-  if ((t.d === 1 && t.hour >= 8) || t.d === 2) due.push({ kind: "month", lastChance: t.d === 2 && t.hour >= 18 });
+  if ((t.dow === 0 && t.hour >= 9) || t.dow === 1) due.push({ kind: "week", lastChance: t.dow === 1 && t.hour >= 18 });
+  if ((t.d === 1 && t.hour >= 9) || t.d === 2) due.push({ kind: "month", lastChance: t.d === 2 && t.hour >= 18 });
   return due;
 }
 
