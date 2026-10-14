@@ -25,6 +25,7 @@ export default function App() {
         <s-link href="/app/customers">Customers</s-link>
         <s-link href="/app/sales-reps">Sales Reps</s-link>
         <s-link href="/app/bogo">BOGO Bundles</s-link>
+        <s-link href="/app/brevo">Brevo</s-link>
         <s-link href="/app/help">Help</s-link>
       </s-app-nav>
       <Outlet />
