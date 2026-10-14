@@ -7,6 +7,7 @@ import { addDocumentResponseHeaders } from "./shopify.server";
 import { startPricingHealthTimer } from "./lib/pricing-health.server";
 import { startMetromartReportTimer } from "./lib/metromart-report.server";
 import { startConsentSweepTimer } from "./lib/consent-default.server";
+import { startBrevoSyncTimer } from "./lib/brevo-sync.server";
 
 // Watch the B2B pricing pair (cart transform + wholesale discount) and put it
 // back if either half drops. Started here so it runs once per server process.
@@ -15,6 +16,9 @@ startPricingHealthTimer();
 
 // Default-subscribe new Shopify customers (verbal consent on file). See lib/consent-default.server.js.
 startConsentSweepTimer();
+
+// Shopify customer changes flow into Brevo, new customers land in the NEW list. See lib/brevo-sync.server.js.
+startBrevoSyncTimer();
 
 // Weekly + monthly Metromart North vs South report (Jira SUP-45). Does nothing
 // until METROMART_REPORT_TO is set. See lib/metromart-report.server.js.
