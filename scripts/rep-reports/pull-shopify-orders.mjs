@@ -10,7 +10,7 @@ const gql = adminGql(session.shop, session.accessToken);
 const Q = `query($after:String){ orders(first:100, after:$after, sortKey:CREATED_AT){ pageInfo{hasNextPage endCursor} nodes{
   name createdAt cancelledAt displayFinancialStatus sourceName
   currentSubtotalPriceSet{shopMoney{amount}}
-  purchasingEntity{ ... on PurchasingCompany{ company{name} location{name} } } } } }`;
+  purchasingEntity{ ... on PurchasingCompany{ company{name} location{name shippingAddress{city province zip}} } } } } }`;
 let after = null, all = [];
 for (;;) {
   const d = await gql(Q, { after });
