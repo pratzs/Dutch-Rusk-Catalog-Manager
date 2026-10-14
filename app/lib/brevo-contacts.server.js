@@ -122,7 +122,7 @@ export async function clearDefaultBlacklists(key, admin, emails) {
     if (!n || n.emailMarketingConsent?.marketingState !== "NOT_SUBSCRIBED") { skipped.push(email); continue; }
     const m = await (await admin.graphql(
       `mutation($i:CustomerEmailMarketingConsentUpdateInput!){customerEmailMarketingConsentUpdate(input:$i){userErrors{message}}}`,
-      { variables: { i: { customerId: n.id, emailMarketingConsent: { marketingState: "SUBSCRIBED", marketingOptInLevel: "SINGLE_OPT_IN", consentUpdatedAt: new Date().toISOString() } } } },
+      { variables: { i: { customerId: n.id, emailMarketingConsent: { marketingState: "SUBSCRIBED", marketingOptInLevel: "SINGLE_OPT_IN" } } } },
     )).json();
     if (m.data?.customerEmailMarketingConsentUpdate?.userErrors?.length) { failed.push(email); continue; }
     const r = await fetch(`${API}/contacts/${encodeURIComponent(email)}`, { method: "PUT", headers: hdr(key), body: JSON.stringify({ emailBlacklisted: false }) });
