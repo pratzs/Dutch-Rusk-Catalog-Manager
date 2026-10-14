@@ -6,11 +6,15 @@ import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { startPricingHealthTimer } from "./lib/pricing-health.server";
 import { startMetromartReportTimer } from "./lib/metromart-report.server";
+import { startConsentSweepTimer } from "./lib/consent-default.server";
 
 // Watch the B2B pricing pair (cart transform + wholesale discount) and put it
 // back if either half drops. Started here so it runs once per server process.
 // See lib/pricing-health.server.js for why this matters and how to disable it.
 startPricingHealthTimer();
+
+// Default-subscribe new Shopify customers (verbal consent on file). See lib/consent-default.server.js.
+startConsentSweepTimer();
 
 // Weekly + monthly Metromart North vs South report (Jira SUP-45). Does nothing
 // until METROMART_REPORT_TO is set. See lib/metromart-report.server.js.
