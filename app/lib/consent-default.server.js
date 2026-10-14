@@ -32,7 +32,7 @@ export async function runConsentSweep(source = "timer") {
         let clickedUnsub = false;
         if (key) {
           const d = await fetch(`${API}/contacts/${encodeURIComponent(c.email)}`, { headers: { "api-key": key, accept: "application/json" } });
-          if (d.ok) clickedUnsub = !!(await d.json()).statistics?.unsubscriptions?.userUnsubscription?.length;
+          if (d.ok) { const st = (await d.json()).statistics || {}; clickedUnsub = !!(st.unsubscriptions?.userUnsubscription?.length || st.hardBounces?.length); }
         }
         if (clickedUnsub) { skipped++; continue; }
         const m = await gql(

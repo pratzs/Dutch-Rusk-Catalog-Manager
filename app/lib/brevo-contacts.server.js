@@ -113,7 +113,7 @@ export async function clearDefaultBlacklists(key, admin, emails) {
   const failed = [];
   for (const email of emails) {
     const d = await (await fetch(`${API}/contacts/${encodeURIComponent(email)}`, { headers: hdr(key) })).json();
-    if (d.statistics?.unsubscriptions?.userUnsubscription?.length) { skipped.push(email); continue; }
+    if (d.statistics?.unsubscriptions?.userUnsubscription?.length || d.statistics?.hardBounces?.length) { skipped.push(email); continue; }
     const q = await (await admin.graphql(
       `query($q:String!){customers(first:1,query:$q){nodes{id emailMarketingConsent{marketingState}}}}`,
       { variables: { q: `email:"${email}"` } },
