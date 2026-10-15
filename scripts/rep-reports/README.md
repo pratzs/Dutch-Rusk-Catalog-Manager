@@ -2,7 +2,7 @@
 
 One Excel workbook per Ostendo rep code, same layout as the Chris (460) report. Requested by Kishan, 15 Oct 2026. Standing report: re-run to refresh.
 
-Workbook pages: Summary (online vs rep side by side), By Region (online vs rep per region plus chart, stores under each region), Online Orders (with proof), All Invoices, Method and Limits. Plain words, no guesses: every figure is a recorded fact or labelled as probable.
+Workbook pages: Summary (Online, Rep or phone, Foodstuffs head office side by side), By Region (online vs rep per region plus chart, stores under each region), Online Orders (with proof), All Invoices, Method and Limits. Plain words, no guesses: every figure rests on a recorded link.
 
 Output home (OneDrive): `Worthy Ecommerce - Documents/03.Dutch Rusk E-Commerce Project/Ostendo Reports/Rep Reports/<period folder>`.
 ClickUp card: https://app.clickup.com/t/14yhc7kwtc7
@@ -21,7 +21,7 @@ Use a new period folder name each time. Keep DATA_DIR outside the repo.
 - Values are numbers, not formulas (no LibreOffice here; phone previewers show uncached formulas blank).
 - **Online workflow (Pratham, 15 Oct):** online orders (Shopify, old site, emailed old-site orders) are forwarded by admin to the rep, who re-keys them with their own discounts and deletes the source order; the office sometimes keys under 450 and assigns the rep later. So amounts rarely survive.
 - Evidence only. Old-site login -> Ostendo store is linked by (a) the login's business name (dr-admin Users page, `oldusers.txt`) equal to the store name, or (b) 2+ exact-amount matches at that store. Shopify company -> store: every word of the store name (2+ words) appears in the portal company/location name. One lucky amount match is NOT a link (an earlier build let a login map to 18 stores).
-- Confirmed online = linked store, same amount within 0.2%, invoiced -1 to +14 days after the online order. Probably online = linked store, invoice 0 to +10 days later at 0.5x-1.6x the amount, or same store/day/amount twice. One online order per invoice.
+- Online (one category in the workbooks) = linked store with an invoice -1 to +14 days after an online order at the same amount (within 0.2%), or 0 to +10 days after at 0.5x-1.6x the amount (re-keyed), or the same store/day/amount twice. One online order per invoice. The Online Orders sheet shows the proof for each line.
 - Regions (no delivery address in Ostendo): directly billed store = its own billing city; or Shopify portal delivery address on a strict full-name match; else "Not placed". Chain head office addresses are never used (Night n Day stores everywhere bill from Dunedin). No town-in-name guessing.
 - Results must not depend on hash order: iterate sorted.
 - The build asserts channels, regions and counts add up. `audit.py DATA OUT` independently re-checks totals, every online proof line, no order/invoice used twice, and 25 random invoices live against Ostendo. Run it before sending anything.

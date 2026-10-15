@@ -55,26 +55,26 @@ for f in sorted(glob.glob(OUT + "/*.xlsx")):
         check(abs(h["INVOICENETTAMOUNT"] - r[6]) < 0.005 and h["SALESPERSON"].split("-")[0] == code and pd(h["INVOICEDATE"]) == r[0].date(), f"{code}: line {r[1]} differs from Ostendo")
         check(h["DELIVERYCUSTOMER"] == r[4], f"{code}: store differs {r[1]}")
     chn = collections.Counter(r[7] for r in inv)
-    check(sum(chn.values()) == len(inv) and set(chn) <= {"Confirmed online", "Probably online", "Rep or phone", "Foodstuffs head office"}, f"{code}: channel labels")
+    check(sum(chn.values()) == len(inv) and set(chn) <= {"Online", "Rep or phone", "Foodstuffs head office"}, f"{code}: channel labels")
     # online proof audit
     onl = [r for r in wb["Online Orders"].iter_rows(min_row=5, values_only=True) if r[1] and r[1] != "Total" and r[0] != "Total"]
-    check(len(onl) == chn["Confirmed online"] + chn["Probably online"], f"{code}: online rows {len(onl)} != channel counts")
+    check(len(onl) == chn["Online"], f"{code}: online rows {len(onl)} != channel counts")
     invmap = {r[1]: r for r in inv}
     for r in onl:
         used_inv[r[1]] += 1
-        m = re.match(r"^(Old site \S+|Shopify \S+): (.*)$", r[6])
+        m = re.match(r"^(Old site \S+|Shopify \S+): (.*)$", r[5])
         if not m:
-            check(r[5] == "Probably online" and "twice" in r[6], f"{code}: unprovable online row {r[1]}"); continue
+            check("twice" in r[5], f"{code}: unprovable online row {r[1]}"); continue
         ref = m.group(1); used_orders[ref] += 1
         ev = EV.get(ref)
         if not ev: fails.append(f"{code}: order {ref} not found in source data"); continue
         d, a, u = ev; ir = invmap[r[1]]; days = (r[0].date() - d).days; amt = r[3]
-        if r[5] == "Confirmed online":
+        if "same amount" in r[5]:
             check(-1 <= days <= 14 and abs(amt - a) <= max(0.05, 0.002 * a), f"{code}: A-proof fails {r[1]} vs {ref} (days {days}, {amt} vs {a})")
         else:
             check(0 <= days <= 10 and 0.5 <= amt / a <= 1.6, f"{code}: B-proof fails {r[1]} vs {ref} (days {days}, {amt} vs {a})")
         if ref.startswith("Old site"): login_stores[u].add(r[2])
-    check(abs(sum(r[3] for r in onl) - sum(r[6] for r in inv if r[7] in ("Confirmed online", "Probably online"))) < 0.01, f"{code}: online sheet total")
+    check(abs(sum(r[3] for r in onl) - sum(r[6] for r in inv if r[7] == "Online")) < 0.01, f"{code}: online sheet total")
     # region audit
     br = wb["By Region"]
     reg_rows = [r for r in br.iter_rows(min_row=5, max_row=30, values_only=True) if r[0] and r[0] != "All regions" and isinstance(r[4], (int, float)) and r[3] and r[2] is not None and not str(r[0]).startswith("Not placed:")]
@@ -82,7 +82,7 @@ for f in sorted(glob.glob(OUT + "/*.xlsx")):
     check(abs(sum(r[4] for r in reg_rows) - e[1]) < 0.01 and abs(allr[4] - e[1]) < 0.01, f"{code}: regions do not sum to ostendo")
     check(sum(r[3] for r in reg_rows) == e[0], f"{code}: region invoice counts")
     for r in reg_rows:
-        check(abs(r[4] - (r[5] + r[6] + r[7] + r[8])) < 0.01, f"{code}: region {r[0]} channel parts do not add up")
+        check(abs(r[4] - (r[5] + r[6] + r[7])) < 0.01, f"{code}: region {r[0]} channel parts do not add up")
     sampled += [r[1] for r in rows]
 
 check(all(v == 1 for v in used_orders.values()), "an online order was used for more than one invoice: " + str([k for k, v in used_orders.items() if v > 1][:5]))

@@ -243,8 +243,8 @@ def store_region(store, hs):
 FONT = "Arial"
 def F(size=11, bold=False, color="222222", italic=False): return Font(name=FONT, size=size, bold=bold, color=color, italic=italic)
 GREEN, GOLD, CREAM, LINE = "1A3C34", "C9A24A", "FBF6E9", "D9D9D9"
-CHANNELS = ("Confirmed online", "Probably online", "Rep or phone", "Foodstuffs head office")
-CH_FILL = {"Confirmed online": "F7D774", "Probably online": "FCE9B8", "Rep or phone": "DDEBE4", "Foodstuffs head office": "E6E6E6"}
+CHANNELS = ("Online", "Rep or phone", "Foodstuffs head office")
+CH_FILL = {"Online": "FCE9B8", "Rep or phone": "DDEBE4", "Foodstuffs head office": "E6E6E6"}
 fill = lambda c: PatternFill("solid", fgColor=c)
 box = Border(bottom=Side(style="thin", color=LINE))
 
@@ -278,7 +278,7 @@ def bars(ws, rng): ws.conditional_formatting.add(rng, DataBarRule(start_type="nu
 
 def nice(h):
     if h["INVOICEORCREDIT"] != "Invoice": return "Credit note"
-    return {"Online": "Confirmed online", "Probable": "Probably online", "Rep / Phone": "Rep or phone", "Corporate EDI": "Foodstuffs head office"}[h["_ch"]]
+    return {"Online": "Online", "Probable": "Online", "Rep / Phone": "Rep or phone", "Corporate EDI": "Foodstuffs head office"}[h["_ch"]]
 def amt(hs): return sum(h["INVOICENETTAMOUNT"] for h in hs)
 def proof(h):
     if h["_tier"] == "A": return f"{h['_ev']}: same store, same amount, invoiced within 2 weeks"
@@ -300,7 +300,7 @@ for code, name in REPS.items():
         for h in hs: h["_reg"], h["_isl"], h["_town"], h["_basis"] = reg, isl, town, basis
     for h in cr: h["_reg"] = ""; h["_isl"] = ""; h["_town"] = ""; h["_basis"] = ""
     ch = {k: [x for x in inv if nice(x) == k] for k in CHANNELS}
-    onl = ch["Confirmed online"] + ch["Probably online"]
+    onl = ch["Online"]
     regs = collections.defaultdict(list)
     for h in inv: regs[h["_reg"]].append(h)
     rl = sorted(regs.items(), key=lambda kv: (kv[0] == NOT_PLACED, -amt(kv[1])))
@@ -315,7 +315,7 @@ for code, name in REPS.items():
     ws = wb.active; ws.title = "Summary"; ws.sheet_view.showGridLines = False; widths(ws, [46, 17, 17, 17, 20, 15])
     big_title(ws, f"{name} (rep code {code}): sales report", f"{period} to {endtxt}. Money is before GST. Requested by Kishan.")
     r = 4
-    para(ws, r, "Confirmed online = an online order (new website or old website) exists for the same store with the same amount, invoiced within 2 weeks.  Probably online = the same store ordered online and an invoice followed within 10 days with a different amount (rep typed it in again), or the same order was invoiced twice on one day.  Rep or phone = no online order found.  Foodstuffs head office = billed to Foodstuffs South Island Ltd, orders arrive by computer.", 6, chars=100, fillc=CREAM); r += 2
+    para(ws, r, "Online = the store ordered through the new website or the old website, and the order was then invoiced (the rep often types it into Ostendo again). Rep or phone = no online order found. Foodstuffs head office = billed to Foodstuffs South Island Ltd, orders arrive by computer.", 6, chars=100, fillc=CREAM); r += 2
     section(ws, r, "Sales", 6); r += 1
     for lab, val, kind in (("Total sales", gross, "$"), ("Credit notes (money given back)", credits, "$"), ("Sales after credit notes", gross - credits, "$"),
                            ("Invoices", len(inv), "n"), ("Stores that bought", len(by_store), "n")):
@@ -325,7 +325,7 @@ for code, name in REPS.items():
         for i in range(1, 7): ws.cell(r, i).border = box
         r += 1
     r += 1; section(ws, r, "Online against rep", 6); r += 1
-    header(ws, r, ["", "Confirmed online", "Probably online", "Rep or phone", "Foodstuffs head office", "All orders"], 40); r += 1
+    header(ws, r, ["", "Online", "Rep or phone", "Foodstuffs head office", "All orders"], 40); r += 1
     def avg(v): return (amt(v) / len(v)) if v else 0
     side = (("Invoices", [len(ch[k]) for k in CHANNELS] + [len(inv)], "n"),
             ("Sales", [amt(ch[k]) for k in CHANNELS] + [gross], "$"),
@@ -335,79 +335,79 @@ for code, name in REPS.items():
     for lab, vals, kind in side:
         datarow(ws, r, [lab] + vals); ws.cell(r, 1).font = F(11, True)
         for i, k in enumerate(CHANNELS, 2): ws.cell(r, i).fill = fill(CH_FILL[k])
-        for i in range(2, 7):
+        for i in range(2, 6):
             ws.cell(r, i).alignment = Alignment(horizontal="right", vertical="center")
             if kind == "$": money0(ws.cell(r, i))
             elif kind == "%": pct(ws.cell(r, i))
         r += 1
     oo, rr_ = amt(onl), amt(ch["Rep or phone"])
-    r += 1; para(ws, r, f"Online (confirmed + probably) is {(amt(onl) / gross if gross else 0):.1%} of total sales, and {(oo / (oo + rr_) if (oo + rr_) else 0):.1%} of the sales that online and rep or phone brought in together (leaving out Foodstuffs head office). Online orders with no trace in either system are not counted, so online is a minimum.", 6, chars=100); r += 2
+    r += 1; para(ws, r, f"Online is {(amt(onl) / gross if gross else 0):.1%} of total sales, and {(oo / (oo + rr_) if (oo + rr_) else 0):.1%} of the sales that online and rep or phone brought in together (leaving out Foodstuffs head office). Online orders that left no trace in Ostendo, Shopify or the old website are not counted, so online is a minimum.", 6, chars=100); r += 2
     section(ws, r, "Top 10 stores", 6); r += 1
     header(ws, r, ["Store (region)", "Invoices", "Sales", "Share of sales", "Online share", ""]); r += 1; s0 = r
     for st, hs in sorted(by_store.items(), key=lambda kv: -amt(kv[1]))[:10]:
-        v = amt(hs); datarow(ws, r, [f"{st} ({hs[0]['_reg']})", len(hs), v, v / gross if gross else 0, amt([h for h in hs if nice(h) in ('Confirmed online', 'Probably online')]) / v if v else 0]); money0(ws.cell(r, 3)); pct(ws.cell(r, 4)); pct(ws.cell(r, 5)); r += 1
+        v = amt(hs); datarow(ws, r, [f"{st} ({hs[0]['_reg']})", len(hs), v, v / gross if gross else 0, amt([h for h in hs if nice(h) == 'Online']) / v if v else 0]); money0(ws.cell(r, 3)); pct(ws.cell(r, 4)); pct(ws.cell(r, 5)); r += 1
     bars(ws, f"C{s0}:C{r-1}"); r += 1
     section(ws, r, "Month by month", 6); r += 1
     header(ws, r, ["Month", "Invoices", "Sales", "Share of sales", "Online share", ""]); r += 1; m0 = r
     mo = collections.OrderedDict()
     for h in inv: mo.setdefault(h["_d"].strftime("%Y-%m"), []).append(h)
     for k, s in sorted(mo.items()):
-        v = amt(s); datarow(ws, r, [dt.datetime.strptime(k, "%Y-%m").strftime("%B %Y"), len(s), v, v / gross if gross else 0, amt([h for h in s if nice(h) in ("Confirmed online", "Probably online")]) / v if v else 0]); money0(ws.cell(r, 3)); pct(ws.cell(r, 4)); pct(ws.cell(r, 5)); r += 1
+        v = amt(s); datarow(ws, r, [dt.datetime.strptime(k, "%Y-%m").strftime("%B %Y"), len(s), v, v / gross if gross else 0, amt([h for h in s if nice(h) == "Online"]) / v if v else 0]); money0(ws.cell(r, 3)); pct(ws.cell(r, 4)); pct(ws.cell(r, 5)); r += 1
     bars(ws, f"C{m0}:C{r-1}")
     ws.freeze_panes = "A4"
 
     # ============ 2. BY REGION
-    ws = wb.create_sheet("By Region"); ws.sheet_view.showGridLines = False; widths(ws, [38, 16, 8, 10, 14, 14, 14, 14, 16, 12, 14])
-    big_title(ws, f"{name}: online against rep, by region", "Biggest region first. Online share = confirmed + probably online, divided by all sales in the region.")
-    r = 4; header(ws, r, ["Region", "Island", "Stores", "Invoices", "Sales", "Confirmed online", "Probably online", "Rep or phone", "Foodstuffs head office", "Share of all sales", "Online share"], 44); r += 1; a0 = r
+    ws = wb.create_sheet("By Region"); ws.sheet_view.showGridLines = False; widths(ws, [38, 16, 8, 10, 14, 14, 14, 16, 12, 14])
+    big_title(ws, f"{name}: online against rep, by region", "Biggest region first. Online share = online sales divided by all sales in the region.")
+    r = 4; header(ws, r, ["Region", "Island", "Stores", "Invoices", "Sales", "Online", "Rep or phone", "Foodstuffs head office", "Share of all sales", "Online share"], 44); r += 1; a0 = r
     def regvals(hs):
         v = amt(hs); sv = lambda k: amt([h for h in hs if nice(h) == k])
-        return [v, sv("Confirmed online"), sv("Probably online"), sv("Rep or phone"), sv("Foodstuffs head office")]
+        return [v, sv("Online"), sv("Rep or phone"), sv("Foodstuffs head office")]
     for rg, hs in rl:
-        v, c1, c2, c3, c4 = regvals(hs)
-        datarow(ws, r, [rg, (hs[0]["_isl"] + " Island") if hs[0]["_isl"] else "", len({h["_store"] for h in hs}), len(hs), v, c1, c2, c3, c4, v / gross if gross else 0, (c1 + c2) / v if v else 0])
-        for c in (5, 6, 7, 8, 9): money0(ws.cell(r, c))
-        pct(ws.cell(r, 10)); pct(ws.cell(r, 11)); ws.cell(r, 1).font = F(11, True); r += 1
+        v, c1, c2, c3 = regvals(hs)
+        datarow(ws, r, [rg, (hs[0]["_isl"] + " Island") if hs[0]["_isl"] else "", len({h["_store"] for h in hs}), len(hs), v, c1, c2, c3, v / gross if gross else 0, c1 / v if v else 0])
+        for c in (5, 6, 7, 8): money0(ws.cell(r, c))
+        pct(ws.cell(r, 9)); pct(ws.cell(r, 10)); ws.cell(r, 1).font = F(11, True); r += 1
     a1 = r - 1
-    v, c1, c2, c3, c4 = regvals(inv)
-    datarow(ws, r, ["All regions", "", len(by_store), len(inv), v, c1, c2, c3, c4, 1, (c1 + c2) / v if v else 0], CREAM)
-    for c in (5, 6, 7, 8, 9): money0(ws.cell(r, c))
-    pct(ws.cell(r, 10)); pct(ws.cell(r, 11))
-    for i in range(1, 12): ws.cell(r, i).font = F(11, True)
+    v, c1, c2, c3 = regvals(inv)
+    datarow(ws, r, ["All regions", "", len(by_store), len(inv), v, c1, c2, c3, 1, c1 / v if v else 0], CREAM)
+    for c in (5, 6, 7, 8): money0(ws.cell(r, c))
+    pct(ws.cell(r, 9)); pct(ws.cell(r, 10))
+    for i in range(1, 11): ws.cell(r, i).font = F(11, True)
     bars(ws, f"E{a0}:E{a1}"); r += 2
-    para(ws, r, f"Not placed: ${unplaced:,.0f} of sales ({(unplaced / gross if gross else 0):.0%}). These stores are billed through a chain head office and Ostendo does not record the store's own town. They are not guessed. Every placed store uses a recorded address: its own billing address, or the delivery address on the Shopify portal where the store's full name matches.", 11, chars=140, fillc=CREAM); r += 2
+    para(ws, r, f"Not placed: ${unplaced:,.0f} of sales ({(unplaced / gross if gross else 0):.0%}). These stores are billed through a chain head office and Ostendo does not record the store's own town. They are not guessed. Every placed store uses a recorded address: its own billing address, or the delivery address on the Shopify portal where the store's full name matches.", 10, chars=140, fillc=CREAM); r += 2
     chart = BarChart(); chart.type = "bar"; chart.style = 10; chart.title = "Online against rep or phone, by region ($)"; chart.grouping = "clustered"
     nrows = min(len(rl), 12)
-    chart.add_data(Reference(ws, min_col=6, max_col=8, min_row=4, max_row=4 + nrows), titles_from_data=True)
+    chart.add_data(Reference(ws, min_col=6, max_col=7, min_row=4, max_row=4 + nrows), titles_from_data=True)
     chart.set_categories(Reference(ws, min_col=1, min_row=5, max_row=4 + nrows))
     chart.y_axis.numFmt = '"$"#,##0'; chart.x_axis.scaling.orientation = "maxMin"; chart.height = 11; chart.width = 26
     chart.y_axis.delete = False; chart.x_axis.delete = False
     ws.add_chart(chart, f"A{r}"); r += 24
-    section(ws, r, "Every store, under its region", 11); r += 1
-    header(ws, r, ["Store", "Town", "Invoices", "Last order", "Sales", "Confirmed online", "Probably online", "Rep or phone", "Foodstuffs head office", "Online share", "Region based on"], 44); r += 1
-    ws.column_dimensions["K"].width = 30
+    section(ws, r, "Every store, under its region", 10); r += 1
+    header(ws, r, ["Store", "Town", "Invoices", "Last order", "Sales", "Online", "Rep or phone", "Foodstuffs head office", "Online share", "Region based on"], 44); r += 1
+    ws.column_dimensions["J"].width = 30
     for rg, hs in rl:
-        for i in range(1, 12): ws.cell(r, i).fill = fill(GREEN)
+        for i in range(1, 11): ws.cell(r, i).fill = fill(GREEN)
         ws.cell(r, 1, f"{rg}  ({len({h['_store'] for h in hs})} stores)").font = F(12, True, "FFFFFF"); c = ws.cell(r, 5, amt(hs)); c.font = F(12, True, "FFFFFF"); money0(c); r += 1
         sts = collections.defaultdict(list)
         for h in hs: sts[h["_store"]].append(h)
         for st, ss in sorted(sts.items(), key=lambda kv: -amt(kv[1])):
-            v, c1, c2, c3, c4 = regvals(ss)
-            datarow(ws, r, [st, ss[0]["_town"], len(ss), max(h["_d"] for h in ss), v, c1, c2, c3, c4, (c1 + c2) / v if v else 0, ss[0]["_basis"]])
+            v, c1, c2, c3 = regvals(ss)
+            datarow(ws, r, [st, ss[0]["_town"], len(ss), max(h["_d"] for h in ss), v, c1, c2, c3, c1 / v if v else 0, ss[0]["_basis"]])
             ws.cell(r, 4).number_format = "d mmm yyyy"
-            for c in (5, 6, 7, 8, 9): money0(ws.cell(r, c))
-            pct(ws.cell(r, 10)); r += 1
+            for c in (5, 6, 7, 8): money0(ws.cell(r, c))
+            pct(ws.cell(r, 9)); r += 1
     ws.freeze_panes = "A5"
 
     # ============ 3. ONLINE ORDERS
-    ws = wb.create_sheet("Online Orders"); ws.sheet_view.showGridLines = False; widths(ws, [14, 14, 40, 16, 20, 18, 90])
+    ws = wb.create_sheet("Online Orders"); ws.sheet_view.showGridLines = False; widths(ws, [14, 14, 40, 16, 20, 100])
     big_title(ws, f"{name}: orders counted as online", "One line per invoice, with the proof.")
-    r = 4; header(ws, r, ["Date", "Invoice", "Store", "Sales", "Region", "Status", "Proof"]); r += 1
+    r = 4; header(ws, r, ["Date", "Invoice", "Store", "Sales", "Region", "Proof"]); r += 1
     for h in onl:
-        datarow(ws, r, [h["_d"], h["INVOICENUMBER"], h["_store"], h["INVOICENETTAMOUNT"], h["_reg"], nice(h), proof(h)]); ws.cell(r, 1).number_format = "d mmm yyyy"; money0(ws.cell(r, 4)); ws.cell(r, 6).fill = fill(CH_FILL[nice(h)]); r += 1
-    datarow(ws, r, ["Total", "", f"{len(onl)} invoices", amt(onl), "", "", ""], CREAM); money0(ws.cell(r, 4))
-    for i in range(1, 8): ws.cell(r, i).font = F(11, True)
-    ws.freeze_panes = "A5"; ws.auto_filter.ref = f"A4:G{max(r - 1, 5)}"
+        datarow(ws, r, [h["_d"], h["INVOICENUMBER"], h["_store"], h["INVOICENETTAMOUNT"], h["_reg"], proof(h)]); ws.cell(r, 1).number_format = "d mmm yyyy"; money0(ws.cell(r, 4)); r += 1
+    datarow(ws, r, ["Total", "", f"{len(onl)} invoices", amt(onl), "", ""], CREAM); money0(ws.cell(r, 4))
+    for i in range(1, 7): ws.cell(r, i).font = F(11, True)
+    ws.freeze_panes = "A5"; ws.auto_filter.ref = f"A4:F{max(r - 1, 5)}"
 
     # ============ 4. ALL INVOICES
     ws = wb.create_sheet("All Invoices"); ws.sheet_view.showGridLines = False; widths(ws, [14, 14, 14, 36, 36, 26, 16, 22, 18])
@@ -423,11 +423,10 @@ for code, name in REPS.items():
     # ============ 5. HOW THIS WAS WORKED OUT
     ws = wb.create_sheet("Method and Limits"); ws.sheet_view.showGridLines = False; widths(ws, [28, 104])
     big_title(ws, "Method and limits", f"Made {dt.date.today().day} {dt.date.today():%B %Y}")
-    a_n, b_n, d_n = len(ch["Confirmed online"]), sum(1 for h in ch["Probably online"] if h["_tier"] == "B"), sum(1 for h in ch["Probably online"] if not h["_tier"])
+    a_n, b_n, d_n = sum(1 for h in onl if h["_tier"] == "A"), sum(1 for h in onl if h["_tier"] == "B"), sum(1 for h in onl if not h["_tier"])
     notes = [("Source", f"Ostendo invoices and credit notes with rep code {code} (and {code}-1 style codes), {period} to {endtxt}. Amounts are before GST. Reversed invoices are left out. Totals were checked against Ostendo to the cent."),
              ("Online orders read", f"New Shopify website (since 15 August 2026) and the old website (dr-admin). {EV_TOTAL} online orders were read for the year across all reps."),
-             ("Confirmed online", f"{a_n} invoices. The same store has an online order with the same amount (within 0.2 percent), and the invoice is dated between 1 day before and 14 days after it. One online order is used for one invoice only."),
-             ("Probably online", f"{b_n + d_n} invoices. {b_n}: the same store ordered online and an invoice for that store came within 10 days at half to one and a half times the amount (the rep typed it in again with different discounts). {d_n}: the same store was invoiced the same amount twice on one day. These are not proven by a matching amount, so they are shown separately."),
+             ("What counts as Online", f"{len(onl)} invoices. The store is linked to an online login or company by its recorded name (or 2 or more exact amount matches), and an invoice for that store followed one of its online orders: {a_n} with the same amount within 2 weeks, {b_n} within 10 days at a different amount (the rep typed it in again with different discounts), and {d_n} where the same store was invoiced the same amount twice on one day. One online order is used for one invoice only."),
              ("Not counted as online", "Orders emailed in and typed up by hand, and orders the office typed under code 450 and handed to a rep later, leave no trace in Ostendo, Shopify or the old website. They sit under Rep or phone. Online is therefore a minimum."),
              ("Foodstuffs head office", "Invoices billed to Foodstuffs South Island Ltd. Other chains have not been separated."),
              ("Regions", "Ostendo has no delivery address. A store gets a region only from a recorded address: its own billing city (stores billed directly), or the delivery address on the Shopify portal when every word of the store's name matches the portal company name. Stores billed through a chain head office with no match are shown as Not placed."),
@@ -439,7 +438,7 @@ for code, name in REPS.items():
         for i in (1, 2): ws.cell(r, i).border = box
         r += 1
     fn = f"{name.replace(' ', '_')}_{code}_FY26_Sales_Report.xlsx"
-    wb.save(os.path.join(OUT, fn)); written.append((code, name, len(inv), gross, credits, len(ch["Confirmed online"]), len(ch["Probably online"]), unplaced, fn))
+    wb.save(os.path.join(OUT, fn)); written.append((code, name, len(inv), gross, credits, len(ch["Online"]), 0, unplaced, fn))
 
 for c, n, i, g, cr, o1, o2, u, fn in written:
-    print(f"{c} {n}: {i} inv, ${g:,.2f}, credits ${cr:,.2f}, confirmed {o1}, probable {o2}, not placed ${u:,.0f} -> {fn}")
+    print(f"{c} {n}: {i} inv, ${g:,.2f}, credits ${cr:,.2f}, online {o1}, not placed ${u:,.0f} -> {fn}")
