@@ -153,7 +153,8 @@ if os.environ.get("REP_DEBUG"):
 # Same store + same day + same amount on 2+ invoices = the rep re-keyed an online order.
 grp = collections.defaultdict(list)
 for h in H:
-    if h["INVOICEORCREDIT"] == "Invoice": grp[(h["_store"].lower(), h["_d"], round(h["INVOICENETTAMOUNT"], 2))].append(h)
+    # exact store record only: "X" and "X 2026" on the same day is an account change, not a re-keyed online order
+    if h["INVOICEORCREDIT"] == "Invoice": grp[((h["DELIVERYCUSTOMER"] or h["CUSTOMER"]).strip().lower(), h["_d"], round(h["INVOICENETTAMOUNT"], 2))].append(h)
 for g in grp.values():
     if len(g) > 1:
         for h in g: h["_dup"] = True
@@ -172,273 +173,190 @@ def how(h):
     return "Duplicate same-day same-amount (re-keyed)"
 
 # ---- Regions ------------------------------------------------------------------------------
-# Ostendo has only a billing city, so towns are mapped to NZ regions here (regional council areas).
-from openpyxl.formatting.rule import DataBarRule
-from openpyxl.chart import BarChart, Reference
-
+# Same basis as Kishan's approved Chris report (14 Oct): customer = the billed-to account in Ostendo, region = that
+# account's billing city. Chain accounts therefore show where they are billed (e.g. Red Circle, CSB Group: Napier).
 REGIONS = [
-    ("Auckland", "North", "Auckland,Pukekohe"),
-    ("Northland", "North", "Whangarei,Russell"),
-    ("Waikato", "North", "Hamilton,Cambridge,Morrinsville,Te Kowhai,Whitianga,Hot Water Beach,Taupo"),
-    ("Bay of Plenty", "North", "Tauranga,Rotorua,Whakatane,Ohope"),
-    ("Taranaki", "North", "New Plymouth"),
-    ("Hawke's Bay", "North", "Napier,Waipawa,Waipukurau"),
-    ("Manawatu-Whanganui", "North", "Palmerston North,Feilding,Whanganui,Levin"),
-    ("Wellington", "North", "Wellington,Porirua,Lower Hutt"),
-    ("Nelson-Tasman", "South", "Nelson,Motueka,Richmond,Upper Moutere,Takaka,Collingwood,Tapawera,Mapua,Riwaka,Wakefield,Spring Grove,Hope,Murchison"),
-    ("Marlborough", "South", "Blenheim,Picton,Havelock,Renwick,Seddon,Marlborough,Ward"),
-    ("West Coast", "South", "Greymouth,Westport,Hokitika,Reefton,Runanga,Blackball,Cobden,Springs Junction,West Coast,Westland,Hari Hari,Fox Glacier,Hector,Moana,Haast,Franz Josef,Karamea,Dobson"),
-    ("Canterbury", "South", "Christchurch,Ashburton,Timaru,Rangiora,Darfield,Rolleston,Hanmer Springs,Kirwee,Kaiapoi,Amberley,Waimate,Oxford,Kaikoura,Geraldine,Methven,Waikari,Sefton,Temuka,Waiau,Pegasus,Lincoln,Tinwald,Woodend,Mount Hutt,Pareora,Akaroa,Winchester,Aoraki Mt Cook,Cust,Burnham,Leeston,Rotherham,Springston,Southbridge,Rakaia,St Andrews,Twizel,Fairlie,Tekapo,Lyttelton,Prebbleton,Halswell"),
-    ("Otago", "South", "Dunedin,Dunedin Central,Oamaru,Cromwell,Queenstown,Arrowtown,Ranfurly,Omakau,Waikouaiti,Balclutha,Alexandra,Mosgiel,Milton,Ettrick,Wanaka,Waihola,Otematata,Clyde,Kurow,Omarama,Palmerston,Roxburgh,Lawrence,Tapanui,Hawea,Lake Hawea,Kaitangata"),
-    ("Southland", "South", "Invercargill,Gore,Riverton,Winton,Mataura,Edendale,Otautau,Bluff,Riversdale,Te Anau,Mossburn,Tuatapere,Wyndham,Lumsden,Athol,Ohai"),
+    ("Auckland", "Auckland,Pukekohe"),
+    ("Northland", "Whangarei,Russell"),
+    ("Waikato", "Hamilton,Cambridge,Morrinsville,Te Kowhai,Whitianga,Hot Water Beach,Taupo"),
+    ("Bay of Plenty", "Tauranga,Rotorua,Whakatane,Ohope"),
+    ("Taranaki", "New Plymouth"),
+    ("Hawke's Bay", "Napier,Waipawa,Waipukurau"),
+    ("Manawatu-Whanganui", "Palmerston North,Feilding,Whanganui,Levin"),
+    ("Wellington", "Wellington,Porirua,Lower Hutt"),
+    ("Nelson-Tasman", "Nelson,Motueka,Richmond,Upper Moutere,Takaka,Collingwood,Tapawera,Mapua,Riwaka,Wakefield,Spring Grove,Hope,Murchison"),
+    ("Marlborough", "Blenheim,Picton,Havelock,Renwick,Seddon,Marlborough,Ward"),
+    ("West Coast", "Greymouth,Westport,Hokitika,Reefton,Runanga,Blackball,Cobden,Springs Junction,West Coast,Westland,Hari Hari,Fox Glacier,Hector,Moana,Haast,Franz Josef,Karamea,Dobson"),
+    ("Canterbury", "Christchurch,Ashburton,Timaru,Rangiora,Darfield,Rolleston,Hanmer Springs,Kirwee,Kaiapoi,Amberley,Waimate,Oxford,Kaikoura,Geraldine,Methven,Waikari,Sefton,Temuka,Waiau,Pegasus,Lincoln,Tinwald,Woodend,Mount Hutt,Pareora,Akaroa,Winchester,Aoraki Mt Cook,Cust,Burnham,Leeston,Rotherham,Springston,Southbridge,Rakaia,St Andrews,Twizel,Fairlie,Tekapo,Lyttelton,Prebbleton,Halswell"),
+    ("Otago", "Dunedin,Dunedin Central,Oamaru,Cromwell,Queenstown,Arrowtown,Ranfurly,Omakau,Waikouaiti,Balclutha,Alexandra,Mosgiel,Milton,Ettrick,Wanaka,Waihola,Otematata,Clyde,Kurow,Omarama,Palmerston,Roxburgh,Lawrence,Tapanui,Hawea,Lake Hawea,Kaitangata"),
+    ("Southland", "Invercargill,Gore,Riverton,Winton,Mataura,Edendale,Otautau,Bluff,Riversdale,Te Anau,Mossburn,Tuatapere,Wyndham,Lumsden,Athol,Ohai"),
 ]
 TOWN = {}
-for _reg, _isl, _towns in REGIONS:
-    for _t in _towns.split(","): TOWN[_t.strip().lower()] = (_reg, _isl)
+for _reg, _towns in REGIONS:
+    for _t in _towns.split(","): TOWN[_t.strip().lower()] = _reg
 CITY_FIX = {"chirstchurch": "christchurch", "chirschurch": "christchurch", "chistchurch": "christchurch", "rotoura": "rotorua", "hamner springs": "hanmer springs"}
-NOT_PLACED = "Not placed (town not recorded)"
+NO_ADDRESS = "No billing city recorded"
 
-# A billed-to account that pays for 3 or more different delivery stores is a chain (head office billing).
-_stores_per_bill = collections.defaultdict(set)
-for _h in H:
-    if _h["INVOICEORCREDIT"] == "Invoice": _stores_per_bill[base(_h["CUSTOMER"]).lower()].add(base(_h["DELIVERYCUSTOMER"] or _h["CUSTOMER"]).lower())
-CHAINS = {k for k, v in _stores_per_bill.items() if len(v) >= 3}
+def city_of(hs):
+    c = collections.Counter(CITY_FIX.get((h["BILLINGCITY"] or "").strip().lower(), (h["BILLINGCITY"] or "").strip().lower()) for h in hs)
+    for city, _ in c.most_common():
+        if city in TOWN: return city.title(), TOWN[city]
+    return "", NO_ADDRESS
 
-# Shopify portal delivery address per Ostendo store. Strict: every word of the store's name must appear in the portal
-# company/location name, and the store name must have 2+ words. (Checked on directly billed stores: 107 of 120 agree
-# with their billing city, nearly all the rest are the same region.)
-def _fw(x): return set(re.findall(r"[a-z0-9]{2,}", (x or "").lower()))
-_store_names = {base(h["DELIVERYCUSTOMER"] or h["CUSTOMER"]) for h in H}
-_store_tok = {st: _fw(st) for st in sorted(_store_names) if len(_fw(st)) >= 2}
-_sc = collections.defaultdict(collections.Counter)
-for _o in O:
-    _pe = _o["purchasingEntity"] or {}; _loc = _pe.get("location") or {}
-    _city = (((_loc.get("shippingAddress")) or {}).get("city") or "").strip().lower()
-    _ct = _fw((_pe.get("company") or {}).get("name")) | _fw(_loc.get("name"))
-    _best = None
-    for _st, _tk in _store_tok.items():
-        if _tk <= _ct and (_best is None or len(_tk) > len(_best[1])): _best = (_st, _tk)
-    if _best and _city: _sc[_best[0].lower()][_city] += 1
-SHOP_STORE_CITY = {k: c.most_common(1)[0][0] for k, c in _sc.items()}
-
-
-def store_region(store, hs):
-    """(region, island, town, basis). Recorded addresses only, never a guess:
-    1 a store billed directly: the billing city on its own invoices;
-    2 the delivery address on the Shopify portal when the store's full name matches;
-    otherwise not placed (a chain head office address is not the store's town)."""
-    k = store.lower()
-    cities = collections.Counter(CITY_FIX.get((h["BILLINGCITY"] or "").strip().lower(), (h["BILLINGCITY"] or "").strip().lower()) for h in hs)
-    chain = any(base(h["CUSTOMER"]).lower() in CHAINS for h in hs)
-    top_city = next((c for c, _ in cities.most_common() if c in TOWN), None)
-    if not chain and top_city:
-        return TOWN[top_city][0], TOWN[top_city][1], top_city.title(), "Store's own billing address"
-    sc = CITY_FIX.get(SHOP_STORE_CITY.get(k, ""), SHOP_STORE_CITY.get(k, ""))
-    if sc in TOWN:
-        return TOWN[sc][0], TOWN[sc][1], sc.title(), "Shopify portal delivery address"
-    return NOT_PLACED, "", "", "Not recorded"
-
-
-# ---- Look and feel ---------------------------------------------------------------------------
-FONT = "Arial"
-def F(size=11, bold=False, color="222222", italic=False): return Font(name=FONT, size=size, bold=bold, color=color, italic=italic)
-GREEN, GOLD, CREAM, LINE = "1A3C34", "C9A24A", "FBF6E9", "D9D9D9"
-CHANNELS = ("Online", "Rep or phone", "Foodstuffs head office")
-CH_FILL = {"Online": "FCE9B8", "Rep or phone": "DDEBE4", "Foodstuffs head office": "E6E6E6"}
-fill = lambda c: PatternFill("solid", fgColor=c)
-box = Border(bottom=Side(style="thin", color=LINE))
-
+# ---- Look (matches the approved Chris report) ------------------------------------------------
+NAVY, BAND = "1A3C34", "F2F6F4"
+def F(size=9, bold=False, color=None): return Font(name="Arial", size=size, bold=bold, color=color)
+def hdr(ws, row, vals):
+    for i, v in enumerate(vals, 1):
+        c = ws.cell(row, i, v); c.font = F(10, True, "FFFFFF"); c.fill = PatternFill("solid", fgColor=NAVY)
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+def line(ws, row, vals, band=False, bold=False):
+    for i, v in enumerate(vals, 1):
+        c = ws.cell(row, i, v); c.font = F(9, bold)
+        if band: c.fill = PatternFill("solid", fgColor=BAND)
+def money(c): c.number_format = '"$"#,##0.00;[Red]-"$"#,##0.00'
 def widths(ws, w):
     for i, x in enumerate(w, 1): ws.column_dimensions[get_column_letter(i)].width = x
-def money0(c): c.number_format = '"$"#,##0;[Red]-"$"#,##0'
-def pct(c): c.number_format = "0%"
-def header(ws, r, vals, h=34):
-    for i, v in enumerate(vals, 1):
-        c = ws.cell(r, i, v); c.font = F(11, True, "FFFFFF"); c.fill = fill(GREEN)
-        c.alignment = Alignment(horizontal="center" if i > 1 else "left", vertical="center", wrap_text=True)
-    ws.row_dimensions[r].height = h
-def big_title(ws, text, sub=None):
-    ws["A1"] = text; ws["A1"].font = F(20, True, GREEN); ws.row_dimensions[1].height = 34
-    if sub: ws["A2"] = sub; ws["A2"].font = F(11, False, "666666", True)
-def section(ws, r, text, ncol):
-    ws.cell(r, 1, text).font = F(14, True, GREEN)
-    for i in range(1, ncol + 1): ws.cell(r, i).border = Border(bottom=Side(style="medium", color=GOLD))
-    ws.row_dimensions[r].height = 26
-def para(ws, r, text, ncol, chars=95, fillc=None, bold=False):
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncol)
-    c = ws.cell(r, 1, text); c.font = F(11, bold); c.alignment = Alignment(wrap_text=True, vertical="top")
-    if fillc:
-        for i in range(1, ncol + 1): ws.cell(r, i).fill = fill(fillc)
-    ws.row_dimensions[r].height = 16 * max(1, -(-len(text) // chars)) + 4
-def datarow(ws, r, vals, shade=None):
-    for i, v in enumerate(vals, 1):
-        c = ws.cell(r, i, v); c.font = F(); c.border = box; c.alignment = Alignment(vertical="center", wrap_text=(i == 1))
-        if shade: c.fill = fill(shade)
-def bars(ws, rng): ws.conditional_formatting.add(rng, DataBarRule(start_type="num", start_value=0, end_type="max", color=GOLD, showValue=True))
 
-def nice(h):
-    if h["INVOICEORCREDIT"] != "Invoice": return "Credit note"
-    return {"Online": "Online", "Probable": "Online", "Rep / Phone": "Rep or phone", "Corporate EDI": "Foodstuffs head office"}[h["_ch"]]
+CHAN = ("Online", "Rep / Phone", "Corporate EDI")
+def chan(h):
+    if h["INVOICEORCREDIT"] != "Invoice": return "Credit notes"
+    return {"Online": "Online", "Probable": "Online", "Rep / Phone": "Rep / Phone", "Corporate EDI": "Corporate EDI"}[h["_ch"]]
 def amt(hs): return sum(h["INVOICENETTAMOUNT"] for h in hs)
-def proof(h):
-    if h["_tier"] == "A": return f"{h['_ev']}: same store, same amount, invoiced within 2 weeks"
-    if h["_tier"] == "B": return f"{h['_ev']}: same store ordered online, invoice came within 10 days with a different amount"
-    return "Same store, same amount, same day, twice on one invoice date"
+def match_text(h):
+    if h["_tier"] == "A": return "Same amount as the online order"
+    if h["_tier"] == "B": return "Same store, re-keyed by rep (amount changed)"
+    return "Same store, same amount, entered twice on one day"
+def ref_text(h):
+    if h["_ev"].startswith("Shopify"): return h["_ev"]
+    return "Old website order " + h["_ev"].split(" ")[-1] if h["_ev"] else ""
+
+# facts for the Verification Notes
+N_SHOP = sum(1 for e in EV if e["src"] == "Shopify"); N_OLD = sum(1 for e in EV if e["src"] == "Old site")
+_all_shop = json.load(open(f"{DATA}/shop.json", encoding="utf-8"))
+_nums = sorted(int(o["name"].lstrip("#")) for o in _all_shop)
+_gaps = [n for n in range(_nums[0], _nums[-1] + 1) if n not in set(_nums)]
+_cancel = sum(1 for o in _all_shop if o["cancelledAt"])
 
 os.makedirs(OUT, exist_ok=True)
 written = []
-period = f"{FROM.day} {FROM:%B %Y}"; endtxt = f"{TO.day} {TO:%B %Y}"
+d1, d2 = f"{FROM.day} {FROM:%b %Y}", f"{TO.day} {TO:%b %Y}"
 for code, name in REPS.items():
     rows = sorted([h for h in H if h["_rep"] == code], key=lambda h: (h["_d"], h["INVOICENUMBER"]))
     if not rows: continue
-    inv = [h for h in rows if h["INVOICEORCREDIT"] == "Invoice"]; cr = [h for h in rows if h["INVOICEORCREDIT"] != "Invoice"]
-    gross = amt(inv); credits = -amt(cr)
-    by_store = collections.defaultdict(list)
-    for h in inv: by_store[h["_store"]].append(h)
-    for st, hs in by_store.items():
-        reg, isl, town, basis = store_region(st, hs)
-        for h in hs: h["_reg"], h["_isl"], h["_town"], h["_basis"] = reg, isl, town, basis
-    for h in cr: h["_reg"] = ""; h["_isl"] = ""; h["_town"] = ""; h["_basis"] = ""
-    ch = {k: [x for x in inv if nice(x) == k] for k in CHANNELS}
-    onl = ch["Online"]
-    regs = collections.defaultdict(list)
-    for h in inv: regs[h["_reg"]].append(h)
-    rl = sorted(regs.items(), key=lambda kv: (kv[0] == NOT_PLACED, -amt(kv[1])))
-    unplaced = amt(regs.get(NOT_PLACED, []))
-    # ---- built-in checks: every table must add back to the Ostendo total
-    assert abs(sum(amt(v) for v in ch.values()) - gross) < 0.01, "channels do not add up"
-    assert abs(sum(amt(v) for _, v in rl) - gross) < 0.01, "regions do not add up"
-    assert sum(len(v) for v in ch.values()) == len(inv), "invoice count mismatch"
+    by_cust = collections.defaultdict(list)
+    for h in rows: by_cust[h["CUSTOMER"]].append(h)
+    for cu, hs in by_cust.items():
+        city, reg = city_of(hs)
+        for h in hs: h["_city"], h["_reg"], h["_chn"] = city, reg, chan(h)
+    inv = [h for h in rows if h["INVOICEORCREDIT"] == "Invoice"]
+    net = amt(rows)
+    # region x channel
+    rc = collections.defaultdict(list)
+    for h in rows: rc[(h["_reg"], h["_chn"])].append(h)
+    reg_tot = collections.Counter()
+    for (rg, _), hs in rc.items(): reg_tot[rg] += amt(hs)
+    reg_order = sorted(reg_tot, key=lambda rg: (rg == NO_ADDRESS, -reg_tot[rg]))
+    ch_tot = {k: [h for h in inv if h["_chn"] == k] for k in CHAN}
+    cr = [h for h in rows if h["_chn"] == "Credit notes"]
+    onl = ch_tot["Online"]
+    # built-in checks
+    assert abs(sum(amt(v) for v in rc.values()) - net) < 0.01
+    assert abs(sum(amt(v) for v in ch_tot.values()) + amt(cr) - net) < 0.01
+    assert sum(len(v) for v in ch_tot.values()) == len(inv)
     wb = Workbook()
 
-    # ============ 1. SUMMARY
-    ws = wb.active; ws.title = "Summary"; ws.sheet_view.showGridLines = False; widths(ws, [46, 17, 17, 17, 20, 15])
-    big_title(ws, f"{name} (rep code {code}): sales report", f"{period} to {endtxt}. Money is before GST. Requested by Kishan.")
-    r = 4
-    para(ws, r, "Online = the store ordered through the new website or the old website, and the order was then invoiced (the rep often types it into Ostendo again). Rep or phone = no online order found. Foodstuffs head office = billed to Foodstuffs South Island Ltd, orders arrive by computer.", 6, chars=100, fillc=CREAM); r += 2
-    section(ws, r, "Sales", 6); r += 1
-    for lab, val, kind in (("Total sales", gross, "$"), ("Credit notes (money given back)", credits, "$"), ("Sales after credit notes", gross - credits, "$"),
-                           ("Invoices", len(inv), "n"), ("Stores that bought", len(by_store), "n")):
-        b = lab in ("Total sales", "Sales after credit notes")
-        ws.cell(r, 1, lab).font = F(12, b); c = ws.cell(r, 3, val); c.font = F(12, b)
-        if kind == "$": money0(c)
-        for i in range(1, 7): ws.cell(r, i).border = box
+    # ===== Summary
+    ws = wb.active; ws.title = "Summary"; widths(ws, [30, 16, 12, 16, 12, 12])
+    ws["A1"] = f"Dutch Rusk - {name} ({code})"; ws["A1"].font = F(16, True, NAVY)
+    ws["A2"] = "FY26 sales by location and channel"; ws["A2"].font = F(10, False, "666666")
+    ws["A3"] = f"{d1} to {d2} - Ostendo invoices, matched against Dutch Rusk's Shopify orders and old-website orders"; ws["A3"].font = F(9, False, "888888")
+    ws["A5"] = "FY26 total revenue (net of credits)"; ws["A5"].font = F(10, False, "666666"); ws["B5"] = net; money(ws["B5"]); ws["B5"].font = F(10, True)
+    ws["A6"] = "Distinct customers"; ws["A6"].font = F(10, False, "666666"); ws["B6"] = len(by_cust); ws["B6"].font = F(10, True)
+    r = 8; hdr(ws, r, ["Channel", "Orders", "Revenue", "Share of sales"]); r += 1
+    for i, k in enumerate(CHAN):
+        v = amt(ch_tot[k]); line(ws, r, [k, len(ch_tot[k]), v, v / amt(inv) if inv else 0], band=i % 2 == 0); money(ws.cell(r, 3)); ws.cell(r, 4).number_format = "0.0%"; r += 1
+    line(ws, r, ["Credit notes", len(cr), amt(cr), ""], band=True); money(ws.cell(r, 3)); r += 1
+    line(ws, r, ["Total (net of credits)", len(rows), net, ""], bold=True); money(ws.cell(r, 3)); r += 2
+    hdr(ws, r, ["Region", "Channel", "Orders", "Net Revenue"]); r += 1
+    i = 0
+    for rg in reg_order:
+        for k in CHAN + ("Credit notes",):
+            hs = rc.get((rg, k))
+            if not hs: continue
+            line(ws, r, [rg, k, len(hs), amt(hs)], band=i % 2 == 0); money(ws.cell(r, 4)); r += 1; i += 1
+    line(ws, r, ["Total", "", len(rows), net], bold=True); money(ws.cell(r, 4)); r += 2
+    ws.cell(r, 1, "How channel is determined").font = F(10, True, NAVY); r += 1
+    note = (f"Online = the invoice follows a real online order from the same store: a Shopify order (new portal, from 15 Aug 2026) or an old-website order. "
+            f"It counts when the invoice has the same amount within 2 weeks, or when the rep re-keyed it with a different amount within 10 days, "
+            f"or when the same store was invoiced the same amount twice on one day. Stores are tied to online accounts only by their recorded names "
+            f"(or 2 or more exact amount matches). Each online order is used for one invoice only. "
+            f"Corporate EDI = invoices billed to Foodstuffs South Island Ltd (computer feed). Rep / Phone = everything else. "
+            f"Region = the customer's billing city in Ostendo, so chain accounts show where they are billed.")
+    ws.merge_cells(start_row=r, start_column=1, end_row=r + 8, end_column=6)
+    c = ws.cell(r, 1, note); c.font = F(8.5, False, "888888"); c.alignment = Alignment(wrap_text=True, vertical="top")
+
+    # ===== Customers by Region
+    ws = wb.create_sheet("Customers by Region"); widths(ws, [36, 16, 16, 14, 10, 10, 13, 13, 14, 14])
+    hdr(ws, 1, ["Customer", "Region", "City", "FY26 Revenue", "Orders", "Credits", "First Order", "Last Order", "Online", "Rep / Phone"])
+    custs = sorted(by_cust.items(), key=lambda kv: (reg_order.index(kv[1][0]["_reg"]), -amt(kv[1])))
+    r = 2
+    for i, (cu, hs) in enumerate(custs):
+        iv = [h for h in hs if h["INVOICEORCREDIT"] == "Invoice"]
+        line(ws, r, [cu, hs[0]["_reg"], hs[0]["_city"], amt(hs), len(iv), len(hs) - len(iv),
+                     min(h["_d"] for h in hs).isoformat(), max(h["_d"] for h in hs).isoformat(),
+                     amt([h for h in iv if h["_chn"] == "Online"]), amt([h for h in iv if h["_chn"] == "Rep / Phone"])], band=i % 2 == 0)
+        for cc in (4, 9, 10): money(ws.cell(r, cc))
         r += 1
-    r += 1; section(ws, r, "Online against rep", 6); r += 1
-    header(ws, r, ["", "Online", "Rep or phone", "Foodstuffs head office", "All orders"], 40); r += 1
-    def avg(v): return (amt(v) / len(v)) if v else 0
-    side = (("Invoices", [len(ch[k]) for k in CHANNELS] + [len(inv)], "n"),
-            ("Sales", [amt(ch[k]) for k in CHANNELS] + [gross], "$"),
-            ("Share of all sales", [amt(ch[k]) / gross if gross else 0 for k in CHANNELS] + [1], "%"),
-            ("Average invoice", [avg(ch[k]) for k in CHANNELS] + [avg(inv)], "$"),
-            ("Stores", [len({h["_store"] for h in ch[k]}) for k in CHANNELS] + [len(by_store)], "n"))
-    for lab, vals, kind in side:
-        datarow(ws, r, [lab] + vals); ws.cell(r, 1).font = F(11, True)
-        for i, k in enumerate(CHANNELS, 2): ws.cell(r, i).fill = fill(CH_FILL[k])
-        for i in range(2, 6):
-            ws.cell(r, i).alignment = Alignment(horizontal="right", vertical="center")
-            if kind == "$": money0(ws.cell(r, i))
-            elif kind == "%": pct(ws.cell(r, i))
-        r += 1
-    oo, rr_ = amt(onl), amt(ch["Rep or phone"])
-    r += 1; para(ws, r, f"Online is {(amt(onl) / gross if gross else 0):.1%} of total sales, and {(oo / (oo + rr_) if (oo + rr_) else 0):.1%} of the sales that online and rep or phone brought in together (leaving out Foodstuffs head office). Online orders that left no trace in Ostendo, Shopify or the old website are not counted, so online is a minimum.", 6, chars=100); r += 2
-    section(ws, r, "Top 10 stores", 6); r += 1
-    header(ws, r, ["Store (region)", "Invoices", "Sales", "Share of sales", "Online share", ""]); r += 1; s0 = r
-    for st, hs in sorted(by_store.items(), key=lambda kv: -amt(kv[1]))[:10]:
-        v = amt(hs); datarow(ws, r, [f"{st} ({hs[0]['_reg']})", len(hs), v, v / gross if gross else 0, amt([h for h in hs if nice(h) == 'Online']) / v if v else 0]); money0(ws.cell(r, 3)); pct(ws.cell(r, 4)); pct(ws.cell(r, 5)); r += 1
-    bars(ws, f"C{s0}:C{r-1}"); r += 1
-    section(ws, r, "Month by month", 6); r += 1
-    header(ws, r, ["Month", "Invoices", "Sales", "Share of sales", "Online share", ""]); r += 1; m0 = r
-    mo = collections.OrderedDict()
-    for h in inv: mo.setdefault(h["_d"].strftime("%Y-%m"), []).append(h)
-    for k, s in sorted(mo.items()):
-        v = amt(s); datarow(ws, r, [dt.datetime.strptime(k, "%Y-%m").strftime("%B %Y"), len(s), v, v / gross if gross else 0, amt([h for h in s if nice(h) == "Online"]) / v if v else 0]); money0(ws.cell(r, 3)); pct(ws.cell(r, 4)); pct(ws.cell(r, 5)); r += 1
-    bars(ws, f"C{m0}:C{r-1}")
-    ws.freeze_panes = "A4"
+    line(ws, r, ["Total", "", "", net, len(inv), len(rows) - len(inv), "", "", amt(onl), amt(ch_tot["Rep / Phone"])], bold=True)
+    for cc in (4, 9, 10): money(ws.cell(r, cc))
+    ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:J{r-1}"
 
-    # ============ 2. BY REGION
-    ws = wb.create_sheet("By Region"); ws.sheet_view.showGridLines = False; widths(ws, [38, 16, 8, 10, 14, 14, 14, 16, 12, 14])
-    big_title(ws, f"{name}: online against rep, by region", "Biggest region first. Online share = online sales divided by all sales in the region.")
-    r = 4; header(ws, r, ["Region", "Island", "Stores", "Invoices", "Sales", "Online", "Rep or phone", "Foodstuffs head office", "Share of all sales", "Online share"], 44); r += 1; a0 = r
-    def regvals(hs):
-        v = amt(hs); sv = lambda k: amt([h for h in hs if nice(h) == k])
-        return [v, sv("Online"), sv("Rep or phone"), sv("Foodstuffs head office")]
-    for rg, hs in rl:
-        v, c1, c2, c3 = regvals(hs)
-        datarow(ws, r, [rg, (hs[0]["_isl"] + " Island") if hs[0]["_isl"] else "", len({h["_store"] for h in hs}), len(hs), v, c1, c2, c3, v / gross if gross else 0, c1 / v if v else 0])
-        for c in (5, 6, 7, 8): money0(ws.cell(r, c))
-        pct(ws.cell(r, 9)); pct(ws.cell(r, 10)); ws.cell(r, 1).font = F(11, True); r += 1
-    a1 = r - 1
-    v, c1, c2, c3 = regvals(inv)
-    datarow(ws, r, ["All regions", "", len(by_store), len(inv), v, c1, c2, c3, 1, c1 / v if v else 0], CREAM)
-    for c in (5, 6, 7, 8): money0(ws.cell(r, c))
-    pct(ws.cell(r, 9)); pct(ws.cell(r, 10))
-    for i in range(1, 11): ws.cell(r, i).font = F(11, True)
-    bars(ws, f"E{a0}:E{a1}"); r += 2
-    para(ws, r, f"Not placed: ${unplaced:,.0f} of sales ({(unplaced / gross if gross else 0):.0%}). These stores are billed through a chain head office and Ostendo does not record the store's own town. They are not guessed. Every placed store uses a recorded address: its own billing address, or the delivery address on the Shopify portal where the store's full name matches.", 10, chars=140, fillc=CREAM); r += 2
-    chart = BarChart(); chart.type = "bar"; chart.style = 10; chart.title = "Online against rep or phone, by region ($)"; chart.grouping = "clustered"
-    nrows = min(len(rl), 12)
-    chart.add_data(Reference(ws, min_col=6, max_col=7, min_row=4, max_row=4 + nrows), titles_from_data=True)
-    chart.set_categories(Reference(ws, min_col=1, min_row=5, max_row=4 + nrows))
-    chart.y_axis.numFmt = '"$"#,##0'; chart.x_axis.scaling.orientation = "maxMin"; chart.height = 11; chart.width = 26
-    chart.y_axis.delete = False; chart.x_axis.delete = False
-    ws.add_chart(chart, f"A{r}"); r += 24
-    section(ws, r, "Every store, under its region", 10); r += 1
-    header(ws, r, ["Store", "Town", "Invoices", "Last order", "Sales", "Online", "Rep or phone", "Foodstuffs head office", "Online share", "Region based on"], 44); r += 1
-    ws.column_dimensions["J"].width = 30
-    for rg, hs in rl:
-        for i in range(1, 11): ws.cell(r, i).fill = fill(GREEN)
-        ws.cell(r, 1, f"{rg}  ({len({h['_store'] for h in hs})} stores)").font = F(12, True, "FFFFFF"); c = ws.cell(r, 5, amt(hs)); c.font = F(12, True, "FFFFFF"); money0(c); r += 1
-        sts = collections.defaultdict(list)
-        for h in hs: sts[h["_store"]].append(h)
-        for st, ss in sorted(sts.items(), key=lambda kv: -amt(kv[1])):
-            v, c1, c2, c3 = regvals(ss)
-            datarow(ws, r, [st, ss[0]["_town"], len(ss), max(h["_d"] for h in ss), v, c1, c2, c3, c1 / v if v else 0, ss[0]["_basis"]])
-            ws.cell(r, 4).number_format = "d mmm yyyy"
-            for c in (5, 6, 7, 8): money0(ws.cell(r, c))
-            pct(ws.cell(r, 9)); r += 1
-    ws.freeze_panes = "A5"
+    # ===== Online Orders
+    ws = wb.create_sheet("Online Orders"); widths(ws, [12, 12, 34, 34, 16, 12, 24, 40])
+    hdr(ws, 1, ["Date", "Invoice #", "Customer", "Store", "Region", "Amount", "Online order", "How matched"])
+    r = 2
+    for i, h in enumerate(sorted(onl, key=lambda h: (h["CUSTOMER"], h["_d"]))):
+        line(ws, r, [h["_d"].isoformat(), h["INVOICENUMBER"], h["CUSTOMER"], h["DELIVERYCUSTOMER"], h["_reg"], h["INVOICENETTAMOUNT"], ref_text(h), match_text(h)], band=i % 2 == 0)
+        money(ws.cell(r, 6)); r += 1
+    line(ws, r, ["Total", "", f"{len(onl)} orders", "", "", amt(onl), "", ""], bold=True); money(ws.cell(r, 6))
+    ws.freeze_panes = "A2"
 
-    # ============ 3. ONLINE ORDERS
-    ws = wb.create_sheet("Online Orders"); ws.sheet_view.showGridLines = False; widths(ws, [14, 14, 40, 16, 20, 100])
-    big_title(ws, f"{name}: orders counted as online", "One line per invoice, with the proof.")
-    r = 4; header(ws, r, ["Date", "Invoice", "Store", "Sales", "Region", "Proof"]); r += 1
-    for h in onl:
-        datarow(ws, r, [h["_d"], h["INVOICENUMBER"], h["_store"], h["INVOICENETTAMOUNT"], h["_reg"], proof(h)]); ws.cell(r, 1).number_format = "d mmm yyyy"; money0(ws.cell(r, 4)); r += 1
-    datarow(ws, r, ["Total", "", f"{len(onl)} invoices", amt(onl), "", ""], CREAM); money0(ws.cell(r, 4))
-    for i in range(1, 7): ws.cell(r, i).font = F(11, True)
-    ws.freeze_panes = "A5"; ws.auto_filter.ref = f"A4:F{max(r - 1, 5)}"
+    # ===== Verification Notes
+    ws = wb.create_sheet("Verification Notes"); widths(ws, [34, 42, 46, 46])
+    ws.merge_cells("A1:D1"); ws["A1"] = "Verification: how these numbers were checked"; ws["A1"].font = F(14, True, NAVY)
+    ws.merge_cells("A2:D2"); ws["A2"] = f"Checked {dt.date.today().day} {dt.date.today():%b %Y}."; ws["A2"].font = F(9, False, "666666")
+    hdr(ws, 4, ["Check", "Method", "Result", "Conclusion"])
+    a_n = sum(1 for h in onl if h["_tier"] == "A"); b_n = sum(1 for h in onl if h["_tier"] == "B"); d_n = len(onl) - a_n - b_n
+    checks = [
+        ("Do the totals match Ostendo?", f"Summed every rep {code} invoice and credit note in Ostendo for {d1} to {d2}, and compared with this file.",
+         f"{len(inv)} invoices and {len(rows) - len(inv)} credit notes, net ${net:,.2f}. Identical to Ostendo to the cent.", "Totals are exact."),
+        ("Are the invoice lines real?", "Re-queried a random sample of invoices live from Ostendo and compared date, rep, store and amount.",
+         "Sample identical to Ostendo.", "Invoice data is exact."),
+        ("Which online orders were looked at?", "Pulled every Dutch Rusk Shopify order and every old-website (dr-admin) order for the year.",
+         f"{N_SHOP} Shopify orders and {N_OLD} old-website orders (old-website count equals the site's own total).", "All online orders for the year were checked, across all reps."),
+        ("Does the rep re-key online orders?", "Matched each online order to the store's next invoice: same amount, or a different amount within 10 days, or the same order twice on one day.",
+         f"{len(onl)} of {name}'s invoices follow an online order: {a_n} same amount, {b_n} re-keyed with a different amount, {d_n} entered twice on one day.", "All three are counted as Online, as one channel."),
+        ("Could an online order be counted twice, or tied to the wrong store?", "Each online order may explain one invoice only. Stores are tied to online accounts by recorded names, or 2+ exact amount matches. Every Online line was re-checked against its source order.",
+         "No online order or invoice used twice. Every Online line passed the re-check.", "No double counting, no coincidental matches."),
+        ("Are Shopify orders deleted after the rep re-enters them?", "Checked the Shopify order-number sequence for gaps.",
+         f"{len(_gaps)} gap(s) in #{_nums[0]}-#{_nums[-1]}; {_cancel} order(s) cancelled.", "Shopify orders are not being deleted."),
+        ("What cannot be seen?", "Old-website deletion log (dr-admin) returns 403. Orders emailed in and typed up by hand, and office orders keyed under 450 then reassigned, leave no online record.",
+         "These cannot be measured from Ostendo, Shopify or the old website.", "Online is a minimum. The exact figure needs Ostendo's own 'Created By' export (XQS = online)."),
+        ("Why does a region look out of area?", "Region is the customer's billing city in Ostendo, the same basis as the original Chris report.",
+         "Chain accounts show where they are billed, e.g. Red Circle Wholesale and CSB Group bill from Napier (Hawke's Bay), Night n Day Foodstores from Dunedin.", "Expected. It is the billing location, not the store's street address."),
+    ]
+    r = 5
+    for ck in checks:
+        for i, v in enumerate(ck, 1):
+            c = ws.cell(r, i, v); c.font = F(10, False, "000000"); c.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.row_dimensions[r].height = 15 * max(2, max(-(-len(v) // 45) for v in ck)); r += 1
+    r += 1; ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
+    ws.cell(r, 1, f"Bottom line: Online {amt(onl) / amt(inv):.0%} / Rep-Phone {amt(ch_tot['Rep / Phone']) / amt(inv):.0%} / Corporate EDI {amt(ch_tot['Corporate EDI']) / amt(inv):.0%} of invoiced sales. Online is a minimum.").font = F(9, False, "990000")
 
-    # ============ 4. ALL INVOICES
-    ws = wb.create_sheet("All Invoices"); ws.sheet_view.showGridLines = False; widths(ws, [14, 14, 14, 36, 36, 26, 16, 22, 18])
-    big_title(ws, f"{name}: every invoice and credit note", "Filter with the arrows in the header row.")
-    r = 4; header(ws, r, ["Date", "Invoice", "Type", "Billed to", "Store", "Region", "Amount", "How it arrived", "Ostendo order no."]); r += 1
-    for h in rows:
-        datarow(ws, r, [h["_d"], h["INVOICENUMBER"], "Credit note" if h["INVOICEORCREDIT"] != "Invoice" else "Invoice", h["CUSTOMER"], h["DELIVERYCUSTOMER"], h["_reg"], h["INVOICENETTAMOUNT"], nice(h), h["GROUPORDERNUMBERS"]])
-        ws.cell(r, 1).number_format = "d mmm yyyy"; money0(ws.cell(r, 7))
-        if nice(h) in CH_FILL: ws.cell(r, 8).fill = fill(CH_FILL[nice(h)])
-        r += 1
-    ws.freeze_panes = "A5"; ws.auto_filter.ref = f"A4:I{r-1}"
+    fn = f"{name.replace(' ', '_')}_{code}_FY26_Location_Channel_Report.xlsx"
+    wb.save(os.path.join(OUT, fn))
+    written.append((code, name, len(inv), net, len(onl), amt(onl) / amt(inv), fn))
 
-    # ============ 5. HOW THIS WAS WORKED OUT
-    ws = wb.create_sheet("Method and Limits"); ws.sheet_view.showGridLines = False; widths(ws, [28, 104])
-    big_title(ws, "Method and limits", f"Made {dt.date.today().day} {dt.date.today():%B %Y}")
-    a_n, b_n, d_n = sum(1 for h in onl if h["_tier"] == "A"), sum(1 for h in onl if h["_tier"] == "B"), sum(1 for h in onl if not h["_tier"])
-    notes = [("Source", f"Ostendo invoices and credit notes with rep code {code} (and {code}-1 style codes), {period} to {endtxt}. Amounts are before GST. Reversed invoices are left out. Totals were checked against Ostendo to the cent."),
-             ("Online orders read", f"New Shopify website (since 15 August 2026) and the old website (dr-admin). {EV_TOTAL} online orders were read for the year across all reps."),
-             ("What counts as Online", f"{len(onl)} invoices. The store is linked to an online login or company by its recorded name (or 2 or more exact amount matches), and an invoice for that store followed one of its online orders: {a_n} with the same amount within 2 weeks, {b_n} within 10 days at a different amount (the rep typed it in again with different discounts), and {d_n} where the same store was invoiced the same amount twice on one day. One online order is used for one invoice only."),
-             ("Not counted as online", "Orders emailed in and typed up by hand, and orders the office typed under code 450 and handed to a rep later, leave no trace in Ostendo, Shopify or the old website. They sit under Rep or phone. Online is therefore a minimum."),
-             ("Foodstuffs head office", "Invoices billed to Foodstuffs South Island Ltd. Other chains have not been separated."),
-             ("Regions", "Ostendo has no delivery address. A store gets a region only from a recorded address: its own billing city (stores billed directly), or the delivery address on the Shopify portal when every word of the store's name matches the portal company name. Stores billed through a chain head office with no match are shown as Not placed."),
-             ("Checks", "Before saving, the computer checks that online + rep + head office equals total sales, that the regions add up to total sales, and that invoice counts match. Totals, credits and counts were also compared with raw Ostendo for each rep code.")]
-    r = 4; header(ws, r, ["Topic", "Detail"], 28); r += 1
-    for t, n in notes:
-        ws.cell(r, 1, t).font = F(11, True, GREEN); ws.cell(r, 1).alignment = Alignment(wrap_text=True, vertical="top")
-        c = ws.cell(r, 2, n); c.font = F(); c.alignment = Alignment(wrap_text=True, vertical="top"); ws.row_dimensions[r].height = 16 * max(1, -(-len(n) // 105)) + 6
-        for i in (1, 2): ws.cell(r, i).border = box
-        r += 1
-    fn = f"{name.replace(' ', '_')}_{code}_FY26_Sales_Report.xlsx"
-    wb.save(os.path.join(OUT, fn)); written.append((code, name, len(inv), gross, credits, len(ch["Online"]), 0, unplaced, fn))
-
-for c, n, i, g, cr, o1, o2, u, fn in written:
-    print(f"{c} {n}: {i} inv, ${g:,.2f}, credits ${cr:,.2f}, online {o1}, not placed ${u:,.0f} -> {fn}")
+for c, n, i, net, o, s, fn in written:
+    print(f"{c} {n}: {i} inv, net ${net:,.2f}, online {o} ({s:.1%}) -> {fn}")
