@@ -1,6 +1,6 @@
 # Naitik route sales (Mon-Wed vs Thu-Fri)
 
-Average sales per week for Naitik Trivedi (Worthy Products, Odoo company 4), split into his Monday-Wednesday and Thursday-Friday routes. Built 22 Oct 2026 for the FY from 1 Apr 2026.
+Average sales per week for Naitik Trivedi (Worthy Products, Odoo company 4), split into his Monday-Wednesday and Thursday-Friday routes. Requested by Kishan, built 22 Oct 2026 for the FY from 1 Apr 2026.
 
 Run (credentials in ~/.odoo-worthy.env, read only):
 1. `python -I pull.py DATA/data.json` (invoices, lines, sale orders for salesperson id 45)
