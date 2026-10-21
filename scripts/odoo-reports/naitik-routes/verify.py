@@ -1,10 +1,10 @@
 """Independent re-check of the Naitik route workbook. Fresh read from Odoo, own logic, no code shared with build.py.
-usage: python -I verify.py WORKBOOK FY_START TODAY"""
+usage: python -I verify.py MONWED_XLSX THUFRI_XLSX FY_START TODAY"""
 import xmlrpc.client, ssl, os, sys, collections, datetime as dt
 from zoneinfo import ZoneInfo
 import openpyxl
 
-WB, FY0, TODAY = sys.argv[1], dt.date.fromisoformat(sys.argv[2]), dt.date.fromisoformat(sys.argv[3])
+FILES = {"MW": sys.argv[1], "TF": sys.argv[2]}; FY0, TODAY = dt.date.fromisoformat(sys.argv[3]), dt.date.fromisoformat(sys.argv[4])
 env = {}
 for l in open(os.path.expanduser("~/.odoo-worthy.env")):
     if "=" in l and not l.startswith("#"): k, v = l.strip().split("=", 1); env[k] = v.strip().strip('"')
@@ -46,28 +46,25 @@ for m in moves:
     tot[route[m["id"]]] += val[m["id"]]; wk[(route[m["id"]], week(m))] += val[m["id"]]
 avg = {r: sum(wk[(r, w)] for w in weeks) / len(weeks) for r in ("MW", "TF")}
 
-wb = openpyxl.load_workbook(WB); fails = []
-s = {r[0]: r[1:4] for r in wb["Summary"].iter_rows(min_row=5, max_row=12, values_only=True) if r[0]}
+fails = []
 def near(a, b): return abs(a - b) < 0.01
-if not (near(s["Average sales per week"][0], avg["MW"]) and near(s["Average sales per week"][1], avg["TF"])): fails.append("averages")
-if not (near(s["Total sales this financial year"][0], tot["MW"]) and near(s["Total sales this financial year"][1], tot["TF"])): fails.append("totals")
-rows = [r for r in wb["Weekly"].iter_rows(min_row=2, values_only=True) if r[0] and str(r[0]).startswith("Week ") and not str(r[0]).startswith("Week of")]
-if len(rows) != len(weeks): fails.append("week count")
-for i, r in enumerate(rows):
-    w = weeks[i]
-    if r[0] != f"Week {i + 1}" or r[1] != f"{w.day} {w:%b %Y}" or not near(r[2], wk[("MW", w)]) or not near(r[3], wk[("TF", w)]): fails.append(f"week {i + 1}")
-for col, r_ in (("Mon-Wed", "MW"), ("Thu-Fri", "TF")):
-    inv = [r for r in wb["Invoices " + col].iter_rows(min_row=2, values_only=True) if r[2]]
-    names = {m["name"] for m in moves if route[m["id"]] == r_}
-    if {r[2] for r in inv} != names: fails.append(col + " invoice list")
-    if not near(sum(r[5] for r in inv), tot[r_]): fails.append(col + " invoice total")
-    cu = [r for r in wb["Customers " + col].iter_rows(min_row=2, values_only=True) if r[0] and r[0] != "Total"]
-    if not near(sum(r[3] for r in cu), tot[r_]): fails.append(col + " customer total")
+for r_, path in FILES.items():
+    wb = openpyxl.load_workbook(path)
+    if wb.sheetnames != ["Summary", "Weekly", "Customers", "Invoices"]: fails.append(f"{r_} sheets {wb.sheetnames}")
+    sm = {r[0]: r[1] for r in wb["Summary"].iter_rows(min_row=4, max_row=12, values_only=True) if r[0]}
+    if not near(sm["Average sales per week"], avg[r_]): fails.append(r_ + " average")
+    if not near(sm["Total sales this financial year"], tot[r_]): fails.append(r_ + " total")
+    rows = [r for r in wb["Weekly"].iter_rows(min_row=2, values_only=True) if r[0] and str(r[0]).startswith("Week ") and not str(r[0]).startswith("Week of")]
+    if len(rows) != len(weeks): fails.append(r_ + " week count")
+    for i, r in enumerate(rows):
+        w = weeks[i]
+        if r[0] != f"Week {i + 1}" or r[1] != f"{w.day} {w:%b %Y}" or not near(r[2], wk[(r_, w)]): fails.append(f"{r_} week {i + 1}")
+    inv = [r for r in wb["Invoices"].iter_rows(min_row=2, values_only=True) if r[2]]
+    if {r[2] for r in inv} != {m["name"] for m in moves if route[m["id"]] == r_}: fails.append(r_ + " invoice list")
+    if not near(sum(r[5] for r in inv), tot[r_]): fails.append(r_ + " invoice total")
+    if sm["Invoices"] != sum(1 for m in moves if route[m["id"]] == r_ and m["move_type"] == "out_invoice"): fails.append(r_ + " invoice count")
+    cu = [r for r in wb["Customers"].iter_rows(min_row=2, values_only=True) if r[0] and r[0] != "Total"]
+    if not near(sum(r[3] for r in cu), tot[r_]) or sm["Customers"] != len({m["partner_shipping_id"][0] for m in moves if route[m["id"]] == r_}): fails.append(r_ + " customers")
 grand = sum(val.values())
 print(f"Odoo now: Naitik total ${grand:,.2f} | Mon-Wed ${tot['MW']:,.2f} avg ${avg['MW']:,.2f} | Thu-Fri ${tot['TF']:,.2f} avg ${avg['TF']:,.2f} | not on a route ${tot['NONE']:,.2f} | weeks {len(weeks)}")
 print("FAILURES:", fails or 0)
-if os.environ.get("SHOWDIFF"):
-    for col, r_ in (("Mon-Wed", "MW"), ("Thu-Fri", "TF")):
-        inv = {r[2]: r for r in wb["Invoices " + col].iter_rows(min_row=2, values_only=True) if r[2]}
-        names = {m["name"] for m in moves if route[m["id"]] == r_}
-        print(col, "only in workbook:", [(n, inv[n][5]) for n in sorted(set(inv) - names)][:10], "| only in Odoo check:", sorted(names - set(inv))[:10])

@@ -73,63 +73,49 @@ def widths(ws, w):
     for i, x in enumerate(w, 1): ws.column_dimensions[get_column_letter(i)].width = x
 def fmt(d): return f"{d.day} {d:%b %Y}"
 
-ROUTES = ((MW, "Mon-Wed"), (TF, "Thu-Fri"))
 WEEKNO = {w: i + 1 for i, w in enumerate(full_weeks)}
-by = {rt: [r for r in rows if r["route"] == rt] for rt, _ in ROUTES}
-def wk_sum(rt, w): return sum(r["amt"] for r in by[rt] if r["week"] == w)
-stats = {}
-for rt, _ in ROUTES:
-    vals = [(w, wk_sum(rt, w)) for w in full_weeks]
-    stats[rt] = {"avg": sum(v for _, v in vals) / len(vals), "total": sum(r["amt"] for r in by[rt]),
-                 "best": max(vals, key=lambda x: x[1]), "low": min(vals, key=lambda x: x[1]),
-                 "cust": len({r["cust_id"] for r in by[rt]}), "inv": sum(1 for r in by[rt] if r["type"] == "Invoice")}
-both_avg = stats[MW]["avg"] + stats[TF]["avg"]
-
-wb = Workbook()
-# ===== Summary
-ws = wb.active; ws.title = "Summary"; ws.sheet_view.showGridLines = False; widths(ws, [34, 20, 20, 20])
-ws["A1"] = "Naitik Trivedi - average sales per week"; ws["A1"].font = F(18, True, NAVY); ws.row_dimensions[1].height = 30
-ws["A2"] = f"This financial year, {fmt(FY0)} to {fmt(TODAY)}. Sales before GST, after credit notes."; ws["A2"].font = F(10, False, "666666")
-hdr(ws, 4, ["", "Mon-Wed route", "Thu-Fri route", "Both routes"], 26)
-r = 5
-line(ws, r, ["Average sales per week", stats[MW]["avg"], stats[TF]["avg"], both_avg], bold=True, money_cols=(2, 3, 4), size=14)
-for i in range(1, 5): ws.cell(r, i).fill = fill(GOLD)
-ws.row_dimensions[r].height = 28; r += 1
-rows_ = [("Total sales this financial year", stats[MW]["total"], stats[TF]["total"], stats[MW]["total"] + stats[TF]["total"], True),
-         ("Best week", f"${stats[MW]['best'][1]:,.0f} (Week {WEEKNO[stats[MW]['best'][0]]})", f"${stats[TF]['best'][1]:,.0f} (Week {WEEKNO[stats[TF]['best'][0]]})", "", False),
-         ("Lowest week", f"${stats[MW]['low'][1]:,.0f} (Week {WEEKNO[stats[MW]['low'][0]]})", f"${stats[TF]['low'][1]:,.0f} (Week {WEEKNO[stats[TF]['low'][0]]})", "", False),
-         ("Customers", stats[MW]["cust"], stats[TF]["cust"], len({r_["cust_id"] for r_ in rows}), False),
-         ("Invoices", stats[MW]["inv"], stats[TF]["inv"], stats[MW]["inv"] + stats[TF]["inv"], False)]
-for i, (lab, a, b, c, m) in enumerate(rows_):
-    line(ws, r, [lab, a, b, c], band=i % 2 == 0, money_cols=(2, 3, 4) if m else (), size=11)
-    for j in (2, 3, 4): ws.cell(r, j).alignment = Alignment(horizontal="right")
-    r += 1
-for j in (2, 3, 4): ws.cell(5, j).alignment = Alignment(horizontal="right", vertical="center")
-
-# ===== Weekly
-ws = wb.create_sheet("Weekly"); widths(ws, [10, 16, 18, 18, 18])
-hdr(ws, 1, ["Week", "Week starting", "Mon-Wed route", "Thu-Fri route", "Both routes"])
-r = 2
-for i, w in enumerate(full_weeks):
-    a, b = wk_sum(MW, w), wk_sum(TF, w)
-    line(ws, r, [f"Week {i + 1}", fmt(w), a, b, a + b], band=i % 2 == 0, money_cols=(3, 4, 5)); r += 1
-line(ws, r, ["Total", "", sum(wk_sum(MW, w) for w in full_weeks), sum(wk_sum(TF, w) for w in full_weeks), sum(wk_sum(MW, w) + wk_sum(TF, w) for w in full_weeks)], bold=True, money_cols=(3, 4, 5)); r += 1
-line(ws, r, ["Average", "", stats[MW]["avg"], stats[TF]["avg"], both_avg], bold=True, money_cols=(3, 4, 5))
-for j in range(1, 6): ws.cell(r, j).fill = fill(GOLD)
-r += 2
-part = [w for w in weeks_all if w not in full_weeks]
-ws.cell(r, 1, "Part weeks, not in the average:").font = F(9, True, "666666"); r += 1
-for w in part:
-    lab = f"Week of {fmt(w)} (the year started on {fmt(FY0)})" if w < FY0 else f"Week of {fmt(w)} (week not finished)"
-    line(ws, r, [lab, "", wk_sum(MW, w), wk_sum(TF, w), wk_sum(MW, w) + wk_sum(TF, w)], money_cols=(3, 4, 5), size=9)
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2); r += 1
-ws.freeze_panes = "A2"
-
 def weeklabel(w): return f"Week {WEEKNO[w]}" if w in WEEKNO else "Part week"
-# ===== Customers and invoices, one sheet each per route
-for rt, short in ROUTES:
-    rr = by[rt]; tot = sum(x["amt"] for x in rr)
-    ws = wb.create_sheet(f"Customers {short}"); widths(ws, [46, 18, 10, 16, 10])
+os.makedirs(OUT, exist_ok=True)
+for rt, short, title in ((MW, "Mon-Wed", "Monday to Wednesday route"), (TF, "Thu-Fri", "Thursday to Friday route")):
+    rr = [r for r in rows if r["route"] == rt]
+    def wk_sum(w): return sum(r["amt"] for r in rr if r["week"] == w)
+    vals = [(w, wk_sum(w)) for w in full_weeks]
+    avg = sum(v for _, v in vals) / len(vals); tot = sum(r["amt"] for r in rr)
+    best = max(vals, key=lambda x: x[1]); low = min(vals, key=lambda x: x[1])
+    ninv = sum(1 for r in rr if r["type"] == "Invoice")
+    wb = Workbook()
+    # ===== Summary
+    ws = wb.active; ws.title = "Summary"; ws.sheet_view.showGridLines = False; widths(ws, [34, 22])
+    ws["A1"] = f"Naitik Trivedi - {title}"; ws["A1"].font = F(18, True, NAVY); ws.row_dimensions[1].height = 30
+    ws["A2"] = f"This financial year, {fmt(FY0)} to {fmt(TODAY)}. Sales before GST, after credit notes."; ws["A2"].font = F(10, False, "666666")
+    r = 4
+    line(ws, r, ["Average sales per week", avg], bold=True, money_cols=(2,), size=14)
+    for i in (1, 2): ws.cell(r, i).fill = fill(GOLD)
+    ws.cell(r, 2).alignment = Alignment(horizontal="right", vertical="center"); ws.row_dimensions[r].height = 28; r += 1
+    for i, (lab, v, m) in enumerate((("Total sales this financial year", tot, True),
+                                     ("Best week", f"${best[1]:,.0f} (Week {WEEKNO[best[0]]})", False),
+                                     ("Lowest week", f"${low[1]:,.0f} (Week {WEEKNO[low[0]]})", False),
+                                     ("Customers", len({x["cust_id"] for x in rr}), False),
+                                     ("Invoices", ninv, False))):
+        line(ws, r, [lab, v], band=i % 2 == 0, money_cols=(2,) if m else (), size=11)
+        ws.cell(r, 2).alignment = Alignment(horizontal="right"); r += 1
+    # ===== Weekly
+    ws = wb.create_sheet("Weekly"); widths(ws, [10, 16, 18])
+    hdr(ws, 1, ["Week", "Week starting", "Sales"])
+    r = 2
+    for i, (w, v) in enumerate(vals):
+        line(ws, r, [f"Week {i + 1}", fmt(w), v], band=i % 2 == 0, money_cols=(3,)); r += 1
+    line(ws, r, ["Total", "", sum(v for _, v in vals)], bold=True, money_cols=(3,)); r += 1
+    line(ws, r, ["Average", "", avg], bold=True, money_cols=(3,))
+    for j in (1, 2, 3): ws.cell(r, j).fill = fill(GOLD)
+    r += 2
+    ws.cell(r, 1, "Part weeks, not in the average:").font = F(9, True, "666666"); r += 1
+    for w in [w for w in weeks_all if w not in full_weeks]:
+        lab = f"Week of {fmt(w)} (the year started on {fmt(FY0)})" if w < FY0 else f"Week of {fmt(w)} (week not finished)"
+        line(ws, r, [lab, "", wk_sum(w)], money_cols=(3,), size=9); ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2); r += 1
+    ws.freeze_panes = "A2"
+    # ===== Customers
+    ws = wb.create_sheet("Customers"); widths(ws, [46, 18, 10, 16, 10])
     hdr(ws, 1, ["Customer", "Town", "Invoices", "Sales", "Share"])
     cu = collections.defaultdict(list)
     for x in rr: cu[x["cust_id"]].append(x)
@@ -137,10 +123,10 @@ for rt, short in ROUTES:
         v = sum(h["amt"] for h in hs)
         line(ws, i + 2, [hs[0]["cust"], (P.get(cid) or {}).get("city") or "", sum(1 for h in hs if h["type"] == "Invoice"), v, v / tot if tot else 0], band=i % 2 == 0, money_cols=(4,))
         ws.cell(i + 2, 5).number_format = "0%"
-    n = len(cu) + 2; line(ws, n, ["Total", "", sum(1 for h in rr if h["type"] == "Invoice"), tot, 1], bold=True, money_cols=(4,)); ws.cell(n, 5).number_format = "0%"
+    n = len(cu) + 2; line(ws, n, ["Total", "", ninv, tot, 1], bold=True, money_cols=(4,)); ws.cell(n, 5).number_format = "0%"
     ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:E{n-1}"
-
-    ws = wb.create_sheet(f"Invoices {short}"); widths(ws, [12, 13, 18, 14, 44, 14, 28])
+    # ===== Invoices
+    ws = wb.create_sheet("Invoices"); widths(ws, [12, 13, 18, 14, 44, 14, 28])
     hdr(ws, 1, ["Week", "Order date", "Invoice", "Type", "Customer", "Sales", "How it was ordered"])
     srt = sorted(rr, key=lambda x: (x["order_date"] or x["inv_date"], x["inv"]))
     for i, x in enumerate(srt):
@@ -149,8 +135,7 @@ for rt, short in ROUTES:
         line(ws, i + 2, [weeklabel(x["week"]), (x["order_date"] or x["inv_date"]).isoformat(), x["inv"], x["type"], x["cust"], x["amt"], how], band=i % 2 == 0, money_cols=(6,))
     n = len(srt) + 2; line(ws, n, ["Total", "", "", "", "", tot, ""], bold=True, money_cols=(6,))
     ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:G{n-1}"
-
-os.makedirs(OUT, exist_ok=True)
-fn = "Naitik_Route_Average_Weekly_Sales_FY26.xlsx"
-wb.save(os.path.join(OUT, fn))
-print(f"Mon-Wed avg ${stats[MW]['avg']:,.2f} | Thu-Fri avg ${stats[TF]['avg']:,.2f} | both ${both_avg:,.2f} | weeks {len(full_weeks)} | totals {stats[MW]['total']:,.2f} + {stats[TF]['total']:,.2f} = {total:,.2f} -> {fn}")
+    fn = f"Naitik_{short}_Route_Average_Weekly_Sales_FY26.xlsx"
+    wb.save(os.path.join(OUT, fn))
+    print(f"{short}: avg ${avg:,.2f} | total ${tot:,.2f} | {len(vals)} weeks -> {fn}")
+print(f"Naitik total ${total:,.2f}")
