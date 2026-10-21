@@ -19,7 +19,9 @@ for l in D["lines"]:
 def nzdate(s): return dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc).astimezone(NZ).date()
 MW, TF, NR = "Monday to Wednesday", "Thursday to Friday", "Not on a route"
 rows = []
+HAS_PRODUCT = {l["move_id"][0] for l in D["lines"] if l["product_id"]}
 for m in D["moves"]:
+    if m["id"] not in HAS_PRODUCT: continue   # no product lines = not a sale (finance basis)
     o = m["invoice_origin"] or ""; s = SO.get(o)
     r = {"inv": m["name"], "type": "Credit note" if m["move_type"] == "out_refund" else "Invoice", "inv_date": dt.date.fromisoformat(m["invoice_date"]),
          "cust": m["partner_shipping_id"][1], "cust_id": m["partner_shipping_id"][0], "amt": round(SALES[m["id"]], 2), "origin": o,
@@ -103,12 +105,6 @@ for i, (lab, a, b, c, m) in enumerate(rows_):
     for j in (2, 3, 4): ws.cell(r, j).alignment = Alignment(horizontal="right")
     r += 1
 for j in (2, 3, 4): ws.cell(5, j).alignment = Alignment(horizontal="right", vertical="center")
-r += 1
-for t in (f"Average = sales in the {len(full_weeks)} full weeks (Week 1 starts {fmt(full_weeks[0])}, Week {len(full_weeks)} ends {fmt(full_weeks[-1] + dt.timedelta(days=6))}) divided by {len(full_weeks)}.",
-          "Route = the day the order was placed: Monday to Wednesday, or Thursday to Friday (website orders included). Credit notes are taken off in the week they were issued.",
-          f"Checked: both routes add up to ${total:,.2f}, the same as Naitik's total in Odoo."):
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
-    c = ws.cell(r, 1, t); c.font = F(9, False, "666666"); c.alignment = Alignment(wrap_text=True, vertical="top"); ws.row_dimensions[r].height = 26; r += 1
 
 # ===== Weekly
 ws = wb.create_sheet("Weekly"); widths(ws, [10, 16, 18, 18, 18])
