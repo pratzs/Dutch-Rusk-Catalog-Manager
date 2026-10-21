@@ -41,7 +41,8 @@ for r in rows:
         c = main.get(r["cust_id"])
         if c: r["route"] = c.most_common(1)[0][0]; r["basis"] += f", so the customer's main route"
         else: r["route"] = NR; r["basis"] += ", customer has no weekday orders"
-    d = r["order_date"] or r["inv_date"]
+    # sales go in the week the order was placed; a credit note goes in the week it was issued
+    d = r["inv_date"] if r["type"] == "Credit note" else (r["order_date"] or r["inv_date"])
     r["week"] = d - dt.timedelta(days=d.weekday())
 total = round(sum(r["amt"] for r in rows), 2)
 RT = {k: sum(r["amt"] for r in rows if r["route"] == k) for k in (MW, TF, NR)}
@@ -53,114 +54,107 @@ last_full = TODAY - dt.timedelta(days=TODAY.weekday() + 7)   # Monday of the las
 weeks_all = sorted({r["week"] for r in rows} | {first_full + dt.timedelta(weeks=i) for i in range(((last_full - first_full).days // 7) + 1)})
 full_weeks = [w for w in weeks_all if first_full <= w <= last_full]
 
-NAVY, BAND = "1A3C34", "F2F6F4"
-def F(size=9, bold=False, color=None): return Font(name="Arial", size=size, bold=bold, color=color)
-def hdr(ws, row, vals):
+NAVY, BAND, GOLD = "1A3C34", "F2F6F4", "FCE9B8"
+def F(size=10, bold=False, color=None): return Font(name="Arial", size=size, bold=bold, color=color)
+fill = lambda c: PatternFill("solid", fgColor=c)
+def hdr(ws, row, vals, height=30):
     for i, v in enumerate(vals, 1):
-        c = ws.cell(row, i, v); c.font = F(10, True, "FFFFFF"); c.fill = PatternFill("solid", fgColor=NAVY); c.alignment = Alignment(wrap_text=True, vertical="center")
-def line(ws, row, vals, band=False, bold=False):
+        c = ws.cell(row, i, v); c.font = F(10, True, "FFFFFF"); c.fill = fill(NAVY)
+        c.alignment = Alignment(horizontal="left" if i == 1 else "center", vertical="center", wrap_text=True)
+    ws.row_dimensions[row].height = height
+def line(ws, row, vals, band=False, bold=False, money_cols=(), size=10):
     for i, v in enumerate(vals, 1):
-        c = ws.cell(row, i, v); c.font = F(9, bold)
-        if band: c.fill = PatternFill("solid", fgColor=BAND)
-def money(c): c.number_format = '"$"#,##0.00;[Red]-"$"#,##0.00'
+        c = ws.cell(row, i, v); c.font = F(size, bold)
+        if band: c.fill = fill(BAND)
+        if i in money_cols: c.number_format = '"$"#,##0;[Red]-"$"#,##0'
 def widths(ws, w):
     for i, x in enumerate(w, 1): ws.column_dimensions[get_column_letter(i)].width = x
 def fmt(d): return f"{d.day} {d:%b %Y}"
 
-os.makedirs(OUT, exist_ok=True)
-results = {}
-for route, short in ((MW, "Mon-Wed"), (TF, "Thu-Fri")):
-    rr = [r for r in rows if r["route"] == route]
-    wk = collections.defaultdict(list)
-    for r in rr: wk[r["week"]].append(r)
-    full_total = sum(sum(r["amt"] for r in wk.get(w, [])) for w in full_weeks)
-    avg = full_total / len(full_weeks)
-    inv = [r for r in rr if r["type"] == "Invoice"]; cr = [r for r in rr if r["type"] != "Invoice"]
-    wk_vals = [(w, sum(r["amt"] for r in wk.get(w, []))) for w in full_weeks]
-    best = max(wk_vals, key=lambda x: x[1]); low = min(wk_vals, key=lambda x: x[1])
-    results[route] = (avg, full_total, sum(r["amt"] for r in rr))
-    wb = Workbook()
-    ws = wb.active; ws.title = "Summary"; widths(ws, [44, 18, 4, 4])
-    ws["A1"] = f"Worthy Products - Naitik Trivedi, {route} route"; ws["A1"].font = F(16, True, NAVY)
-    ws["A2"] = "Average sales per week, this financial year"; ws["A2"].font = F(10, False, "666666")
-    ws["A3"] = f"{fmt(FY0)} to {fmt(TODAY)} - Odoo invoices less credit notes, product lines only, before GST"; ws["A3"].font = F(9, False, "888888")
-    r = 5
-    for lab, val, kind in (("Average sales per week", avg, "$"),
-                           (f"Weeks in the average (full weeks {fmt(full_weeks[0])} to {fmt(full_weeks[-1] + dt.timedelta(days=6))})", len(full_weeks), "n"),
-                           ("Sales in those weeks", full_total, "$"),
-                           ("Best week", best[1], "$"), ("  week starting", fmt(best[0]), "t"),
-                           ("Lowest week", low[1], "$"), ("  week starting", fmt(low[0]), "t"),
-                           ("All sales on this route this financial year", sum(r["amt"] for r in rr), "$"),
-                           ("Invoices / credit notes", f"{len(inv)} / {len(cr)}", "t"),
-                           ("Customers", len({r["cust_id"] for r in rr}), "n")):
-        ws.cell(r, 1, lab).font = F(10, lab == "Average sales per week", "666666" if lab != "Average sales per week" else NAVY)
-        c = ws.cell(r, 2, val); c.font = F(12 if lab == "Average sales per week" else 10, True)
-        if kind == "$": money(c)
-        r += 1
-    r += 1; ws.cell(r, 1, "How the route is decided").font = F(10, True, NAVY); r += 1
-    note = ("An order belongs to the Monday to Wednesday route if it was placed on a Monday, Tuesday or Wednesday, and to the Thursday to Friday route if it was placed on a Thursday or Friday "
-            "(the order date in Odoo, NZ time). Website orders follow the day they were placed in the same way. Weekend orders and invoices with no sales order go to the customer's main route: "
-            "the route where most of that customer's weekday sales were. A credit note follows the order it credits. Weeks run Monday to Sunday by order date. The average uses full weeks only: the week of 1 April (the year started on a Wednesday) "
-            "and the current week are left out, but their sales are shown on the Weekly sheet.")
-    ws.merge_cells(start_row=r, start_column=1, end_row=r + 6, end_column=4)
-    c = ws.cell(r, 1, note); c.font = F(8.5, False, "888888"); c.alignment = Alignment(wrap_text=True, vertical="top")
+ROUTES = ((MW, "Mon-Wed"), (TF, "Thu-Fri"))
+WEEKNO = {w: i + 1 for i, w in enumerate(full_weeks)}
+by = {rt: [r for r in rows if r["route"] == rt] for rt, _ in ROUTES}
+def wk_sum(rt, w): return sum(r["amt"] for r in by[rt] if r["week"] == w)
+stats = {}
+for rt, _ in ROUTES:
+    vals = [(w, wk_sum(rt, w)) for w in full_weeks]
+    stats[rt] = {"avg": sum(v for _, v in vals) / len(vals), "total": sum(r["amt"] for r in by[rt]),
+                 "best": max(vals, key=lambda x: x[1]), "low": min(vals, key=lambda x: x[1]),
+                 "cust": len({r["cust_id"] for r in by[rt]}), "inv": sum(1 for r in by[rt] if r["type"] == "Invoice")}
+both_avg = stats[MW]["avg"] + stats[TF]["avg"]
 
-    ws = wb.create_sheet("Weekly"); widths(ws, [16, 12, 12, 16, 22])
-    hdr(ws, 1, ["Week starting", "Invoices", "Credit notes", "Sales", "In the average?"])
-    rr_ = 2
-    for i, w in enumerate(weeks_all):
-        hs = wk.get(w, [])
-        line(ws, rr_, [w.isoformat(), sum(1 for h in hs if h["type"] == "Invoice"), sum(1 for h in hs if h["type"] != "Invoice"), sum(h["amt"] for h in hs),
-                       "Yes" if w in full_weeks else ("No, part week (FY started 1 Apr)" if w < first_full else "No, week not finished")], band=i % 2 == 0)
-        money(ws.cell(rr_, 4)); rr_ += 1
-    line(ws, rr_, ["Total", len(inv), len(cr), sum(r["amt"] for r in rr), ""], bold=True); money(ws.cell(rr_, 4)); rr_ += 1
-    line(ws, rr_, ["Average, full weeks", "", "", avg, f"{len(full_weeks)} weeks"], bold=True); money(ws.cell(rr_, 4))
-    ws.freeze_panes = "A2"
+wb = Workbook()
+# ===== Summary
+ws = wb.active; ws.title = "Summary"; ws.sheet_view.showGridLines = False; widths(ws, [34, 20, 20, 20])
+ws["A1"] = "Naitik Trivedi - average sales per week"; ws["A1"].font = F(18, True, NAVY); ws.row_dimensions[1].height = 30
+ws["A2"] = f"This financial year, {fmt(FY0)} to {fmt(TODAY)}. Sales before GST, after credit notes."; ws["A2"].font = F(10, False, "666666")
+hdr(ws, 4, ["", "Mon-Wed route", "Thu-Fri route", "Both routes"], 26)
+r = 5
+line(ws, r, ["Average sales per week", stats[MW]["avg"], stats[TF]["avg"], both_avg], bold=True, money_cols=(2, 3, 4), size=14)
+for i in range(1, 5): ws.cell(r, i).fill = fill(GOLD)
+ws.row_dimensions[r].height = 28; r += 1
+rows_ = [("Total sales this financial year", stats[MW]["total"], stats[TF]["total"], stats[MW]["total"] + stats[TF]["total"], True),
+         ("Best week", f"${stats[MW]['best'][1]:,.0f} (Week {WEEKNO[stats[MW]['best'][0]]})", f"${stats[TF]['best'][1]:,.0f} (Week {WEEKNO[stats[TF]['best'][0]]})", "", False),
+         ("Lowest week", f"${stats[MW]['low'][1]:,.0f} (Week {WEEKNO[stats[MW]['low'][0]]})", f"${stats[TF]['low'][1]:,.0f} (Week {WEEKNO[stats[TF]['low'][0]]})", "", False),
+         ("Customers", stats[MW]["cust"], stats[TF]["cust"], len({r_["cust_id"] for r_ in rows}), False),
+         ("Invoices", stats[MW]["inv"], stats[TF]["inv"], stats[MW]["inv"] + stats[TF]["inv"], False)]
+for i, (lab, a, b, c, m) in enumerate(rows_):
+    line(ws, r, [lab, a, b, c], band=i % 2 == 0, money_cols=(2, 3, 4) if m else (), size=11)
+    for j in (2, 3, 4): ws.cell(r, j).alignment = Alignment(horizontal="right")
+    r += 1
+for j in (2, 3, 4): ws.cell(5, j).alignment = Alignment(horizontal="right", vertical="center")
+r += 1
+for t in (f"Average = sales in the {len(full_weeks)} full weeks (Week 1 starts {fmt(full_weeks[0])}, Week {len(full_weeks)} ends {fmt(full_weeks[-1] + dt.timedelta(days=6))}) divided by {len(full_weeks)}.",
+          "Route = the day the order was placed: Monday to Wednesday, or Thursday to Friday (website orders included). Credit notes are taken off in the week they were issued.",
+          f"Checked: both routes add up to ${total:,.2f}, the same as Naitik's total in Odoo."):
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
+    c = ws.cell(r, 1, t); c.font = F(9, False, "666666"); c.alignment = Alignment(wrap_text=True, vertical="top"); ws.row_dimensions[r].height = 26; r += 1
 
-    ws = wb.create_sheet("Customers"); widths(ws, [44, 18, 10, 16, 12, 14])
-    hdr(ws, 1, ["Customer", "City", "Invoices", "Sales", "Share", "Last order"])
+# ===== Weekly
+ws = wb.create_sheet("Weekly"); widths(ws, [10, 16, 18, 18, 18])
+hdr(ws, 1, ["Week", "Week starting", "Mon-Wed route", "Thu-Fri route", "Both routes"])
+r = 2
+for i, w in enumerate(full_weeks):
+    a, b = wk_sum(MW, w), wk_sum(TF, w)
+    line(ws, r, [f"Week {i + 1}", fmt(w), a, b, a + b], band=i % 2 == 0, money_cols=(3, 4, 5)); r += 1
+line(ws, r, ["Total", "", sum(wk_sum(MW, w) for w in full_weeks), sum(wk_sum(TF, w) for w in full_weeks), sum(wk_sum(MW, w) + wk_sum(TF, w) for w in full_weeks)], bold=True, money_cols=(3, 4, 5)); r += 1
+line(ws, r, ["Average", "", stats[MW]["avg"], stats[TF]["avg"], both_avg], bold=True, money_cols=(3, 4, 5))
+for j in range(1, 6): ws.cell(r, j).fill = fill(GOLD)
+r += 2
+part = [w for w in weeks_all if w not in full_weeks]
+ws.cell(r, 1, "Part weeks, not in the average:").font = F(9, True, "666666"); r += 1
+for w in part:
+    lab = f"Week of {fmt(w)} (the year started on {fmt(FY0)})" if w < FY0 else f"Week of {fmt(w)} (week not finished)"
+    line(ws, r, [lab, "", wk_sum(MW, w), wk_sum(TF, w), wk_sum(MW, w) + wk_sum(TF, w)], money_cols=(3, 4, 5), size=9)
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2); r += 1
+ws.freeze_panes = "A2"
+
+def weeklabel(w): return f"Week {WEEKNO[w]}" if w in WEEKNO else "Part week"
+# ===== Customers and invoices, one sheet each per route
+for rt, short in ROUTES:
+    rr = by[rt]; tot = sum(x["amt"] for x in rr)
+    ws = wb.create_sheet(f"Customers {short}"); widths(ws, [46, 18, 10, 16, 10])
+    hdr(ws, 1, ["Customer", "Town", "Invoices", "Sales", "Share"])
     cu = collections.defaultdict(list)
-    for r in rr: cu[r["cust_id"]].append(r)
-    tot = sum(r["amt"] for r in rr)
+    for x in rr: cu[x["cust_id"]].append(x)
     for i, (cid, hs) in enumerate(sorted(cu.items(), key=lambda kv: -sum(h["amt"] for h in kv[1]))):
         v = sum(h["amt"] for h in hs)
-        line(ws, i + 2, [hs[0]["cust"], (P.get(cid) or {}).get("city") or "", sum(1 for h in hs if h["type"] == "Invoice"), v, v / tot if tot else 0, max((h["order_date"] or h["inv_date"]) for h in hs).isoformat()], band=i % 2 == 0)
-        money(ws.cell(i + 2, 4)); ws.cell(i + 2, 5).number_format = "0.0%"
-    n = len(cu) + 2; line(ws, n, ["Total", "", len(inv), tot, 1, ""], bold=True); money(ws.cell(n, 4)); ws.cell(n, 5).number_format = "0%"
-    ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:F{n-1}"
+        line(ws, i + 2, [hs[0]["cust"], (P.get(cid) or {}).get("city") or "", sum(1 for h in hs if h["type"] == "Invoice"), v, v / tot if tot else 0], band=i % 2 == 0, money_cols=(4,))
+        ws.cell(i + 2, 5).number_format = "0%"
+    n = len(cu) + 2; line(ws, n, ["Total", "", sum(1 for h in rr if h["type"] == "Invoice"), tot, 1], bold=True, money_cols=(4,)); ws.cell(n, 5).number_format = "0%"
+    ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:E{n-1}"
 
-    ws = wb.create_sheet("Invoices"); widths(ws, [14, 14, 18, 12, 44, 14, 16, 46])
-    hdr(ws, 1, ["Order date", "Invoice date", "Invoice", "Type", "Customer", "Sales", "Week starting", "Why on this route"])
-    for i, r in enumerate(sorted(rr, key=lambda r: (r["order_date"] or r["inv_date"], r["inv"]))):
-        line(ws, i + 2, [r["order_date"].isoformat() if r["order_date"] else "", r["inv_date"].isoformat(), r["inv"], r["type"], r["cust"], r["amt"], r["week"].isoformat(), r["basis"]], band=i % 2 == 0)
-        money(ws.cell(i + 2, 6))
-    n = len(rr) + 2; line(ws, n, ["Total", "", "", "", "", tot, "", ""], bold=True); money(ws.cell(n, 6))
-    ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:H{n-1}"
+    ws = wb.create_sheet(f"Invoices {short}"); widths(ws, [12, 13, 18, 14, 44, 14, 28])
+    hdr(ws, 1, ["Week", "Order date", "Invoice", "Type", "Customer", "Sales", "How it was ordered"])
+    srt = sorted(rr, key=lambda x: (x["order_date"] or x["inv_date"], x["inv"]))
+    for i, x in enumerate(srt):
+        how = ("Website, " if x["online"] else "Rep, ") + (f"{x['order_date']:%A}" if x["order_date"] else "no order on invoice")
+        if x["basis"].startswith(("Weekend", "No sales order")): how += " (customer's usual route)"
+        line(ws, i + 2, [weeklabel(x["week"]), (x["order_date"] or x["inv_date"]).isoformat(), x["inv"], x["type"], x["cust"], x["amt"], how], band=i % 2 == 0, money_cols=(6,))
+    n = len(srt) + 2; line(ws, n, ["Total", "", "", "", "", tot, ""], bold=True, money_cols=(6,))
+    ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:G{n-1}"
 
-    ws = wb.create_sheet("Verification Notes"); widths(ws, [32, 44, 46, 40])
-    ws.merge_cells("A1:D1"); ws["A1"] = "Verification: how these numbers were checked"; ws["A1"].font = F(14, True, NAVY)
-    hdr(ws, 3, ["Check", "Method", "Result", "Conclusion"])
-    other = [r for r in rows if r["route"] != route]
-    by_basis = collections.Counter(r["basis"].split(",")[0] for r in rr)
-    checks = [
-        ("Do both routes add up to Naitik's total?", "Added Mon-Wed, Thu-Fri and anything not on a route, and compared with all of Naitik's invoices less credit notes for the year.",
-         f"Mon-Wed ${RT[MW]:,.2f} + Thu-Fri ${RT[TF]:,.2f} + not on a route ${RT[NR]:,.2f} = ${total:,.2f}.",
-         "Every dollar is counted once, on one route."),
-        ("Why is the route not taken from the customer's tag?", "Checked the route tags on Naitik's customers in Odoo.",
-         "Both trips carry the same 'Up North' tag, so the tag cannot tell them apart.", "The order day is used instead."),
-        ("How were the invoices on this route placed?", "Counted the reason each invoice sits on this route.",
-         "; ".join(f"{k}: {v}" for k, v in by_basis.most_common()), "Most follow the day the order was taken."),
-        ("Is anything left out?", "Listed every Naitik invoice or credit note that is on neither route.",
-         ("; ".join(f"{r['inv']} ({r['type'].lower()}, Odoo untaxed {next(m['amount_untaxed_signed'] for m in D['moves'] if m['name'] == r['inv'])}, product sales {r['amt']:.2f})" for r in rows if r['route'] == NR) or "None"),
-         "Lines with no product on them are not sales on the finance basis, so they add nothing to either route."),
-        ("Is the weekly average fair?", "Average uses full Monday-Sunday weeks only.",
-         f"{len(full_weeks)} full weeks. The part week of 1 April and the current week are shown but not averaged.", "No part week drags the average down."),
-    ]
-    for i, ck in enumerate(checks):
-        for j, v in enumerate(ck, 1):
-            c = ws.cell(4 + i, j, v); c.font = F(10, False, "000000"); c.alignment = Alignment(wrap_text=True, vertical="top")
-        ws.row_dimensions[4 + i].height = 15 * max(2, max(-(-len(str(v)) // 44) for v in ck))
-    fn = f"Naitik_{short}_Route_Average_Weekly_Sales_FY26.xlsx"
-    wb.save(os.path.join(OUT, fn))
-    print(f"{route}: avg/week ${avg:,.2f} over {len(full_weeks)} weeks; route total ${sum(r['amt'] for r in rr):,.2f}; -> {fn}")
-print("Naitik total", f"{total:,.2f}", "| not on a route", f"{sum(r['amt'] for r in rows if r['route'] == NR):,.2f}", "| basis counts", collections.Counter(r['basis'].split(',')[0] for r in rows))
+os.makedirs(OUT, exist_ok=True)
+fn = "Naitik_Route_Average_Weekly_Sales_FY26.xlsx"
+wb.save(os.path.join(OUT, fn))
+print(f"Mon-Wed avg ${stats[MW]['avg']:,.2f} | Thu-Fri avg ${stats[TF]['avg']:,.2f} | both ${both_avg:,.2f} | weeks {len(full_weeks)} | totals {stats[MW]['total']:,.2f} + {stats[TF]['total']:,.2f} = {total:,.2f} -> {fn}")
