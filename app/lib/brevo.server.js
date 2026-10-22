@@ -136,7 +136,7 @@ Dutch Rusk Team`;
 // the full onboarding template (no hero banner or feature grid) since this
 // is a transactional order alert, not a campaign.
 export async function sendSalesRepOrderNotification({
-  repEmail, repName, orderName, customerName, companyName, lineItems, subtotal, currency, poNumber, note,
+  repEmail, repName, orderName, customerName, companyName, customerEmail, customerPhone, locationName, deliveryAddress, lineItems, subtotal, currency, poNumber, note,
 }) {
   const templateId = process.env.BREVO_TEMPLATE_SALES_REP_ORDER;
   const to = { email: repEmail, name: repName || repEmail };
@@ -145,6 +145,10 @@ export async function sendSalesRepOrderNotification({
     order_name: orderName,
     customer_name: customerName,
     company_name: companyName,
+    customer_email: customerEmail || "",
+    customer_phone: customerPhone || "",
+    location_name: locationName || "",
+    delivery_address: deliveryAddress || "",
     line_items: lineItems, // [{ title, sku, quantity, price, originalPrice, imageUrl }]
     subtotal,
     currency,
@@ -159,6 +163,10 @@ export async function sendSalesRepOrderNotification({
   const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const poText = poNumber?.trim() || "Not given";
   const noteText = note?.trim() || "None";
+  const emailText = customerEmail?.trim() || "Not on file";
+  const phoneText = customerPhone?.trim() || "Not on file";
+  const storeText = locationName?.trim() || companyName;
+  const addressText = deliveryAddress?.trim() || "Not given";
 
   const fmt = (n) => `${currency ?? ""} ${Number(n ?? 0).toFixed(2)}`.trim();
   // In the HTML, NZD shows as "$226.80" like the order screen. "NZD 226.80"
@@ -178,6 +186,10 @@ Good news, ${companyName} just placed an order.
 
 Order: ${orderName}
 Placed by: ${customerName}
+Email: ${emailText}
+Phone: ${phoneText}
+Store: ${storeText}
+Deliver to: ${addressText}
 PO number: ${poText}
 Notes: ${noteText}
 
@@ -259,7 +271,7 @@ Dutch Rusk`;
                       Good news, <strong style="color:#181344;">${companyName}</strong> just placed an order.
                     </p>
                     <p style="margin:0; font-size:14px; color:#666670;">
-                      Order <strong style="color:#181344;">${orderName}</strong>, placed by ${customerName}
+                      Order <strong style="color:#181344;">${orderName}</strong>, placed by ${esc(customerName)}
                     </p>
                   </td>
                 </tr>
@@ -268,8 +280,28 @@ Dutch Rusk`;
                   <td class="mobile-pad" style="padding:16px 40px 0 40px;">
                     <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#F4F3F8; border-radius:8px;">
                       <tr>
-                        <td style="padding:14px 16px 6px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">PO number</td>
-                        <td style="padding:14px 16px 6px 0; font-size:14px; color:${poNumber?.trim() ? "#181344; font-weight:bold" : "#8c8c8c"};" valign="top">${esc(poText)}</td>
+                        <td style="padding:14px 16px 6px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">Ordered by</td>
+                        <td style="padding:14px 16px 6px 0; font-size:14px; color:#181344; font-weight:bold;" valign="top">${esc(customerName)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:6px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">Email</td>
+                        <td style="padding:6px 16px 6px 0; font-size:14px; color:#333333;" valign="top">${customerEmail?.trim() ? `<a href="mailto:${esc(customerEmail.trim())}" style="color:#181344;">${esc(customerEmail.trim())}</a>` : `<span style="color:#8c8c8c;">${emailText}</span>`}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:6px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">Phone</td>
+                        <td style="padding:6px 16px 6px 0; font-size:14px; color:${customerPhone?.trim() ? "#333333" : "#8c8c8c"};" valign="top">${esc(phoneText)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:6px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">Store</td>
+                        <td style="padding:6px 16px 6px 0; font-size:14px; color:#333333;" valign="top">${esc(storeText)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:6px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">Deliver to</td>
+                        <td style="padding:6px 16px 6px 0; font-size:14px; line-height:1.5; color:${deliveryAddress?.trim() ? "#333333" : "#8c8c8c"};" valign="top">${esc(addressText)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:6px 16px 6px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">PO number</td>
+                        <td style="padding:6px 16px 6px 0; font-size:14px; color:${poNumber?.trim() ? "#181344; font-weight:bold" : "#8c8c8c"};" valign="top">${esc(poText)}</td>
                       </tr>
                       <tr>
                         <td style="padding:6px 16px 14px 16px; font-size:12px; color:#666670; text-transform:uppercase; letter-spacing:0.5px;" width="110" valign="top">Notes</td>

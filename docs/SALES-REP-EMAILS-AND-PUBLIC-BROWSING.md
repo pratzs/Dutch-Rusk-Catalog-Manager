@@ -25,6 +25,13 @@ The email shows the PO number (`po_number`) and order note (`note`), always,
 as "Not given" or "None" when empty. Prices come from
 `app/lib/rep-line-items.server.js`.
 
+Since 22 Oct 2026 it also shows who ordered: name, email (a mailto link), phone,
+store (company location name) and delivery address, each "Not on file" or "Not given"
+when empty. Built by `orderContactDetails()` in `webhooks.orders.create.jsx` and passed
+to `sendSalesRepOrderNotification`; the Metromart alert uses the same email. Leith's
+request: he was replying to the wrong person. Where a store shares one login, the email
+is that shared address.
+
 ### Rep list (25 Sept 2026)
 
 | Code | Rep | Email |

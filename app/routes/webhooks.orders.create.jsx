@@ -48,6 +48,17 @@ async function graphqlJson(admin, query, variables) {
   return res.json();
 }
 
+// Who placed the order and where it goes, for the rep and Metromart emails.
+// Takes the `order` node from their GraphQL queries.
+function orderContactDetails(info) {
+  return {
+    customerEmail: info?.customer?.email || "",
+    customerPhone: info?.customer?.phone || "",
+    locationName: info?.purchasingEntity?.location?.name || "",
+    deliveryAddress: (info?.shippingAddress?.formatted ?? []).filter(Boolean).join(", "),
+  };
+}
+
 function hasErrors(json, dataPath) {
   if (json.errors?.length) return true;
   const userErrors = dataPath.split(".").reduce((acc, key) => acc?.[key], json.data)?.userErrors;
@@ -528,11 +539,14 @@ export const action = async ({ request }) => {
             firstName
             lastName
             email
+            phone
             salesRepCode: metafield(namespace: "custom", key: "sales_reps") { value }
           }
+          shippingAddress { formatted(withName: false, withCompany: false) }
           purchasingEntity {
             ... on PurchasingCompany {
               company { name }
+              location { name }
             }
           }
         }
@@ -555,6 +569,7 @@ export const action = async ({ request }) => {
         const customer = repInfo.customer;
         const customerName = [customer?.firstName, customer?.lastName].filter(Boolean).join(" ") || customer?.email || "Customer";
         const companyName = repInfo?.purchasingEntity?.company?.name || customerName;
+        const orderContact = orderContactDetails(repInfo);
 
         // Fetch each variant's image and retail price (for the strikethrough
         // savings display, same idea as the B2B discount-notes block above
@@ -596,6 +611,7 @@ export const action = async ({ request }) => {
           orderName,
           customerName,
           companyName,
+          ...orderContact,
           lineItems: (await import("../lib/rep-line-items.server")).repEmailLineItems(lineItems, detailsByVariantId),
           subtotal: order.subtotal_price ?? order.total_price,
           currency: order.currency,
@@ -645,8 +661,9 @@ export const action = async ({ request }) => {
         `query MetromartOrder($id: ID!) {
           order(id: $id) {
             customAttributes { key value }
-            customer { firstName lastName email }
-            purchasingEntity { ... on PurchasingCompany { company { name } } }
+            customer { firstName lastName email phone }
+            shippingAddress { formatted(withName: false, withCompany: false) }
+            purchasingEntity { ... on PurchasingCompany { company { name } location { name } } }
           }
         }`,
         { id: orderGid }
@@ -665,6 +682,7 @@ export const action = async ({ request }) => {
             orderName,
             customerName,
             companyName,
+            ...orderContactDetails(info),
             lineItems: (await import("../lib/rep-line-items.server")).repEmailLineItems(lineItems, {}),
             subtotal: order.subtotal_price ?? order.total_price,
             currency: order.currency,
