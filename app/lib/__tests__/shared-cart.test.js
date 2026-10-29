@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../admin-token.server.js", () => ({ getAdminToken: vi.fn() }));
 
-const { sanitizeLines, lineKey, mergeLines, shouldClearAfterOrder, isStorefrontOrder, cartKey } = await import("../shared-cart.server.js");
+const { sanitizeLines, lineKey, mergeLines, shouldClearAfterOrder, isStorefrontOrder, cartKey, orderLocationId } = await import("../shared-cart.server.js");
 
 describe("sanitizeLines", () => {
   it("keeps well formed lines", () => {
@@ -83,6 +83,19 @@ describe("isStorefrontOrder", () => {
     expect(isStorefrontOrder({ source_name: "pos" })).toBe(false);
     expect(isStorefrontOrder({})).toBe(false);
     expect(isStorefrontOrder(null)).toBe(false);
+  });
+});
+
+describe("orderLocationId", () => {
+  it("reads the REST webhook shape", () => {
+    expect(orderLocationId({ company: { id: 7241924921, location_id: 18290737465 } })).toBe(18290737465);
+  });
+  it("still reads the GraphQL shape", () => {
+    expect(orderLocationId({ purchasing_entity: { company_location: { id: "gid://shopify/CompanyLocation/1" } } })).toBe("gid://shopify/CompanyLocation/1");
+  });
+  it("is null for a non-company order", () => {
+    expect(orderLocationId({})).toBe(null);
+    expect(orderLocationId(null)).toBe(null);
   });
 });
 

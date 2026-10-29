@@ -719,8 +719,8 @@ export const action = async ({ request }) => {
   // used it. Last, in its own try/catch, so it can never affect anything
   // above.
   try {
-    const locationId = order?.purchasing_entity?.company_location?.id ?? order?.company_location_id ?? null;
-    const { clearAfterOrder, isStorefrontOrder, cartKey } = await import("../lib/shared-cart.server");
+    const { clearAfterOrder, isStorefrontOrder, cartKey, orderLocationId } = await import("../lib/shared-cart.server");
+    const locationId = orderLocationId(order);
     if (locationId && order?.customer?.id && isStorefrontOrder(order)) {
       const locationGid = String(locationId).startsWith("gid://") ? String(locationId) : `gid://shopify/CompanyLocation/${locationId}`;
       const key = cartKey(locationGid, order.customer.id);

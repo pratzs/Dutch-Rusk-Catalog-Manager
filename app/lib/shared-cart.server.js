@@ -105,6 +105,15 @@ export function isStorefrontOrder(order) {
   return order?.source_name === "web";
 }
 
+/**
+ * The company location an order was placed for. The orders/create webhook
+ * sends the REST shape (`company.location_id`); `purchasing_entity` is the
+ * GraphQL shape and is absent there, which left every cart un-cleared.
+ */
+export function orderLocationId(order) {
+  return order?.company?.location_id ?? order?.purchasing_entity?.company_location?.id ?? order?.company_location_id ?? null;
+}
+
 /** Which shared cart: one per customer login per company location. */
 export function cartKey(locationGid, customerId) {
   const id = String(customerId ?? "").replace("gid://shopify/Customer/", "");
