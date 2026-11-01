@@ -89,6 +89,12 @@ The stream token is signed with the app secret, lasts 12 hours, and names one
 shop and one cart. It is only issued through the app proxy, where Shopify has
 already verified the customer.
 
+The stream is opened from the storefront's own address, so the app only answers
+browsers on `https://dutchrusk.co.nz` (the primary domain since 2 Nov 2026),
+`https://www.dutchrusk.co.nz` and `https://b2b.dutchrusk.co.nz`. A new store
+address has to be added to `ALLOWED_ORIGINS` in `app/routes/shared-cart-stream.jsx`,
+or carts there fall back to the 4-second check.
+
 ### Emptying after an order
 
 `orders/create` empties the customer's shared cart for that store only when:

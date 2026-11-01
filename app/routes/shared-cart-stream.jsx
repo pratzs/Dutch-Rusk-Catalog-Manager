@@ -9,13 +9,25 @@
 
 import { readStreamToken, subscribe, channelKey } from "../lib/shared-cart-events.server.js";
 
-const ALLOWED_ORIGIN = "https://b2b.dutchrusk.co.nz";
+// The storefront opens this stream from whichever address the shopper is on.
+// dutchrusk.co.nz became the primary domain on 2 Nov 2026; b2b and www forward
+// to it, but a page already open on b2b keeps its origin until reloaded.
+const ALLOWED_ORIGINS = new Set([
+  "https://dutchrusk.co.nz",
+  "https://www.dutchrusk.co.nz",
+  "https://b2b.dutchrusk.co.nz",
+]);
+const allowOrigin = (request) => {
+  const origin = request.headers.get("origin");
+  return ALLOWED_ORIGINS.has(origin) ? origin : "https://dutchrusk.co.nz";
+};
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
+  const ALLOWED_ORIGIN = allowOrigin(request);
   const who = readStreamToken(url.searchParams.get("t"));
   if (!who) {
-    return new Response("invalid token", { status: 401, headers: { "access-control-allow-origin": ALLOWED_ORIGIN } });
+    return new Response("invalid token", { status: 401, headers: { "access-control-allow-origin": ALLOWED_ORIGIN, vary: "origin" } });
   }
 
   const encoder = new TextEncoder();
@@ -49,6 +61,7 @@ export const loader = async ({ request }) => {
       connection: "keep-alive",
       "x-accel-buffering": "no",
       "access-control-allow-origin": ALLOWED_ORIGIN,
+      vary: "origin",
     },
   });
 };
