@@ -16,19 +16,35 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 const INK = rgb(0.05, 0.1, 0.35);
 const ASSET_DIR = path.join(process.cwd(), "app", "assets", "trade-forms");
 
+// One entry per storefront. `origins` is the list of sites allowed to post.
 export const BRANDS = {
   "worthy-products": {
     label: "Worthy Products",
     legalName: "Worthy Products Limited",
-    teamEmail: "admin@worthyproducts.nz",
+    teamEmail: "accounts@worthyproducts.nz",
     senderEmail: process.env.TRADE_FORM_SENDER_WP || "no-reply@worthy.nz",
     senderName: "Worthy Products",
     origins: ["https://worthyproducts.nz", "https://www.worthyproducts.nz", "https://vjtrading.myshopify.com"],
     creditPdf: "wp-credit.pdf",
     ddPdf: "wp-dd.pdf",
     phone: "+64 9 580 4110",
+    accent: "#2156C3",
+  },
+  "dutch-rusk": {
+    label: "Dutch Rusk",
+    legalName: "Worthy Products South Ltd t/a Dutch Rusk",
+    teamEmail: "admin@dutchrusk.co.nz",
+    senderEmail: process.env.TRADE_FORM_SENDER_DR || "no-reply@dutchrusk.co.nz",
+    senderName: "Dutch Rusk",
+    origins: ["https://b2b.dutchrusk.co.nz", "https://dutchrusk.co.nz", "https://www.dutchrusk.co.nz", "https://dutchrusk.myshopify.com"],
+    creditPdf: "dr-credit.pdf",
+    ddPdf: "dr-dd.pdf",
+    phone: "03 547 7809",
+    accent: "#181344",
   },
 };
+
+export const DR_ENTITY_TYPES = ["Company", "Partnership", "Sole Trader"];
 
 export const COMPANY_TYPES = ["Sole Trader", "Individual", "Partnership", "Company"];
 
@@ -45,8 +61,78 @@ function signature(v) {
   return Buffer.from(m[1], "base64");
 }
 
+// The direct debit authority is the same on every brand's form.
+function validateDirectDebit(input, d, e) {
+  d.ddAccountName = str(input?.ddAccountName, 80);
+  if (!d.ddAccountName) e.ddAccountName = "Account name is required";
+  d.ddBankName = str(input?.ddBankName, 60);
+  if (!d.ddBankName) e.ddBankName = "Name of your bank is required";
+  d.ddBank = digits(input?.ddBank, 2);
+  d.ddBranch = digits(input?.ddBranch, 4);
+  d.ddAccount = digits(input?.ddAccount, 7);
+  d.ddSuffix = digits(input?.ddSuffix, 3);
+  if (d.ddBank.length !== 2) e.ddBank = "2 digits";
+  if (d.ddBranch.length !== 4) e.ddBranch = "4 digits";
+  if (d.ddAccount.length !== 7) e.ddAccount = "7 digits";
+  if (d.ddSuffix.length < 2) e.ddSuffix = "2 or 3 digits";
+  if (input?.ddAuthorise !== true) e.ddAuthorise = "Please confirm the direct debit authority";
+  d.ddSignature = signature(input?.ddSignature);
+  if (!d.ddSignature) e.ddSignature = "Please sign the direct debit authority";
+  d.ddSignature2 = signature(input?.ddSignature2);
+}
+
+// Dutch Rusk's Customer Credit Application Form asks different questions
+// from the Worthy Products one, so it has its own rules.
+function validateDutchRusk(input) {
+  const e = {};
+  const d = {};
+  const req = (key, label, max) => {
+    d[key] = str(input?.[key], max);
+    if (!d[key]) e[key] = `${label} is required`;
+  };
+  const opt = (key, max) => { d[key] = str(input?.[key], max); };
+
+  req("tradingName", "Trading name", 100);
+  d.entityType = DR_ENTITY_TYPES.includes(input?.entityType) ? input.entityType : "";
+  if (!d.entityType) e.entityType = "Please choose a business entity";
+  req("legalName", "Legal name", 100);
+  opt("dateIncorporated", 20);
+  opt("registrationNo", 30);
+  opt("dateCommenced", 20);
+  opt("startTradingDate", 20);
+  req("deliveryAddress", "Delivery address", 200);
+  opt("postalAddress", 200);
+  req("contactPerson", "Contact person", 60);
+  opt("phone", 30);
+  req("mobile", "Mobile number", 30);
+  req("email", "Email address", 120);
+  if (d.email && !isEmail(d.email)) e.email = "Please enter a valid email address";
+  req("estimatedPurchases", "Estimated monthly purchases", 30);
+
+  d.references = [0, 1].map((i) => ({
+    name: str(input?.references?.[i]?.name, 60),
+    phone: str(input?.references?.[i]?.phone, 30),
+    monthly: str(input?.references?.[i]?.monthly, 30),
+  }));
+  d.directors = [0, 1, 2].map((i) => ({ name: str(input?.directors?.[i]?.name, 70), address: str(input?.directors?.[i]?.address, 120) }));
+  if (!d.directors[0].name) e.director1Name = "At least one director, partner or sole trader is required";
+  if (d.directors[0].name && !d.directors[0].address) e.director1Address = "Address is required";
+
+  // One signature covers the application and the personal guarantee, as on the paper form.
+  req("signName", "Your full name", 100);
+  req("signTitle", "Your title", 60);
+  if (input?.acceptTerms !== true) e.acceptTerms = "Please accept the guarantee and conditions";
+  d.acceptSignature = signature(input?.acceptSignature);
+  if (!d.acceptSignature) e.acceptSignature = "Please sign";
+
+  validateDirectDebit(input, d, e);
+  d.companyName = d.legalName || d.tradingName; // used in email subjects and file names
+  return { ok: Object.keys(e).length === 0, errors: e, data: d };
+}
+
 // Returns { ok, errors, data }. `errors` maps field name -> message for the form.
-export function validateApplication(input) {
+export function validateApplication(input, brandKey = "worthy-products") {
+  if (brandKey === "dutch-rusk") return validateDutchRusk(input);
   const e = {};
   const d = {};
   const req = (key, label, max) => {
@@ -109,21 +195,7 @@ export function validateApplication(input) {
   }
   d.hasGuarantee = Boolean(d.guarantorName && d.guarantorSignature);
 
-  // Direct debit authority.
-  req("ddAccountName", "Account name", 80);
-  req("ddBankName", "Name of your bank", 60);
-  d.ddBank = digits(input?.ddBank, 2);
-  d.ddBranch = digits(input?.ddBranch, 4);
-  d.ddAccount = digits(input?.ddAccount, 7);
-  d.ddSuffix = digits(input?.ddSuffix, 3);
-  if (d.ddBank.length !== 2) e.ddBank = "2 digits";
-  if (d.ddBranch.length !== 4) e.ddBranch = "4 digits";
-  if (d.ddAccount.length !== 7) e.ddAccount = "7 digits";
-  if (d.ddSuffix.length < 2) e.ddSuffix = "2 or 3 digits";
-  if (input?.ddAuthorise !== true) e.ddAuthorise = "Please confirm the direct debit authority";
-  d.ddSignature = signature(input?.ddSignature);
-  if (!d.ddSignature) e.ddSignature = "Please sign the direct debit authority";
-  d.ddSignature2 = signature(input?.ddSignature2);
+  validateDirectDebit(input, d, e);
 
   return { ok: Object.keys(e).length === 0, errors: e, data: d };
 }
@@ -254,16 +326,18 @@ async function fillWorthyCredit(d, date) {
   return Buffer.from(await pdf.save());
 }
 
-// ---------- Worthy Products: Direct Debit Authority (1 page) ----------
+// ---------- Direct Debit Authority (1 page, same layout on both brands) ----------
+// `top` shifts the account boxes and `sig` the signature row: the Dutch Rusk
+// form is the same bank form with the blocks sitting a little differently.
 
-async function fillWorthyDd(d, date) {
-  const pdf = await loadTemplate(BRANDS["worthy-products"].ddPdf);
+async function fillDd(brandKey, d, date, { top = 0, sig = 0 } = {}) {
+  const pdf = await loadTemplate(BRANDS[brandKey].ddPdf);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const page = pdf.getPages()[0];
   const a = makePen(page, font);
 
-  a.line(d.ddAccountName, 76, 371, 124.5, 10.5);
-  a.line(d.ddBankName, 76, 371, 158.5, 10.5);
+  a.line(d.ddAccountName, 76, 371, 124.5 + top, 10.5);
+  a.line(d.ddBankName, 76, 371, 158.5 + top, 10.5);
 
   // One digit per box. x positions are the box edges measured from the form.
   const edges = {
@@ -272,38 +346,144 @@ async function fillWorthyDd(d, date) {
     account: [206.4, 223.0, 239.4, 256.0, 272.6, 289.1, 305.7, 322.2],
     suffix: [339.0, 355.9, 372.8],
   };
-  const boxed = (value, xs) => [...value].forEach((ch, i) => a.centred(ch, xs[i], xs[i + 1], 190.5, 11));
+  const row = 190.5 + top;
+  const boxed = (value, xs) => [...value].forEach((ch, i) => a.centred(ch, xs[i], xs[i + 1], row, 11));
   boxed(d.ddBank, edges.bank);
   boxed(d.ddBranch, edges.branch);
   boxed(d.ddAccount, edges.account);
   // The form has two suffix boxes. A three-digit suffix that starts with 0
   // (e.g. 000) prints as its last two digits; any other three digits are
   // printed across both boxes so nothing is lost.
-  if (d.ddSuffix.length === 3 && d.ddSuffix[0] !== "0") a.centred(d.ddSuffix, edges.suffix[0], edges.suffix[2], 190.5, 11);
+  if (d.ddSuffix.length === 3 && d.ddSuffix[0] !== "0") a.centred(d.ddSuffix, edges.suffix[0], edges.suffix[2], row, 11);
   else boxed(d.ddSuffix.slice(-2), edges.suffix);
 
-  a.image(await pdf.embedPng(d.ddSignature), 78, 368, 234, 419.5);
-  if (d.ddSignature2) a.image(await pdf.embedPng(d.ddSignature2), 259, 368, 409, 419.5);
+  a.image(await pdf.embedPng(d.ddSignature), 78, 368 + sig, 234, 419.5 + sig);
+  if (d.ddSignature2) a.image(await pdf.embedPng(d.ddSignature2), 259, 368 + sig, 409, 419.5 + sig);
 
-  a.centred(date.day, 434, 462, 417.5, 10);
-  a.centred(date.month, 467, 497, 417.5, 10);
-  a.centred(date.year, 500, 528, 417.5, 10);
+  a.centred(date.day, 434, 462, 417.5 + sig, 10);
+  a.centred(date.month, 467, 497, 417.5 + sig, 10);
+  a.centred(date.year, 500, 528, 417.5 + sig, 10);
 
   pdf.setTitle(`Direct Debit Authority - ${printable(d.ddAccountName)}`);
   return Buffer.from(await pdf.save());
 }
 
+// ---------- Dutch Rusk: Customer Credit Application Form (1 page) ----------
+
+async function fillDutchRuskCredit(d, date) {
+  const pdf = await loadTemplate(BRANDS["dutch-rusk"].creditPdf);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const page = pdf.getPages()[0];
+  const a = makePen(page, font);
+
+  // Splits a long address over the form's three short lines.
+  const wrap = (text, x0, x1, bases, size = 9) => {
+    const words = printable(text).split(" ").filter(Boolean);
+    const room = x1 - x0 - 4;
+    const lines = [];
+    let cur = "";
+    for (const w of words) {
+      const next = cur ? `${cur} ${w}` : w;
+      if (cur && font.widthOfTextAtSize(next, size) > room && lines.length < bases.length - 1) { lines.push(cur); cur = w; }
+      else cur = next;
+    }
+    if (cur) lines.push(cur);
+    lines.forEach((l, i) => a.line(l, x0, x1, bases[i], size));
+  };
+
+  a.line(d.tradingName, 152, 461, 171, 10);
+  // The form's only tick space is beside COMPANY; other entity types are written next to the heading.
+  if (d.entityType === "Company") a.line("X", 70, 84, 193.4, 9);
+  else a.line(d.entityType, 247, 400, 183, 9);
+  a.line(d.legalName, 208, 453, 194, 9.5);
+  a.line(d.dateIncorporated, 194, 285, 216, 9);
+  a.line(d.registrationNo, 364, 459, 216, 9);
+  a.line(d.dateCommenced, 215, 365, 238, 9);
+  a.line(d.startTradingDate, 403, 510, 260, 9);
+
+  wrap(d.deliveryAddress, 72, 276, [308, 332, 356]);
+  wrap(d.postalAddress, 326, 510, [308, 332, 356]);
+
+  a.line(d.contactPerson, 158, 279, 379, 9.5);
+  a.line(d.phone, 180, 303, 409, 9.5);
+  a.line(d.mobile, 397, 515, 409, 9.5);
+  a.line(d.email, 150, 513, 436, 9.5);
+
+  [500, 512].forEach((base, i) => {
+    a.line(d.references[i].name, 72, 221, base, 8.5);
+    a.line(d.references[i].phone, 276, 359, base, 8.5);
+    a.line(d.references[i].monthly.replace(/^\$\s*/, ""), 405, 510, base, 8.5);
+  });
+  a.line(d.estimatedPurchases.replace(/^\$\s*/, ""), 405, 510, 524, 9);
+
+  [586, 598, 610].forEach((base, i) => {
+    a.line(d.directors[i].name, 72, 246, base, 8.5);
+    a.line(d.directors[i].address, 288, 497, base, 8.5);
+  });
+
+  a.line(d.signName, 108, 281, 643, 8.5); // "I, ____ personally guarantee to you"
+  a.image(await pdf.embedPng(d.acceptSignature), 264, 714, 397, 738);
+  a.line(date.text, 431, 523, 737, 9.5);
+  a.line(d.signName, 191, 465, 761, 9.5);
+  a.line(d.signTitle, 324, 524, 786, 9.5);
+
+  pdf.setTitle(`Customer Credit Application - ${printable(d.companyName)}`);
+  return Buffer.from(await pdf.save());
+}
+
 // Returns the two filled PDFs for a validated application.
 export async function buildApplicationPdfs(brandKey, data, now = new Date()) {
-  if (brandKey !== "worthy-products") throw new Error(`No PDF forms set up for ${brandKey}`);
   const date = nzDate(now);
-  const [credit, dd] = await Promise.all([fillWorthyCredit(data, date), fillWorthyDd(data, date)]);
+  let credit, dd, creditName;
+  if (brandKey === "worthy-products") {
+    [credit, dd] = await Promise.all([fillWorthyCredit(data, date), fillDd(brandKey, data, date)]);
+    creditName = "Account_Application";
+  } else if (brandKey === "dutch-rusk") {
+    [credit, dd] = await Promise.all([fillDutchRuskCredit(data, date), fillDd(brandKey, data, date, { top: 16.1, sig: -3.7 })]);
+    creditName = "Customer_Credit_Application";
+  } else {
+    throw new Error(`No PDF forms set up for ${brandKey}`);
+  }
   const safe = printable(data.companyName).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40) || "Applicant";
   return {
     date,
     files: [
-      { name: `Account_Application_${safe}.pdf`, content: credit },
+      { name: `${creditName}_${safe}.pdf`, content: credit },
       { name: `Direct_Debit_Authority_${safe}.pdf`, content: dd },
     ],
   };
+}
+
+// Rows for the summary table in the emails. Bank details are left out on purpose.
+export function summaryRows(brandKey, d) {
+  const join = (...parts) => parts.filter(Boolean).join(", ");
+  let rows;
+  if (brandKey === "dutch-rusk") {
+    rows = [
+      ["Trading name", d.tradingName], ["Business entity", d.entityType], ["Legal name", d.legalName],
+      ["Date of incorporation", d.dateIncorporated], ["Registration number", d.registrationNo],
+      ["Date commenced business", d.dateCommenced], ["Date to start trading with Dutch Rusk", d.startTradingDate],
+      ["Delivery address", d.deliveryAddress], ["Postal address", d.postalAddress],
+      ["Contact person", join(d.contactPerson, d.phone, d.mobile)], ["Email", d.email],
+      ["Estimated purchases per month", d.estimatedPurchases],
+      ...d.references.filter((x) => x.name).map((x, i) => [`Trade reference ${i + 1}`, join(x.name, x.phone, x.monthly)]),
+      ...d.directors.filter((x) => x.name).map((x, i) => [`Director / partner ${i + 1}`, join(x.name, x.address)]),
+      ["Signed and guaranteed by", join(d.signName, d.signTitle)],
+    ];
+  } else {
+    rows = [
+      ["Company name", d.companyName], ["Trading name", d.tradingName], ["Company type", d.companyType],
+      ["Company registration number", d.companyRegNumber], ["GST number", d.gstNumber],
+      ["Business address", d.businessAddress], ["Delivery address", d.deliveryAddress], ["Email", d.email],
+      ["Estimated purchases per month", d.estimatedPurchases],
+      ["Business contact", join(d.contactName, d.contactDesignation, d.contactEmail, d.contactLandline, d.contactMobile)],
+      ["Accounts contact", join(d.accountsName, d.accountsDesignation, d.accountsEmail, d.accountsLandline, d.accountsMobile)],
+      ...d.directors.filter((x) => x.name).map((x, i) => [`Director / partner ${i + 1}`, join(x.name, x.phone)]),
+      ...d.references.filter((x) => x.name).map((x, i) => [`Trade reference ${i + 1}`, join(x.name, x.phone, x.monthly)]),
+      ["Terms accepted by", join(d.acceptName, d.acceptDesignation)],
+      ["Guarantee", d.hasGuarantee ? join(d.guarantorName, d.guarantorPosition) : "Not provided"],
+    ];
+  }
+  rows.push(["Direct debit authority", "Signed. Bank details are in the attached PDF only."]);
+  return rows.filter(([, v]) => v);
 }
