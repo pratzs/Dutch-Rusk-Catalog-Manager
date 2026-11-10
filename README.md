@@ -261,6 +261,12 @@ The reliable signals are the customer timeline event (did Shopify send it) and
 whether the company has actually placed an order (do they use the portal). There
 is no Flow run history in the Admin API; the timeline event is the way around that.
 
+## Online wholesale account application form
+
+Both storefronts have an online application form that posts to `/api/trade-application` in this
+app. The app fills the team's own PDF forms and emails them. See
+[docs/TRADE-APPLICATION-FORM.md](docs/TRADE-APPLICATION-FORM.md).
+
 ## Resources
 
 React Router:
