@@ -97,7 +97,7 @@ function validateDutchRusk(input) {
   if (!d.entityType) e.entityType = "Please choose a business entity";
   req("legalName", "Legal name", 100);
   opt("dateIncorporated", 20);
-  opt("registrationNo", 30);
+  req("registrationNo", "Registration number", 30);
   opt("dateCommenced", 20);
   opt("startTradingDate", 20);
   req("deliveryAddress", "Delivery address", 200);
@@ -114,6 +114,11 @@ function validateDutchRusk(input) {
     phone: str(input?.references?.[i]?.phone, 30),
     monthly: str(input?.references?.[i]?.monthly, 30),
   }));
+  // At least two trade references, each with a name and contact number.
+  [0, 1].forEach((i) => {
+    if (!d.references[i].name) e[`ref${i + 1}Name`] = "Supplier name is required";
+    if (!d.references[i].phone) e[`ref${i + 1}Phone`] = "Contact number is required";
+  });
   d.directors = [0, 1, 2].map((i) => ({ name: str(input?.directors?.[i]?.name, 70), address: str(input?.directors?.[i]?.address, 120) }));
   if (!d.directors[0].name) e.director1Name = "At least one director, partner or sole trader is required";
   if (d.directors[0].name && !d.directors[0].address) e.director1Address = "Address is required";
@@ -143,7 +148,7 @@ export function validateApplication(input, brandKey = "worthy-products") {
 
   req("companyName", "Company name", 120);
   opt("tradingName", 80);
-  opt("companyRegNumber", 40);
+  req("companyRegNumber", "Company registration number", 40);
   opt("gstNumber", 40);
   d.companyType = COMPANY_TYPES.includes(input?.companyType) ? input.companyType : "";
   if (!d.companyType) e.companyType = "Please choose a company type";
@@ -176,6 +181,11 @@ export function validateApplication(input, brandKey = "worthy-products") {
     phone: str(input?.references?.[i]?.phone, 40),
     monthly: str(input?.references?.[i]?.monthly, 30),
   }));
+  // At least two trade references, each with a name and contact number.
+  [0, 1].forEach((i) => {
+    if (!d.references[i].name) e[`ref${i + 1}Name`] = "Supplier name is required";
+    if (!d.references[i].phone) e[`ref${i + 1}Phone`] = "Contact number is required";
+  });
 
   req("acceptName", "Your full name", 100);
   req("acceptDesignation", "Your designation", 50);
