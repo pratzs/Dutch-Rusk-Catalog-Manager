@@ -39,17 +39,45 @@ const EMPTY_DISCOUNT = {
 // them as final per-unit prices and must stay green.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Must be IDENTICAL to MAX_LINES_TO_TRANSFORM in b2b-price-transformer.
+// ── The shared budget for big carts (above WIDE_FROM lines) ──────────────────
 //
-// This Function no longer receives the line cost, so it cannot tell for itself
-// whether the transform raised a line. Both Functions instead read the same cart
-// and apply the same limit to the same line count. Above the limit the transform
-// raises nothing, so there is nothing to discount and emitting anything here
-// would take a second discount off an already-correct catalog price.
-// 108, was 110: volume pricing (tierSaving and the per-line flag check) costs about
-// 0.14M instructions on a 110-line cart, and the two lines give that margin back so
-// the worst-case headroom is what it was (docs/B2B-PRICING.md, 9 Oct 2026).
-const MAX_LINES_TO_TRANSFORM = 108;
+// THESE CONSTANTS AND THE WALK THAT USES THEM MUST BE IDENTICAL IN
+// b2b-price-transformer/src/run.js AND b2b-custom-prices/src/run.js.
+//
+// Until 16 Nov 2026 both Functions simply stood down above 108 lines. Night n Day
+// stores then started sending 119-126 line carts (#3041, #3283, #3285, #3331),
+// which came through at the right price but with no discount rows at all.
+//
+// A fixed line count was the wrong measure. What a big cart costs is mostly the
+// OUTPUT: about 0.046M instructions for every discount entry, against 0.027M for
+// one more line sharing an entry that already exists. Real carts repeat the same
+// saving on many lines (#3331: 126 lines, 51 different savings), so the discount
+// Function now puts every line with the same saving under ONE entry, and the
+// limit is a budget in thousands of instructions rather than a line count.
+//
+// Both Functions walk the cart in the same order and add up what the pair would
+// spend. A line is raised (and discounted) only while both totals stay inside
+// BUDGET. The first line that would not fit ends it: that line and every line
+// after it keep Shopify's native catalog price, which is correct, they just have
+// no discount row. So an enormous cart degrades to "most lines have rows"
+// rather than "none do", and neither Function can be killed for cost.
+//
+// The walk depends only on the line count and each line's catalog_savings
+// string, which both Functions receive, so they always agree on which lines are
+// in. Coefficients are measured with `shopify app function run`, rounded UP.
+// Re-measure before changing any of them (docs/B2B-PRICING.md).
+const WIDE_FROM = 65; // same number as MAX_LINES_FOR_DEALS
+const BUDGET = 10600; // thousands of instructions; the platform limit is 11,000
+const D_FIXED = 400; // discount Function: fixed cost
+const D_PER_LINE = 26; //   every cart line, covered or not (receive + loop)
+const D_PER_TARGET = 27; //   every covered line
+const D_PER_ENTRY = 46; //   every DIFFERENT saving among covered lines
+const D_TIER_RESERVE = 460; //   volume breaks can split up to 10 lines into their own entries
+const T_FIXED = 250; // cart transform: fixed cost
+const T_PER_LINE = 26; //   every cart line, covered or not
+const T_PER_OP = 52; //   every covered line
+// Past this many lines nothing has been measured, so both stand down as before.
+const MAX_LINES_TO_TRANSFORM = 250;
 
 // Above this many lines, deal allocation is skipped and only the catalog
 // discount is worked out. Deals cost far more than the plain discount, and a
@@ -160,6 +188,17 @@ export function run(input) {
   let tiersLeft = tiersAllowed(n);
   if (n > MAX_LINES_FOR_DEALS) {
     const wide = [];
+    // One entry per DIFFERENT saving, each carrying every line that gets it.
+    // Integer keys on a plain object: a Map keyed by string was measured in
+    // September and cost more than it saved.
+    const byCents = {};
+    // The budget walk. The same walk as in b2b-price-transformer: same lines
+    // counted, same order, same sums, so both stop at the same line. byCents
+    // doubles as the record of which savings have been seen, keyed by the BASE
+    // saving exactly as the transform keys it (the transform has no quantity,
+    // so it cannot know about volume breaks).
+    let dCost = D_FIXED + D_TIER_RESERVE + D_PER_LINE * n;
+    let room = Math.floor((BUDGET - T_FIXED - T_PER_LINE * n) / T_PER_OP);
     for (let i = 0; i < n; i++) {
       const cartLine = cartLines[i];
       const raw = cartLine.merchandise.catSavings?.value;
@@ -167,17 +206,43 @@ export function run(input) {
       const at = raw.indexOf(needle);
       if (at < 0) continue;
       const from = at + needle.length;
-      let off = parseFloat(raw.slice(from, from + 12));
-      if (!(off > 0)) continue;
+      const base = parseFloat(raw.slice(from, from + 12));
+      if (!(base > 0)) continue;
+
+      // Same rounding expression and same "counts as new" rule as the transform.
+      const cents = (base * 100 + 0.5) | 0;
+      let entry = byCents[cents];
+      dCost += entry === undefined || cents > 65535 ? D_PER_TARGET + D_PER_ENTRY : D_PER_TARGET;
+      // The transform stopped raising here, so everything from this line on is
+      // already at its catalog price.
+      if (dCost > BUDGET || --room < 0) break;
+      if (entry === undefined) {
+        entry = {
+          targets: [],
+          value: { fixedAmount: { amount: money(cents), appliesToEachItem: true } },
+          message: "B2B Wholesale Price",
+        };
+        byCents[cents] = entry;
+      }
+
+      // Volume pricing: a line that reaches a break gets a row of its own at
+      // the deeper saving. D_TIER_RESERVE pays for up to ten of these.
       if (tiersLeft > 0 && raw[0] === "+") {
         tiersLeft--;
-        off = tierSaving(raw, from, cartLine.quantity, off);
+        const deep = Math.round(tierSaving(raw, from, cartLine.quantity, base) * 100);
+        if (deep !== cents) {
+          wide.push({
+            targets: [{ cartLine: { id: cartLine.id } }],
+            value: { fixedAmount: { amount: money(deep), appliesToEachItem: true } },
+            message: "B2B Wholesale Price",
+          });
+          continue;
+        }
       }
-      wide.push({
-        targets: [{ cartLine: { id: cartLine.id, quantity: cartLine.quantity } }],
-        value: { fixedAmount: { amount: money(Math.round(off * 100)), appliesToEachItem: true } },
-        message: "B2B Wholesale Price",
-      });
+      // No quantity on the target: null means the whole line, and output bytes
+      // are the most expensive thing this Function produces.
+      if (entry.targets.length === 0) wide.push(entry);
+      entry.targets.push({ cartLine: { id: cartLine.id } });
     }
     if (!wide.length) return EMPTY_DISCOUNT;
     return { discountApplicationStrategy: DiscountApplicationStrategy.All, discounts: wide };

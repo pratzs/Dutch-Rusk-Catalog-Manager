@@ -29,7 +29,8 @@ const input = (lines, { bundles = null } = {}) => ({
 
 /** Final per-unit price of a line (single tier lines only), or null if none. */
 function unit(result, n, retail) {
-  const d = (result.discounts ?? []).filter((x) => x.targets[0].cartLine.id === `gid://shopify/CartLine/${n}`);
+  // Above 65 lines one entry carries every line with the same saving (16 Nov 2026).
+  const d = (result.discounts ?? []).filter((x) => x.targets.some((t) => t.cartLine.id === `gid://shopify/CartLine/${n}`));
   if (!d.length) return null;
   expect(d.length).toBe(1);
   return +(retail - parseFloat(d[0].value.fixedAmount.amount)).toFixed(2);

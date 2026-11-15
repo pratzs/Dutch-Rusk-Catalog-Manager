@@ -61,9 +61,11 @@ function finalPrice(lineCount, { discountRuns }) {
 }
 
 describe("no cart size can be overcharged", () => {
-  // Keep in step with MAX_LINES_TO_TRANSFORM in b2b-price-transformer.
-  const GUARD = 108;
-  const sizes = [1, 5, 20, 40, 45, 48, 59, 65, 66, 80, 82, 100, 104, 107, 108, 109, 110, 111, 150, 250];
+  // Keep in step with MAX_LINES_TO_TRANSFORM in b2b-price-transformer. Until
+  // 16 Nov 2026 this was 108; between 66 and 250 lines the shared budget now
+  // decides how many lines are covered (tests/budget.test.js).
+  const GUARD = 250;
+  const sizes = [1, 5, 20, 40, 45, 48, 59, 65, 66, 80, 82, 100, 104, 107, 108, 109, 110, 111, 126, 150, 250, 251, 300];
 
   test("with the discount Function working, every size lands on catalog price", () => {
     for (const n of sizes) {
@@ -112,8 +114,9 @@ describe("no cart size can be overcharged", () => {
 
   test("the transform stands down above its line guard", () => {
     expect(transformRun(buildCart(108)).operations.length).toBe(108);
-    expect(transformRun(buildCart(109)).operations).toEqual([]);
-    expect(transformRun(buildCart(111)).operations).toEqual([]);
-    expect(transformRun(buildCart(150)).operations).toEqual([]);
+    // One shared saving, so the budget covers all of these (it was nothing above 108).
+    expect(transformRun(buildCart(126)).operations.length).toBe(126);
+    expect(transformRun(buildCart(251)).operations).toEqual([]);
+    expect(transformRun(buildCart(300)).operations).toEqual([]);
   });
 });

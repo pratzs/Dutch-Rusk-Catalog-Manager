@@ -26,35 +26,52 @@ const NO_CHANGES = {
   operations: [],
 };
 
-// Above this many cart lines BOTH Functions stand down, and they must use the
-// same number.
-//
 // Raising prices here is only safe if the paired product discount is certain to
-// run afterwards and bring them back down. It isn't, on a big enough cart -- and
-// when it doesn't, this Function has already raised every line to retail and the
-// buyer pays it. That is what happened to #1409, #1850 and #1884.
+// run afterwards and bring them back down. On a big enough cart it is not -- and
+// when it fails, this Function has already raised every line to retail and the
+// buyer pays it. That is what happened to #1409, #1850 and #1884. So on big
+// carts this Function raises only as many lines as BOTH Functions can afford.
+// (History: a fixed limit of 108 lines until 16 Nov 2026. See the budget below.)
+
+// ── The shared budget for big carts (above WIDE_FROM lines) ──────────────────
 //
-// The discount Function no longer receives the line cost, so it cannot work out
-// for itself whether this one raised a line. Instead both read the same cart and
-// apply the same limit to the same line count, which is deterministic. Keep the
-// two constants identical: see MAX_LINES_TO_TRANSFORM in
-// extensions/b2b-custom-prices/src/run.js.
+// THESE CONSTANTS AND THE WALK THAT USES THEM MUST BE IDENTICAL IN
+// b2b-price-transformer/src/run.js AND b2b-custom-prices/src/run.js.
 //
-// Measured against an honest worst case (heaviest live data, every line
-// discounted, every line a different saving so no two discount rows can share an
-// entry), 11M budget:
+// Until 16 Nov 2026 both Functions simply stood down above 108 lines. Night n Day
+// stores then started sending 119-126 line carts (#3041, #3283, #3285, #3331),
+// which came through at the right price but with no discount rows at all.
 //
-//                      this Function   the discount Function (binding)
-//     100 lines        7.57M                9.06M
-//     110 lines        8.31M                9.93M   <-- guard, ~10% headroom
-//     115 lines        8.68M               10.36M   (5.8%, too thin)
+// A fixed line count was the wrong measure. What a big cart costs is mostly the
+// OUTPUT: about 0.046M instructions for every discount entry, against 0.027M for
+// one more line sharing an entry that already exists. Real carts repeat the same
+// saving on many lines (#3331: 126 lines, 51 different savings), so the discount
+// Function now puts every line with the same saving under ONE entry, and the
+// limit is a budget in thousands of instructions rather than a line count.
 //
-// The DISCOUNT Function is the binding side, not this one. Its output also has
-// to fit a 19.53KB cap: 14.98KB at 110 lines. DO NOT raise without re-measuring
-// BOTH, against a cart where every line has a DIFFERENT saving so no two
-// discount rows can share an entry.
-// 108, was 110, in step with b2b-custom-prices (see the note there).
-const MAX_LINES_TO_TRANSFORM = 108;
+// Both Functions walk the cart in the same order and add up what the pair would
+// spend. A line is raised (and discounted) only while both totals stay inside
+// BUDGET. The first line that would not fit ends it: that line and every line
+// after it keep Shopify's native catalog price, which is correct, they just have
+// no discount row. So an enormous cart degrades to "most lines have rows"
+// rather than "none do", and neither Function can be killed for cost.
+//
+// The walk depends only on the line count and each line's catalog_savings
+// string, which both Functions receive, so they always agree on which lines are
+// in. Coefficients are measured with `shopify app function run`, rounded UP.
+// Re-measure before changing any of them (docs/B2B-PRICING.md).
+const WIDE_FROM = 65; // same number as MAX_LINES_FOR_DEALS
+const BUDGET = 10600; // thousands of instructions; the platform limit is 11,000
+const D_FIXED = 400; // discount Function: fixed cost
+const D_PER_LINE = 26; //   every cart line, covered or not (receive + loop)
+const D_PER_TARGET = 27; //   every covered line
+const D_PER_ENTRY = 46; //   every DIFFERENT saving among covered lines
+const D_TIER_RESERVE = 460; //   volume breaks can split up to 10 lines into their own entries
+const T_FIXED = 250; // cart transform: fixed cost
+const T_PER_LINE = 26; //   every cart line, covered or not
+const T_PER_OP = 52; //   every covered line
+// Past this many lines nothing has been measured, so both stand down as before.
+const MAX_LINES_TO_TRANSFORM = 250;
 
 /**
  * @param {RunInput} input
@@ -79,7 +96,16 @@ export function run(input) {
 
   const operations = [];
 
-  for (let i = 0; i < cartLines.length; i++) {
+  const n = cartLines.length;
+  const wide = n > WIDE_FROM;
+  let dCost = D_FIXED + D_TIER_RESERVE + D_PER_LINE * n;
+  let room = Math.floor((BUDGET - T_FIXED - T_PER_LINE * n) / T_PER_OP);
+  // One byte per possible saving in cents. A typed array is far cheaper to
+  // index than an object; a saving of $655.36 or more simply counts as new
+  // every time, and the discount Function counts it the same way.
+  const seen = wide ? new Uint8Array(65536) : null;
+
+  for (let i = 0; i < n; i++) {
     const line = cartLines[i];
     const raw = line.merchandise.catSavings?.value;
     // No value at all means this is not a ProductVariant, or the sync has not
@@ -94,20 +120,34 @@ export function run(input) {
     const saving = parseFloat(raw.slice(at + needle.length, at + needle.length + 12));
     if (!(saving > 0)) continue;
 
-    // Retail is the leading number of the string; parseFloat stops at the "|".
-    const retail = parseFloat(raw);
-    if (!(retail > 0)) continue;
+    // Big carts: stop raising at the first line the pair cannot afford. The
+    // discount Function runs this same walk and stops at the same line, so this
+    // block must come BEFORE anything the discount Function does not also test.
+    if (wide) {
+      const cents = (saving * 100 + 0.5) | 0;
+      if (cents > 65535 || seen[cents] === 0) {
+        dCost += D_PER_TARGET + D_PER_ENTRY;
+        if (cents <= 65535) seen[cents] = 1;
+      } else {
+        dCost += D_PER_TARGET;
+      }
+      if (dCost > BUDGET || --room < 0) break;
+    }
+
+    // Retail is the leading number of the string, written by the sync as plain
+    // 2dp text with an optional "+" flag in front. It is passed through as text:
+    // parsing and re-formatting it cost about 3k instructions a line.
+    const bar = raw.indexOf("|");
+    const start = raw.charCodeAt(0) === 43 ? 1 : 0;
+    if (bar <= start) continue;
+    // A price that starts with a zero is rare (under $1); only then is it worth
+    // parsing to be sure it is not zero.
+    if (raw.charCodeAt(start) === 48 && !(parseFloat(raw) > 0)) continue;
 
     operations.push({
       update: {
         cartLineId: line.id,
-        price: {
-          adjustment: {
-            fixedPricePerUnit: {
-              amount: retail.toFixed(2),
-            },
-          },
-        },
+        price: { adjustment: { fixedPricePerUnit: { amount: raw.slice(start, bar) } } },
       },
     });
   }

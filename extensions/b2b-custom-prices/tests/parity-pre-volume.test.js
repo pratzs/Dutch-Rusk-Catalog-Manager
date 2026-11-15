@@ -11,7 +11,9 @@ const PL = "gid://shopify/PriceList/111";
 test("no breaks anywhere: new == old on 4000 random carts (incl. deals, big carts, other catalogs)", () => {
   let tiersSeen = 0;
   for (let c = 0; c < 4000; c++) {
-    const n = [1, 2, 5, 20, 64, 66, 90, 107, 108][Math.floor(rnd() * 9)];
+    // 65 lines or fewer only: above that the output is grouped by saving since 16 Nov
+    // 2026 (same money, different shape), which tests/budget.test.js compares per line.
+    const n = [1, 2, 5, 20, 33, 47, 60, 64, 65][Math.floor(rnd() * 9)];
     const lines = [];
     for (let i = 0; i < n; i++) {
       const retail = (5 + rnd() * 200).toFixed(2); const sav = rnd() < 0.2 ? null : (rnd() * retail * 0.4).toFixed(2);
@@ -29,8 +31,8 @@ test("no breaks anywhere: new == old on 4000 random carts (incl. deals, big cart
   expect(tiersSeen).toBe(4000);
 });
 
-test("109+ lines: the new guard (108) stands down; behaviour above the guard is exactly 'no discount, native price'", () => {
-  for (const n of [109, 110, 111, 150]) {
+test("above the hard ceiling (250 lines) the Function stands down: 'no discount, native price'", () => {
+  for (const n of [251, 300, 400]) {
     const lines = Array.from({ length: n }, (_, i) => ({ id: `gid://shopify/CartLine/${i}`, quantity: 3, merchandise: { __typename: "ProductVariant", catSavings: { value: "40.00|111:5.00|" } } }));
     const input = { discountNode: {}, cart: { buyerIdentity: { purchasingCompany: { company: { priceListId: { value: PL } } } }, lines } };
     expect(newRun(input).discounts).toEqual([]);

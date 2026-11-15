@@ -36,6 +36,85 @@ money is already wrong. Two things guard against it:
   `contextualPricing` and tags anything wrong, plus the 15-minute
   `app/lib/pricing-health.server.js` check on the Function pair itself.
 
+## Big carts: a shared budget instead of a line limit (16 Nov 2026, NOT YET DEPLOYED)
+
+**This replaces the fixed 108-line guard described further down.** Where the two
+disagree, this section is current.
+
+**What went wrong.** Night n Day stores started sending carts above 108 lines:
+#3041 (120), #3283 and #3285 (119), #3331 (126), and earlier #2531 (142). Both
+Functions stood down, so the orders were priced correctly at the catalog rate
+but had no struck-through price and no discount rows. Simply raising the number
+was not safe: #3331's real cart measured **11.54M** in the discount Function
+against the 11M limit, which would have billed full retail.
+
+**Where the cost was.** Measured on that cart: receiving it 2.86M, the loop
+1.43M, and **building the discount rows 7.25M**. Each row is about 0.058M, nearly
+all of it output. So the lever is output.
+
+**The change, in three parts.**
+
+1. *The discount Function shares entries.* Above 65 lines, every line with the
+   same saving goes under ONE discount entry with many targets, and targets no
+   longer carry a quantity (null means the whole line). #3331 has 126 lines but
+   only 51 different savings: 11.54M became 8.71M. Each line still gets its own
+   "B2B Wholesale Price" allocation. Grouping was tried in September with a Map
+   and rejected because it cost more than it saved; a plain object with integer
+   cent keys does not.
+2. *The transform passes retail through as text* instead of parsing and
+   re-formatting it. The sync writes it as plain 2dp text, so the bytes are
+   already right. 9.94M became 9.43M on #3331.
+3. *The limit is a budget, not a line count.* Both Functions walk the cart in
+   order and add up what the pair will spend, in thousands of instructions:
+
+   | | fixed | per cart line | per covered line | per different saving |
+   | --- | --- | --- | --- | --- |
+   | discount | 400 + 460 reserve | 26 | 27 | 46 |
+   | transform | 250 | 26 | 52 | 0 |
+
+   A line is raised and discounted only while both totals stay within
+   `BUDGET` = 10,600. The first line that does not fit ends it; that line and
+   everything after it keep the native catalog price with no row. The 460
+   reserve pays for the (up to ten) volume-break lines that get a row of their
+   own. Above 250 lines both still stand down, because nothing was measured.
+
+**The constants and the walk must be identical in both files.** If they differ,
+one Function covers a line the other does not: raised but not discounted bills
+retail, discounted but not raised is discounted twice.
+`tests/budget.test.js` checks agreement on 3,000 random carts.
+
+**What it covers.** Typical carts (savings repeat): everything up to about 139
+lines, then the transform's side of the budget tapers it: 160 lines covers 119,
+200 covers about 95, 250 covers about 74. A cart where every saving is different
+is covered less far (108 lines covers 94), which is the one place the old code
+did better, and no real order has looked like that.
+
+**Proof.**
+- All 82 real B2B orders of 60+ lines since 1 June replayed through old and new
+  code: **0 lines lose a row, 605 gain one, 0 change amount, 0 disagreements**
+  between the two Functions. #3331 126 of 126, #3041 120 of 120, #3283 and #3285
+  116 of 119 (the other 3 have no saving to show), #2531 127 of 142.
+- Stress grid with `shopify app function run` (heaviest live strings, long line
+  ids, ten volume-break lines, 66 to 250 lines, all-different and repeated
+  savings): the highest figure in either Function is **10.05M**, 8.6% under the
+  limit.
+- 65 lines or fewer: the discount Function's output is byte-identical to before
+  on 2,000 random carts, and the transform raises the same lines to the same
+  prices.
+
+**One property changed, knowingly.** Carts of 109 to 250 lines used to be immune
+to a dead discount Function, because nothing was raised. They are now raised
+like any other cart, so residual risk 1 below applies to them too. Dying from
+cart SIZE is what the budget prevents.
+
+**Not yet verified:** how a shared entry looks on a real order in the admin.
+Check the first 66+ line order after deploy against #1892.
+
+**Re-measure when** a catalog is added, the price strings grow, or either
+Function's input query changes. Build, then
+`shopify app function run --input <cart.json> --export run --json` in each
+extension folder.
+
 ## Where the instructions actually go
 
 Measured with `shopify app function run --input <cart>` inside
