@@ -36,7 +36,7 @@ money is already wrong. Two things guard against it:
   `contextualPricing` and tags anything wrong, plus the 15-minute
   `app/lib/pricing-health.server.js` check on the Function pair itself.
 
-## Big carts: a shared budget instead of a line limit (16 Nov 2026, NOT YET DEPLOYED)
+## Big carts: a shared budget instead of a line limit (LIVE 16 Nov 2026, app version 294)
 
 **This replaces the fixed 108-line guard described further down.** Where the two
 disagree, this section is current.
@@ -107,8 +107,26 @@ to a dead discount Function, because nothing was raised. They are now raised
 like any other cart, so residual risk 1 below applies to them too. Dying from
 cart SIZE is what the budget prevents.
 
-**Not yet verified:** how a shared entry looks on a real order in the admin.
-Check the first 66+ line order after deploy against #1892.
+**Checked live after the deploy** (version 294, rollback target 293), in a real
+storefront cart as the Worthy Oceania staff buyer, no order placed:
+
+| cart | lines with a "B2B Wholesale Price" row | wrong prices | raised but not discounted |
+| --- | --- | --- | --- |
+| 91 lines | 91 | 0 | 0 |
+| 126 lines (67 different savings) | 125 | 0 | 0 |
+| 170 lines | 110, one unbroken run, then 60 at catalog price | 0 | 0 |
+
+The cart page shows the struck-through price and the row on each covered line.
+The 126-line test cart lost one row where #3331 would lose none, because it
+had 67 different savings against #3331's 51: the model is deliberately cautious.
+
+**Still to check:** how a shared entry looks at checkout and on the order in the
+admin. Compare the first 66+ line order after 16 Nov against #1892.
+
+**The deploy also needed** `checkout-price-display` moved from api_version
+2025-10 to 2026-01, because Shopify no longer accepts 2025-10. Config only; the
+extension still uses the 2025.7 React library and needs a proper update before
+2026-01 retires on 16 Jan 2027.
 
 **Re-measure when** a catalog is added, the price strings grow, or either
 Function's input query changes. Build, then
