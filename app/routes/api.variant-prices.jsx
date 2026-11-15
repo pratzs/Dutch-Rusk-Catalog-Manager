@@ -10,7 +10,7 @@ export async function loader({ request }) {
   if (!priceListId) return { error: "Missing id param" };
 
   const response = await admin.graphql(`
-    query GetPriceList($id: ID!, $vId: ID) {
+    query GetPriceList($id: ID!, $vId: String) {
       priceList(id: $id) {
         id
         name

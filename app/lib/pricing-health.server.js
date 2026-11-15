@@ -67,13 +67,17 @@ export async function checkAndHealPricing({ heal = true } = {}) {
       problems.push("cart transform is NOT registered — orders will show no discount rows (self-heal disabled)");
     } else {
       const created = await gql(
-        `mutation Heal($fn: String!) {
-          cartTransformCreate(functionId: $fn, blockOnFailure: false) {
+        // By HANDLE. Shopify removed the functionId argument from this mutation
+        // (it is gone in every Admin API version still served, checked 16 Nov
+        // 2026), so the old form of this repair would have failed with a
+        // GraphQL error on the one day it was needed.
+        `mutation Heal($handle: String!) {
+          cartTransformCreate(functionHandle: $handle, blockOnFailure: false) {
             cartTransform { id functionId }
             userErrors { field message code }
           }
         }`,
-        { fn: EXPECTED_FUNCTION_ID }
+        { handle: process.env.CART_TRANSFORM_FUNCTION_HANDLE || "b2b-price-transformer" }
       );
       const errs = created.cartTransformCreate?.userErrors ?? [];
       if (errs.length) {

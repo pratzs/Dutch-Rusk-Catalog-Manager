@@ -18,8 +18,9 @@ export async function action({ request }) {
   if (!functionId) return { error: "Function ID not found" };
 
   try {
-    const response = await admin.graphql(`mutation cartTransformCreate($functionId: String!) { cartTransformCreate(functionId: $functionId) { cartTransform { id } userErrors { field message } } }`, {
-      variables: { functionId }
+    // By handle: Shopify removed the functionId argument from cartTransformCreate.
+    const response = await admin.graphql(`mutation cartTransformCreate($handle: String!) { cartTransformCreate(functionHandle: $handle) { cartTransform { id } userErrors { field message } } }`, {
+      variables: { handle: "b2b-price-transformer" }
     });
     const data = await response.json();
     const userErrors = data.data?.cartTransformCreate?.userErrors ?? [];
