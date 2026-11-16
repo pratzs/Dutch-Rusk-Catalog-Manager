@@ -131,7 +131,11 @@ describe("volume pricing", () => {
     const out = run(input(lines));
     let broken = 0, base = 0;
     for (let i = 1; i <= 100; i++) { const u = unit(out, i, 80); if (u === 47.83) broken++; else { expect(u).toBe(61.2); base++; } }
-    expect(broken).toBe(10); // 100 lines: allowance is 10
+    // 100 lines: the allowance is 10. Since 16 Nov 2026 up to 36 more can be
+    // priced afterwards, but only when the budget has room for all of them, and
+    // a cart where every one of 100 lines has breaks does not. (An 80-line cart
+    // with 15 break lines does: tests/bigcart-deals.test.js.)
+    expect(broken).toBe(10);
     expect(base).toBe(90);
     const small = run(input(Array.from({ length: 30 }, (_, i) => cartLine(i + 1, 12, BIC))));
     expect(Array.from({ length: 30 }, (_, i) => unit(small, i + 1, 80)).every((u) => u === 47.83)).toBe(true);

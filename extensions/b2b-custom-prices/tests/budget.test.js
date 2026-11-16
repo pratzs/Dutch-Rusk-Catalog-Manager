@@ -88,7 +88,21 @@ describe("big-cart budget", { timeout: 120000 }, () => {
       const n = 66 + Math.floor(rnd() * 43);
       const input = cart(n, { distinct: 10 + Math.floor(rnd() * 50), tiers: rnd() < 0.5 ? 0.03 : 0.3 });
       expect(asObj(raisedBy(transformRun, input))).toEqual(asObj(raisedBy(oldTransformRun, input)));
-      expect(asObj(discountedBy(discountRun, input))).toEqual(asObj(discountedBy(oldDiscountRun, input)));
+      const now = discountedBy(discountRun, input);
+      const old = discountedBy(oldDiscountRun, input);
+      expect([...now.keys()].sort()).toEqual([...old.keys()].sort());
+      for (const l of input.cart.lines) {
+        if (!now.has(l.id)) continue;
+        // Since 16 Nov 2026 a volume-break line past the old ten-line allowance
+        // can get its break too. That may only ever deepen the saving.
+        if (l.merchandise.catSavings.value.startsWith("+")) {
+          const amt = (rows) => parseFloat(rows[0].split("@")[1]);
+          expect(now.get(l.id).length).toBe(1);
+          expect(amt(now.get(l.id))).toBeGreaterThanOrEqual(amt(old.get(l.id)));
+        } else {
+          expect(now.get(l.id)).toEqual(old.get(l.id));
+        }
+      }
     }
   });
 
