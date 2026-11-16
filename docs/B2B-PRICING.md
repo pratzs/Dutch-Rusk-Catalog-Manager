@@ -133,6 +133,36 @@ Function's input query changes. Build, then
 `shopify app function run --input <cart.json> --export run --json` in each
 extension folder.
 
+## Big-order edge cases checked 16 Nov 2026
+
+Every B2B order since 1 Sept (1,270, of which 56 had 66+ lines, 5 had 109+,
+the largest 142) was checked for what big carts do differently.
+
+| edge case | found in real orders | state |
+| --- | --- | --- |
+| No discount rows above the old 108-line guard | #2531, #3041, #3283, #3285, #3331 | fixed, version 294 |
+| The orders/create pricing guard never ran: it read the buyer's location from the GraphQL order shape, and the webhook sends the REST shape (`company.location_id`). No order was ever tagged `pricing-error` or `pricing-no-discount-rows`. | every order | fixed 16 Nov (commit 3ca0d90). Against the 36 B2B orders since the 14 Nov price update it flags exactly one, #3331 |
+| Buy X Get Y deals never apply above 65 lines | #2246 (6 free units missed), #2980 (1), #3304 (1) | built and tested on branch `big-cart-deals`, **not shipped**, see below |
+| Volume breaks honoured on only 10 lines above 65 lines | none: the most break lines in any real cart is 5 | same branch |
+| Lines that looked billed above catalog on 9-13 Nov orders (Night n Day shippers, General trays) | #3196-#3316 | **not a fault**: each product's retail and catalog prices were updated on 13-14 Nov, after those orders. What was charged was Shopify's own catalog price at the time. Nothing since. |
+| Over 250 lines (Functions stand down entirely) | none | unchanged |
+| Order webhook price lookup on very large orders | tested to 250 variants in one query | fine (query cost 5) |
+
+**Why deals on big carts are parked.** The branch sets deal lines aside during
+the walk and prices them afterwards, only out of budget left over, so it can
+never take a row away (replay of 82 real 60+ line orders: 0 rows lost; the
+three orders above get their free units and each costs the customer less).
+But measured on identical carts it runs 0.1-0.3M above version 294 even when
+no deal applies to the buyer's catalog (every Night n Day cart: about 0.09M
+of fixed cost from the larger code, about 0.12M from scanning the deal list),
+and up to 0.8M above when deal lines are set aside but cannot be afforded.
+Worst synthetic case 10.66M against the 11M limit, where version 294's worst is
+10.05M. Over 11M bills full retail. Paying for it by lowering the shared
+budget would take rows off #3331-sized carts. To ship it, first cut that
+overhead (decide "does any deal apply to this catalog" in the app when the
+deal list is saved, not in the Function on every cart; and cap the set-aside
+lines lower), then re-measure on worst-case carts (all-different savings, longest price strings, many deal lines) against version 294 on the same inputs.
+
 ## Where the instructions actually go
 
 Measured with `shopify app function run --input <cart>` inside
