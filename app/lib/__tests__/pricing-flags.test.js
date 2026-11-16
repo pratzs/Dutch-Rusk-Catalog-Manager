@@ -28,9 +28,8 @@ function order({ n, struck, deals = 0 }) {
 }
 
 describe("discount row alerts", () => {
-  test("#1920: 56 lines, no rows, over the guard -- must alert", () => {
+  test("#1920: 56 lines, no rows -- must alert", () => {
     const r = classifyPricingRows(order({ n: 56, struck: 0 }));
-    expect(r.overGuard).toBe(true);
     expect(r.missingRows).toBe(true);
     // The whole point. This used to be false.
     expect(r.shouldAlert).toBe(true);
@@ -67,7 +66,7 @@ describe("discount row alerts", () => {
 
   test("a big fully struck order stays quiet even over the guard", () => {
     // Over the guard is not itself a fault: if the rows are there, say nothing.
-    const r = classifyPricingRows(order({ n: 80, struck: 80 }));
+    const r = classifyPricingRows(order({ n: 200, struck: 200 }));
     expect(r.overGuard).toBe(true);
     expect(r.shouldAlert).toBe(false);
   });

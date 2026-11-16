@@ -104,10 +104,13 @@ async function alert({ subject, lines }) {
 }
 
 async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids) {
-  const locationId =
-    order?.purchasing_entity?.company_location?.id ??
-    order?.company_location_id ??
-    null;
+  // The webhook sends the REST order, where the buyer's location is
+  // `company.location_id`. This used to read only the GraphQL-shaped fields,
+  // which are absent there, so it returned on the next line for EVERY order and
+  // nothing below ever ran: no order was ever tagged, and #3331 (126 lines, no
+  // discount rows, 15 Nov 2026) raised no alert. Found 16 Nov 2026.
+  const { orderLocationId } = await import("../lib/shared-cart.server");
+  const locationId = orderLocationId(order);
   if (!locationId) return; // not a B2B company order — native pricing applies
 
   const companyLocationGid = String(locationId).startsWith("gid://")
@@ -226,7 +229,7 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
       : `PARTIAL DISCOUNT ROWS (${linesStruck}/${linesWithSaving} lines struck)`;
     console.error(
       `[orders/create] ${orderName}: ${scope} on a ${lineCount}-line order that had a catalog saving available.` +
-        (overGuard ? ` Over the ${TRANSFORM_LINE_GUARD}-line transform guard.` : "")
+        (overGuard ? ` Over ${TRANSFORM_LINE_GUARD} lines, so possibly past the big-cart budget.` : "")
     );
     await tagOrder(admin, order, orderName, [
       missingRows ? "pricing-no-discount-rows" : "pricing-partial-discount-rows",
@@ -234,14 +237,17 @@ async function flagLinesBilledAboveCatalog(admin, order, orderName, variantGids)
 
     const cause = overGuard
       ? [
-          `CAUSE: this cart is ${lineCount} lines, over the ${TRANSFORM_LINE_GUARD}-line guard in`,
-          `b2b-price-transformer. Above that the transform stands down on purpose,`,
-          `so the buyer pays the correct catalog price natively but gets no rows.`,
+          `LIKELY CAUSE: this cart is ${lineCount} lines. Above about ${TRANSFORM_LINE_GUARD} lines the`,
+          `pricing Functions can run out of their big-cart budget; the lines past`,
+          `it keep the correct catalog price but get no row (above 250 lines no`,
+          `line gets one). If rows are missing from the START of the order rather`,
+          `than the end, or from all of it under 250 lines, treat it as unknown`,
+          `and run the checks in docs/B2B-PRICING.md.`,
           `The prices are RIGHT. Only the visible saving is missing.`,
         ]
       : [
-          `CAUSE: unknown, and this cart is UNDER the ${TRANSFORM_LINE_GUARD}-line guard, so it`,
-          `is not the known cart-size limit. Check that:`,
+          `CAUSE: unknown. This cart is ${TRANSFORM_LINE_GUARD} lines or fewer, so it is not`,
+          `the big-cart budget. Check that:`,
           `  1. a CartTransform is still registered (cartTransforms query)`,
           `  2. the "B2B Wholesale Custom Pricing" automatic discount is ACTIVE`,
           `  3. the buyer's company is not on more than one catalog -- the`,

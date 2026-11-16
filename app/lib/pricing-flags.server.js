@@ -8,8 +8,15 @@
 // price -- and that exclusion is why #1904 (65 lines), #1914 (48) and #1920
 // (56) all went out with zero discount rows and alerted nobody.
 
-/** Cart lines above this and b2b-price-transformer stands down on purpose. */
-export const TRANSFORM_LINE_GUARD = 45;
+/**
+ * Above this many cart lines a missing row can be the big-cart budget running
+ * out rather than a fault (see docs/B2B-PRICING.md). It only changes what the
+ * alert says is the likely cause; an order alerts either way.
+ *
+ * It was 45, then the fixed guard moved to 108, and on 16 Nov 2026 the guard
+ * became a budget that covers a typical cart in full up to about 139 lines.
+ */
+export const TRANSFORM_LINE_GUARD = 125;
 
 /**
  * @param {object} args
