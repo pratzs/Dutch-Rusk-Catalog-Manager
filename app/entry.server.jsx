@@ -8,6 +8,7 @@ import { startPricingHealthTimer } from "./lib/pricing-health.server";
 import { startMetromartReportTimer } from "./lib/metromart-report.server";
 import { startConsentSweepTimer } from "./lib/consent-default.server";
 import { startBrevoSyncTimer } from "./lib/brevo-sync.server";
+import { startOstendoPaidSyncTimer } from "./lib/ostendo-paid-sync.server";
 
 // Watch the B2B pricing pair (cart transform + wholesale discount) and put it
 // back if either half drops. Started here so it runs once per server process.
@@ -23,6 +24,9 @@ startBrevoSyncTimer();
 // Weekly + monthly Metromart North vs South report (Jira SUP-45). Does nothing
 // until METROMART_REPORT_TO is set. See lib/metromart-report.server.js.
 startMetromartReportTimer();
+
+// Mark Shopify orders paid once Ostendo has them fully paid, every 15 min. See lib/ostendo-paid-sync.server.js.
+startOstendoPaidSyncTimer();
 
 export const streamTimeout = 5000;
 
