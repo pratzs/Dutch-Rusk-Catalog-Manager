@@ -12,11 +12,12 @@
 // An order is marked paid only when ALL of these hold:
 //   - the Shopify order is not cancelled and is pending / partially paid / authorized
 //   - its Ostendo sales order exists and is Closed
-//   - it has at least one invoice (credits and reversed invoices ignored)
-//   - every one of those invoices is "Fully Paid" with no balance due
+//   - every invoice on it (credits and reversed invoices ignored) is "Fully Paid"
+//     with no balance due, OR it has no invoice at all: staff cancel the online
+//     order (Closed, nothing invoiced) and re-create it, e.g. to put it under a
+//     rep, and Dutch Rusk counts those as paid
 // Short shipments (invoiced less than the Shopify total) are still marked paid:
-// Ostendo is the ledger. Orders re-keyed by a rep under another order number have
-// no link and are left alone. Nothing is ever written to Ostendo.
+// Ostendo is the ledger. Nothing is ever written to Ostendo.
 //
 // Env: OSTENDO_BASE_URL, OSTENDO_API_KEY. OSTENDO_PAID_SYNC=off stops it,
 // OSTENDO_PAID_SYNC=dry logs what it would do without marking anything,
@@ -64,7 +65,9 @@ export function decide(order, salesOrders, invoices) {
   if (!salesOrders.length) return "not in Ostendo";
   if (salesOrders.some((s) => s.ORDERSTATUS !== "Closed")) return "Ostendo order not finished";
   const real = invoices.filter((i) => i.INVOICEORCREDIT === "Invoice" && !Number(i.INVOICEREVERSED));
-  if (!real.length) return "no Ostendo invoice";
+  // Closed with nothing invoiced = staff cancelled the online order and re-created it
+  // (usually to put it under a rep). Dutch Rusk treats these as paid (Pratham, 19 Nov 2026).
+  if (!real.length) return "PAID";
   const paid = real.every((i) => i.INVOICESTATUS === "Fully Paid" && Math.abs(Number(i.BALANCEDUE) || 0) < 0.01);
   return paid ? "PAID" : "invoice not paid";
 }

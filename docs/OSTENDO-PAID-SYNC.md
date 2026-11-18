@@ -12,12 +12,15 @@ B2B orders arrive in Shopify as **Payment pending** (account terms). Dutch Rusk 
 | `SALESINVOICEHEADER.GROUPORDERNUMBERS` | The sales order number(s) the invoice is for |
 | `SALESINVOICEHEADER.INVOICESTATUS`, `BALANCEDUE` | `Fully Paid` and 0 when paid |
 
-An order is marked paid only when it is not cancelled, its Ostendo sales order is **Closed**, it has at least one invoice (credits and reversed invoices ignored), and **every** invoice is Fully Paid with no balance. Short shipments are still marked paid: Ostendo is the ledger.
+An order is marked paid when it is not cancelled in Shopify, its Ostendo sales order is **Closed**, and either:
+- **every** invoice on it (credits and reversed invoices ignored) is Fully Paid with no balance, or
+- it has **no invoice at all**. Staff cancel the online order in Ostendo (it shows as Closed with nothing invoiced) and re-create it, often to put it under a rep. Dutch Rusk counts these as paid (decided 19 Nov 2026).
+
+Short shipments are still marked paid: Ostendo is the ledger.
 
 Left unpaid on purpose:
-- invoice still owing (most accounts are 20th of the month following)
-- sales order not Closed yet
-- no invoice on the sales order. This is usually an order a rep re-keyed under a new order number; nothing links that invoice back to the Shopify order, so it is not guessed
+- invoice still owing. Every account is on 20 EOM (20th of the month after the invoice), so October invoices fall due on 20 November
+- sales order not Closed yet (Open / InProgress / Finished)
 - no Ostendo sales order with that Shopify id
 
 ## Switches (Render env on Dutch-Rusk-Catalog-Manager)
