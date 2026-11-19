@@ -9,6 +9,7 @@ import { startMetromartReportTimer } from "./lib/metromart-report.server";
 import { startConsentSweepTimer } from "./lib/consent-default.server";
 import { startBrevoSyncTimer } from "./lib/brevo-sync.server";
 import { startOstendoPaidSyncTimer } from "./lib/ostendo-paid-sync.server";
+import { startImageCheckTimer } from "./lib/image-check.server";
 
 // Watch the B2B pricing pair (cart transform + wholesale discount) and put it
 // back if either half drops. Started here so it runs once per server process.
@@ -27,6 +28,9 @@ startMetromartReportTimer();
 
 // Mark Shopify orders paid once Ostendo has them fully paid, every 15 min. See lib/ostendo-paid-sync.server.js.
 startOstendoPaidSyncTimer();
+
+// Monday email listing live products with no image or not 500x500 white PNG. See lib/image-check.server.js.
+startImageCheckTimer();
 
 export const streamTimeout = 5000;
 
