@@ -32,6 +32,19 @@ to `sendSalesRepOrderNotification`; the Metromart alert uses the same email. Lei
 request: he was replying to the wrong person. Where a store shares one login, the email
 is that shared address.
 
+### TEEG head office copy (20 Nov 2026)
+
+TEEG approves its venues' orders from head office in Sydney. On the old website Tommy
+Luu (merchandising) got every venue's order confirmation, but Shopify only emails the
+venue that placed the order. So every order from a company location on the **TEEG
+catalog** (`CompanyLocationCatalog/147677675833`: Timezone, Zone Bowling, Kingpin,
+Xtreme) also goes to `TEEG_ALERT_TO`. It uses the same email as the reps and greets
+`TEEG_ALERT_NAME` (default "Tommy"). Env: `TEEG_ALERT_TO` (unset = off),
+`TEEG_ALERT_NAME`, `TEEG_CATALOG_ID` (optional override). Stamped
+`TEEG Head Office Notified: <email>` on the order. Venues are matched by catalog, not by
+name, so a new venue is covered as soon as it is on the TEEG catalog. The F&B accounts
+(for example "Zone Bowling Botany - FnB") are on a different catalog and are not copied.
+
 ### Rep list (25 Sept 2026)
 
 | Code | Rep | Email |

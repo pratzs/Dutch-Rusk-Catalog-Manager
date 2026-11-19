@@ -716,6 +716,79 @@ export const action = async ({ request }) => {
     console.error(`[orders/create] Metromart alert failed for order ${order?.id}:`, err);
   }
 
+  // ── TEEG head office order copy ──────────────────────────────────────────
+  // TEEG (Timezone, Zone Bowling, Kingpin, Xtreme) approves its venues' orders
+  // from head office. On the old website Tommy Luu got every venue's order
+  // confirmation; Shopify only emails the venue that placed it. So every order
+  // from a location on the TEEG catalog also goes to TEEG_ALERT_TO (unset
+  // means off). A location is "TEEG" by catalog, not by name, so a new venue
+  // is covered as soon as it is put on the catalog. Same layout as the sales
+  // rep email, own try/catch, marked on the order so a retry never resends.
+  try {
+    const teegTo = process.env.TEEG_ALERT_TO;
+    const teegCatalogId = process.env.TEEG_CATALOG_ID || "gid://shopify/CompanyLocationCatalog/147677675833";
+    if (teegTo) {
+      const orderGid = `gid://shopify/Order/${order.id}`;
+      const infoJson = await graphqlJson(
+        admin,
+        `query TeegOrder($id: ID!) {
+          order(id: $id) {
+            customAttributes { key value }
+            customer { firstName lastName email phone }
+            shippingAddress { formatted(withName: false, withCompany: false) }
+            purchasingEntity {
+              ... on PurchasingCompany {
+                company { name }
+                location { name catalogs(first: 10) { nodes { id } } }
+              }
+            }
+          }
+        }`,
+        { id: orderGid }
+      );
+      const info = infoJson?.data?.order;
+      const onTeeg = (info?.purchasingEntity?.location?.catalogs?.nodes ?? []).some((c) => c.id === teegCatalogId);
+      const already = info?.customAttributes?.some((a) => a.key === "TEEG Head Office Notified");
+      if (onTeeg && !already) {
+        const { sendSalesRepOrderNotification } = await import("../lib/brevo.server");
+        const c = info?.customer;
+        const customerName = [c?.firstName, c?.lastName].filter(Boolean).join(" ") || c?.email || "Customer";
+        const companyName = info?.purchasingEntity?.company?.name || customerName;
+        for (const email of teegTo.split(",").map((s) => s.trim()).filter(Boolean)) {
+          await sendSalesRepOrderNotification({
+            repEmail: email,
+            repName: process.env.TEEG_ALERT_NAME || "Tommy",
+            orderName,
+            customerName,
+            companyName,
+            ...orderContactDetails(info),
+            lineItems: (await import("../lib/rep-line-items.server")).repEmailLineItems(lineItems, {}),
+            subtotal: order.subtotal_price ?? order.total_price,
+            currency: order.currency,
+            poNumber: order.po_number,
+            note: order.note,
+          });
+        }
+        await graphqlJson(
+          admin,
+          `mutation MarkTeegCopy($input: OrderInput!) { orderUpdate(input: $input) { userErrors { field message } } }`,
+          {
+            input: {
+              id: orderGid,
+              customAttributes: [
+                ...(info.customAttributes ?? []).map((a) => ({ key: a.key, value: a.value })),
+                { key: "TEEG Head Office Notified", value: teegTo },
+              ],
+            },
+          }
+        );
+        console.log(`[orders/create] ${orderName}: TEEG head office copy sent to ${teegTo} (${companyName}).`);
+      }
+    }
+  } catch (err) {
+    console.error(`[orders/create] TEEG head office copy failed for order ${order?.id}:`, err);
+  }
+
   // ── Shared cart ──────────────────────────────────────────────────────────
   // The customer's shared cart for this store (see
   // app/lib/shared-cart.server.js) is emptied once it has been ordered, or
