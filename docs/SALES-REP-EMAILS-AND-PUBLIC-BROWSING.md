@@ -36,14 +36,14 @@ is that shared address.
 
 TEEG approves its venues' orders from head office in Sydney. On the old website Tommy
 Luu (merchandising) got every venue's order confirmation, but Shopify only emails the
-venue that placed the order. So every order from a company location on the **TEEG
-catalog** (`CompanyLocationCatalog/147677675833`: Timezone, Zone Bowling, Kingpin,
-Xtreme) also goes to `TEEG_ALERT_TO`. It uses the same email as the reps and greets
-`TEEG_ALERT_NAME` (default "Tommy"). Env: `TEEG_ALERT_TO` (unset = off),
-`TEEG_ALERT_NAME`, `TEEG_CATALOG_ID` (optional override). Stamped
-`TEEG Head Office Notified: <email>` on the order. Venues are matched by catalog, not by
-name, so a new venue is covered as soon as it is on the TEEG catalog. The F&B accounts
-(for example "Zone Bowling Botany - FnB") are on a different catalog and are not copied.
+venue that placed the order. So every order from Timezone, Zone Bowling, Kingpin
+Queenstown and TEEG, F&B included, also goes to `TEEG_ALERT_TO`. A location counts if it
+is on the TEEG (147677675833), Timezone F&B (147677708601) or Kingpin Queenstown
+(147677217081) catalog, or its company name contains Timezone, Zone Bowling, Kingpin or
+TEEG. It uses the same email as the reps and greets `TEEG_ALERT_NAME` (default "Tommy").
+Env: `TEEG_ALERT_TO` (unset = off), `TEEG_ALERT_NAME`, `TEEG_CATALOG_IDS` (optional
+override). Stamped `TEEG Head Office Notified: <email>` on the order. Older orders were
+not re-sent on purpose (Pratham, 20 Nov: no bombarding).
 
 ### Rep list (25 Sept 2026)
 

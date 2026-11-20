@@ -726,7 +726,14 @@ export const action = async ({ request }) => {
   // rep email, own try/catch, marked on the order so a retry never resends.
   try {
     const teegTo = process.env.TEEG_ALERT_TO;
-    const teegCatalogId = process.env.TEEG_CATALOG_ID || "gid://shopify/CompanyLocationCatalog/147677675833";
+    // TEEG, Timezone F&B and Kingpin Queenstown catalogs (Pratham, 20 Nov:
+    // every Timezone, Zone Bowling, Kingpin Queenstown and TEEG order, F&B
+    // included). A company name match catches a venue on another catalog.
+    const teegCatalogIds = (process.env.TEEG_CATALOG_IDS ||
+      "147677675833,147677708601,147677217081")
+      .split(",").map((s) => s.trim()).filter(Boolean)
+      .map((id) => (id.startsWith("gid://") ? id : `gid://shopify/CompanyLocationCatalog/${id}`));
+    const teegNameRe = /timezone|zone\s*bowling|kingpin|teeg/i;
     if (teegTo) {
       const orderGid = `gid://shopify/Order/${order.id}`;
       const infoJson = await graphqlJson(
@@ -747,7 +754,9 @@ export const action = async ({ request }) => {
         { id: orderGid }
       );
       const info = infoJson?.data?.order;
-      const onTeeg = (info?.purchasingEntity?.location?.catalogs?.nodes ?? []).some((c) => c.id === teegCatalogId);
+      const onTeeg =
+        (info?.purchasingEntity?.location?.catalogs?.nodes ?? []).some((c) => teegCatalogIds.includes(c.id)) ||
+        teegNameRe.test(info?.purchasingEntity?.company?.name || "");
       const already = info?.customAttributes?.some((a) => a.key === "TEEG Head Office Notified");
       if (onTeeg && !already) {
         const { sendSalesRepOrderNotification } = await import("../lib/brevo.server");
